@@ -10,7 +10,7 @@ router.use(authenticate);
 const createRules = [
   body('full_name').trim().notEmpty().withMessage('El nombre completo es obligatorio.'),
   body('dni').trim().notEmpty().withMessage('El DNI es obligatorio.'),
-  body('email').isEmail().withMessage('El email debe ser válido.').normalizeEmail(),
+  body('email').optional({ nullable: true, checkFalsy: true }).isEmail().withMessage('El email debe ser válido.').normalizeEmail(),
   body('role')
     .isIn(['ADMIN','SELLER','COLLECTOR'])
     .withMessage('El rol debe ser ADMIN, SELLER o COLLECTOR.'),

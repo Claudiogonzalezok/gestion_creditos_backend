@@ -32,6 +32,7 @@ const findByDni = async (dni) => {
 };
 
 const findByEmail = async (email) => {
+  if (!email) return null;
   const result = await pool.query(`SELECT id FROM users WHERE email = $1`, [email]);
   return result.rows[0] || null;
 };
