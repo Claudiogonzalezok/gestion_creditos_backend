@@ -29,7 +29,7 @@ const update = async (id, { name, description, current_price }) => {
   return queries.update(id, { name, description, current_price });
 };
 
-const adjustStock = async (id, quantity, movement, reason) => {
+const adjustStock = async (id, quantity, movement, reason, userId) => {
   const product = await queries.findById(id);
   if (!product) throw { status: 404, message: 'Producto no encontrado.' };
   if (product.status !== 'ACTIVE')
@@ -42,7 +42,7 @@ const adjustStock = async (id, quantity, movement, reason) => {
       message: `Stock insuficiente. Disponible: ${product.available_stock} unidades.`,
     };
 
-  return queries.adjustStock(id, quantity, movement);
+  return queries.adjustStock(id, quantity, movement, reason, userId);
 };
 
 const deactivate = async (id) => {

@@ -5,7 +5,7 @@ const findAll = async ({ status, search, collector_id } = {}) => {
     SELECT
       c.id, c.full_name, c.dni, c.address, c.phone, c.email,
       c.status, c.portal_enabled, c.created_at,
-      u.id   AS collector_id,
+      u.id        AS collector_id,
       u.full_name AS collector_name
     FROM customers c
     LEFT JOIN users u ON u.id = c.assigned_collector_id
@@ -55,10 +55,24 @@ const findByDni = async (dni) => {
   return result.rows[0] || null;
 };
 
-const hasActiveCredits = async (id) => {
+/**
+ * Verifica que el usuario con el id dado exista, esté activo y sea COLLECTOR.
+ */
+const findCollectorById = async (id) => {
+  const result = await pool.query(
+    `SELECT id FROM users WHERE id = $1 AND role = 'COLLECTOR' AND status = 'ACTIVE'`,
+    [id]
+  );
+  return result.rows[0] || null;
+};
+
+/**
+ * Bloquea la baja del cliente si tiene créditos activos O pendientes de aprobación (CU03).
+ */
+const hasActiveOrPendingCredits = async (id) => {
   const result = await pool.query(
     `SELECT id FROM credits
-     WHERE customer_id = $1 AND status = 'ACTIVE'
+     WHERE customer_id = $1 AND status IN ('ACTIVE', 'PENDING_APPROVAL')
      LIMIT 1`,
     [id]
   );
@@ -156,7 +170,7 @@ const unlockPortal = async (id) => {
 };
 
 module.exports = {
-  findAll, findById, findByDni, hasActiveCredits,
+  findAll, findById, findByDni, findCollectorById, hasActiveOrPendingCredits,
   create, update, deactivate, activate,
   enablePortal, disablePortal, resetPortalPassword, unlockPortal,
 };

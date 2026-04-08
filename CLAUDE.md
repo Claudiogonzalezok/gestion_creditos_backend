@@ -67,7 +67,7 @@ GESTION_CREDITOS_BACKEND/
 │    ├── app.js
 │
 ├── .env
-├── log/    
+├── logs/    
 ```
 
 ## Lo que NO hacer

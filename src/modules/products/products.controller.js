@@ -52,7 +52,7 @@ const update = async (req, res) => {
 const adjustStock = async (req, res) => {
   try {
     const { quantity, movement, reason } = req.body;
-    const product = await service.adjustStock(req.params.id, quantity, movement, reason);
+    const product = await service.adjustStock(req.params.id, quantity, movement, reason, req.user.id);
     const label = movement === 'IN' ? 'Entrada de stock' : 'Salida de stock';
     return response.success(res, product, `${label} registrada correctamente.`);
   } catch (err) {

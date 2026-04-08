@@ -5,7 +5,7 @@ const response = require('../../utils/response');
 const getAll = async (req, res) => {
   try {
     const { status, search, collector_id } = req.query;
-    const customers = await service.getAll({ status, search, collector_id });
+    const customers = await service.getAll({ status, search, collector_id }, req.user);
     return response.success(res, customers);
   } catch (err) {
     return response.serverError(res, err);
@@ -15,7 +15,7 @@ const getAll = async (req, res) => {
 // GET /api/customers/:id
 const getById = async (req, res) => {
   try {
-    const customer = await service.getById(req.params.id);
+    const customer = await service.getById(req.params.id, req.user);
     return response.success(res, customer);
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

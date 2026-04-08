@@ -1,4 +1,5 @@
-const jwt = require('jsonwebtoken');
+const jwt    = require('jsonwebtoken');
+const { v4: uuidv4 } = require('uuid');
 
 // Generar token para usuarios internos (Admin, Vendedor, Cobrador)
 const generateInternalToken = (user) => {
@@ -12,7 +13,7 @@ const generateInternalToken = (user) => {
     process.env.JWT_SECRET_INTERNAL,
     {
       expiresIn: process.env.JWT_EXPIRY_INTERNAL || '8h',
-      jwtid:     require('uuid').v4(),  // jti único para blacklist
+      jwtid:     uuidv4(),  // jti único para blacklist
     }
   );
 };
@@ -29,7 +30,7 @@ const generatePortalToken = (customer) => {
     process.env.JWT_SECRET_PORTAL,
     {
       expiresIn: process.env.JWT_EXPIRY_PORTAL || '30m',
-      jwtid:     require('uuid').v4(),
+      jwtid:     uuidv4(),
     }
   );
 };

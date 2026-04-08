@@ -1,16 +1,19 @@
 const router      = require('express').Router();
 const controller  = require('./users.controller');
 const v           = require('../../utils/validators');
-const { validate }                = require('../../middlewares/validate.middleware');
-const { authenticate, authorize } = require('../../middlewares/auth.middleware');
+const { validate }                                            = require('../../middlewares/validate.middleware');
+const { authenticate, authenticateAllowTemp, authorize }      = require('../../middlewares/auth.middleware');
 
-router.use(authenticate);
-
-// Rutas del propio usuario autenticado
+// ── Ruta con middleware propio (fuera del authenticate global) ─
+// authenticateAllowTemp permite el acceso aunque la contraseña sea temporal,
+// para que el usuario obligatoriamente pueda cambiarla.
 router.patch('/me/change-password',
-  v.users.changePassword, validate,
+  authenticateAllowTemp, v.users.changePassword, validate,
   controller.changePassword
 );
+
+// ── Todas las rutas siguientes requieren token válido y contraseña no temporal
+router.use(authenticate);
 
 // Rutas de administración (solo Admin)
 router.get('/',

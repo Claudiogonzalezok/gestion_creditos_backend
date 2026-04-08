@@ -26,8 +26,8 @@ const getById = async (req, res) => {
 // POST /api/users
 const create = async (req, res) => {
   try {
-    const { full_name, dni, email, role } = req.body;
-    const result = await service.create({ full_name, dni, email, role });
+    const { full_name, dni, email, address, role } = req.body;
+    const result = await service.create({ full_name, dni, email, address, role });
     return response.created(res, result, 'Usuario creado correctamente. Comunicá la contraseña temporal al usuario.');
   } catch (err) {
     if (err.status === 409) return response.conflict(res, err.message);
@@ -39,8 +39,8 @@ const create = async (req, res) => {
 // PUT /api/users/:id
 const update = async (req, res) => {
   try {
-    const { full_name, dni, email, role } = req.body;
-    const user = await service.update(req.params.id, { full_name, dni, email, role });
+    const { full_name, dni, email, address, role } = req.body;
+    const user = await service.update(req.params.id, { full_name, dni, email, address, role });
     return response.success(res, user, 'Usuario actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

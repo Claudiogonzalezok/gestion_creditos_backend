@@ -1,7 +1,7 @@
 const pool = require('../../config/db');
 
 const findAll = async ({ role, status, search } = {}) => {
-  let q = `SELECT id, full_name, dni, email, role, status, is_temp_password,
+  let q = `SELECT id, full_name, dni, email, address, role, status, is_temp_password,
                   failed_attempts, locked_at, last_login_at, created_at
            FROM users WHERE 1=1`;
   const params = [];
@@ -18,7 +18,7 @@ const findAll = async ({ role, status, search } = {}) => {
 
 const findById = async (id) => {
   const result = await pool.query(
-    `SELECT id, full_name, dni, email, role, status, is_temp_password,
+    `SELECT id, full_name, dni, email, address, role, status, is_temp_password,
             failed_attempts, locked_at, last_login_at, created_at, updated_at
      FROM users WHERE id = $1`,
     [id]
@@ -44,27 +44,28 @@ const countActiveAdmins = async () => {
   return parseInt(result.rows[0].count);
 };
 
-const create = async ({ full_name, dni, email, password_hash, role }) => {
+const create = async ({ full_name, dni, email, address, password_hash, role }) => {
   const result = await pool.query(
-    `INSERT INTO users (full_name, dni, email, password_hash, role, is_temp_password)
-     VALUES ($1, $2, $3, $4, $5, TRUE)
-     RETURNING id, full_name, dni, email, role, status, is_temp_password, created_at`,
-    [full_name, dni, email, password_hash, role]
+    `INSERT INTO users (full_name, dni, email, address, password_hash, role, is_temp_password)
+     VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+     RETURNING id, full_name, dni, email, address, role, status, is_temp_password, created_at`,
+    [full_name, dni, email || null, address || null, password_hash, role]
   );
   return result.rows[0];
 };
 
-const update = async (id, { full_name, dni, email, role }) => {
+const update = async (id, { full_name, dni, email, address, role }) => {
   const result = await pool.query(
     `UPDATE users
-     SET full_name = COALESCE($1, full_name),
-         dni       = COALESCE($2, dni),
-         email     = COALESCE($3, email),
-         role      = COALESCE($4, role),
+     SET full_name  = COALESCE($1, full_name),
+         dni        = COALESCE($2, dni),
+         email      = COALESCE($3, email),
+         address    = COALESCE($4, address),
+         role       = COALESCE($5, role),
          updated_at = NOW()
-     WHERE id = $5
-     RETURNING id, full_name, dni, email, role, status`,
-    [full_name, dni, email, role, id]
+     WHERE id = $6
+     RETURNING id, full_name, dni, email, address, role, status`,
+    [full_name, dni, email, address, role, id]
   );
   return result.rows[0] || null;
 };
@@ -107,7 +108,20 @@ const unlock = async (id) => {
   );
 };
 
+/**
+ * Invalida todas las sesiones activas del usuario marcando la fecha del cambio de rol.
+ * El middleware compara el iat del token con este timestamp y rechaza tokens anteriores.
+ * Requiere: ALTER TABLE users ADD COLUMN force_relogin_at TIMESTAMPTZ;
+ */
+const setForceReloginAt = async (id) => {
+  await pool.query(
+    `UPDATE users SET force_relogin_at = NOW(), updated_at = NOW() WHERE id = $1`,
+    [id]
+  );
+};
+
 module.exports = {
   findAll, findById, findByDni, findByEmail, countActiveAdmins,
   create, update, deactivate, activate, resetPassword, changePassword, unlock,
+  setForceReloginAt,
 };

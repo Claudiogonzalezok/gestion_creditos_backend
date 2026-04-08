@@ -71,9 +71,25 @@ const update = async (id, { name, description, current_price }) => {
   return result.rows[0] || null;
 };
 
-const adjustStock = async (id, quantity, movement) => {
+/**
+ * Ajusta el stock del producto y registra el movimiento en stock_movements (CU04).
+ * Requiere tabla:
+ *   CREATE TABLE stock_movements (
+ *     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+ *     product_id           UUID NOT NULL REFERENCES products(id),
+ *     movement             VARCHAR(3) NOT NULL CHECK (movement IN ('IN','OUT')),
+ *     quantity             INTEGER NOT NULL,
+ *     reason               VARCHAR(255),
+ *     available_stock_after INTEGER NOT NULL,
+ *     user_id              UUID REFERENCES users(id),
+ *     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ *   );
+ */
+const adjustStock = async (id, quantity, movement, reason, userId) => {
   const operator = movement === 'IN' ? '+' : '-';
-  const result = await pool.query(
+
+  // Actualizar stock y obtener el nuevo valor en una sola consulta
+  const updated = await pool.query(
     `UPDATE products
      SET available_stock = available_stock ${operator} $1,
          updated_at      = NOW()
@@ -81,7 +97,18 @@ const adjustStock = async (id, quantity, movement) => {
      RETURNING id, name, available_stock`,
     [quantity, id]
   );
-  return result.rows[0] || null;
+
+  const product = updated.rows[0];
+
+  // Registrar el movimiento para auditoría
+  await pool.query(
+    `INSERT INTO stock_movements
+       (product_id, movement, quantity, reason, available_stock_after, user_id)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, movement, quantity, reason || null, product.available_stock, userId || null]
+  );
+
+  return product;
 };
 
 const deactivate = async (id) => {
