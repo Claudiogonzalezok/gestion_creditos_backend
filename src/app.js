@@ -39,6 +39,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth',  require('./modules/auth/auth.routes'));
 app.use('/api/users', require('./modules/users/users.routes'));
 app.use('/api/customers', require('./modules/customers/customers.routes'));
+app.use('/api/products',  require('./modules/products/products.routes'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {
