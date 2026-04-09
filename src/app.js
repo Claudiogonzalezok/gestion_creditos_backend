@@ -36,10 +36,19 @@ app.get('/api/health', (req, res) => {
 });
 
 // ── Rutas ─────────────────────────────────────────────────────
-app.use('/api/auth',  require('./modules/auth/auth.routes'));
-app.use('/api/users', require('./modules/users/users.routes'));
-app.use('/api/customers', require('./modules/customers/customers.routes'));
-app.use('/api/products',  require('./modules/products/products.routes'));
+app.use('/api/auth',         require('./modules/auth/auth.routes'));
+app.use('/api/users',        require('./modules/users/users.routes'));
+app.use('/api/customers',    require('./modules/customers/customers.routes'));
+app.use('/api/products',     require('./modules/products/products.routes'));
+app.use('/api/system-config',require('./modules/systemConfig/systemConfig.routes'));
+app.use('/api/interest-rates',require('./modules/interestRates/interestRates.routes'));
+app.use('/api/credits',      require('./modules/credits/credits.routes'));
+app.use('/api/installments', require('./modules/installments/installments.routes'));
+app.use('/api/payments',     require('./modules/payments/payments.routes'));
+app.use('/api/collections',  require('./modules/collections/collections.routes'));
+app.use('/api/commissions',  require('./modules/commissions/commissions.routes'));
+app.use('/api/cash-register',require('./modules/cashRegister/cashRegister.routes'));
+app.use('/api/reports',      require('./modules/reports/reports.routes'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -57,6 +66,13 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
   console.log(`📋  Ambiente: ${process.env.NODE_ENV || 'development'}`);
+
+  // Iniciar cron jobs solo fuera del entorno de tests
+  if (process.env.NODE_ENV !== 'test') {
+    require('./jobs/overdueInstallments.job').start();
+    require('./jobs/creditExpiry.job').start();
+    require('./jobs/weeklyCommissionCycle.job').start();
+  }
 });
 
 module.exports = app;

@@ -221,12 +221,34 @@ const credits = {
       .isUUID().withMessage('Cada product_id debe ser un UUID válido.'),
     body('products.*.quantity').optional()
       .isInt({ min: 1, max: 9999 }).withMessage('La cantidad de cada producto debe ser entre 1 y 9999.'),
+    body('notes').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('Las notas no pueden superar los 500 caracteres.'),
+  ],
+  simulate: [
+    isEnum('type', 'El tipo de crédito', ['SALE','LOAN']),
+    isPositiveNumber('total_amount', 'El monto total', { min: 1, max: 99999999 }),
+    body('installments_count')
+      .isInt({ min: 1, max: 120 })
+      .withMessage('La cantidad de cuotas debe ser un número entre 1 y 120.'),
+    isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
+  ],
+  approve: [
+    isUUIDParam('id', 'El ID de crédito'),
+    body('installments_count').optional()
+      .isInt({ min: 1, max: 120 })
+      .withMessage('La cantidad de cuotas debe ser entre 1 y 120.'),
   ],
   reject: [
     isUUIDParam('id', 'El ID de crédito'),
     body('rejection_reason').trim()
       .notEmpty().withMessage('El motivo de rechazo es obligatorio.')
       .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
+  ],
+  earlySettlement: [
+    isUUIDParam('id', 'El ID de crédito'),
+    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
+    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia no puede superar los 100 caracteres.'),
   ],
   id: [ isUUIDParam('id', 'El ID de crédito') ],
 };
@@ -294,6 +316,18 @@ const penalties = {
     body('reason').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 255 }).withMessage('El motivo no puede superar los 255 caracteres.'),
   ],
+  id: [ isUUIDParam('id', 'El ID de cuota') ],
+};
+
+// ── COLLECTIONS (planillas de cobro) ─────────────────────────
+const collections = {
+  generate: [
+    isUUID('collector_id', 'El cobrador'),
+    isDate('date', 'La fecha de cobro'),
+    isEnum('filter', 'El filtro de cuotas',
+      ['TODAY','OVERDUE','TODAY_AND_OVERDUE','ALL_PENDING'], false),
+  ],
+  id: [ isUUIDParam('id', 'El ID de planilla') ],
 };
 
 // ── COMMISSIONS ───────────────────────────────────────────────
@@ -332,6 +366,7 @@ module.exports = {
   interestRates,
   cashRegister,
   penalties,
+  collections,
   commissions,
   auth,
 };

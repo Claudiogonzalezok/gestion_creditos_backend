@@ -1,0 +1,160 @@
+const pool = require('../../config/db');
+const { getWeekBounds } = require('../../utils/creditCalculator');
+
+// ── Comisiones ────────────────────────────────────────────────
+
+const findCommissions = async ({ userId, status, weekStart } = {}) => {
+  let q = `
+    SELECT cm.id, cm.user_id, cm.credit_id, cm.amount, cm.status,
+           cm.week_start, cm.week_end, cm.created_at,
+           u.full_name AS user_name, u.role AS user_role,
+           c.type AS credit_type, c.total_amount AS credit_amount,
+           cu.full_name AS customer_name
+    FROM commissions cm
+    JOIN users u     ON u.id  = cm.user_id
+    JOIN credits c   ON c.id  = cm.credit_id
+    JOIN customers cu ON cu.id = c.customer_id
+    WHERE 1=1`;
+  const params = [];
+  if (userId)    { params.push(userId);    q += ` AND cm.user_id = $${params.length}`; }
+  if (status)    { params.push(status);    q += ` AND cm.status = $${params.length}`; }
+  if (weekStart) { params.push(weekStart); q += ` AND cm.week_start = $${params.length}`; }
+  q += ` ORDER BY cm.created_at DESC`;
+  return (await pool.query(q, params)).rows;
+};
+
+// Suma neto de comisiones pendientes de un usuario en un ciclo
+const getPendingTotal = async (userId, weekStart, weekEnd) => {
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM commissions
+     WHERE user_id = $1 AND status = 'PENDING'
+       AND week_start = $2 AND week_end = $3`,
+    [userId, weekStart, weekEnd]
+  );
+  return parseFloat(r.rows[0].total);
+};
+
+// IDs de comisiones pendientes de un usuario en un ciclo
+const getPendingIds = async (client, userId, weekStart, weekEnd) => {
+  const r = await client.query(
+    `SELECT id FROM commissions
+     WHERE user_id = $1 AND status = 'PENDING'
+       AND week_start = $2 AND week_end = $3`,
+    [userId, weekStart, weekEnd]
+  );
+  return r.rows.map(row => row.id);
+};
+
+const markCommissionsPaid = async (client, ids) => {
+  if (!ids.length) return;
+  await client.query(
+    `UPDATE commissions SET status = 'PAID' WHERE id = ANY($1::uuid[])`,
+    [ids]
+  );
+};
+
+// Sueldo fijo activo del usuario
+const findSalary = async (userId) => {
+  const r = await pool.query(
+    `SELECT id, user_id, weekly_amount FROM salaries WHERE user_id = $1 AND active = true`,
+    [userId]
+  );
+  return r.rows[0] || null;
+};
+
+const createSalary = async (userId, weeklyAmount) => {
+  const r = await pool.query(
+    `INSERT INTO salaries (user_id, weekly_amount)
+     VALUES ($1, $2)
+     RETURNING id, user_id, weekly_amount, active`,
+    [userId, weeklyAmount]
+  );
+  return r.rows[0];
+};
+
+const updateSalary = async (id, weeklyAmount) => {
+  const r = await pool.query(
+    `UPDATE salaries SET weekly_amount = $1 WHERE id = $2
+     RETURNING id, user_id, weekly_amount, active`,
+    [weeklyAmount, id]
+  );
+  return r.rows[0];
+};
+
+const deactivateSalary = async (userId) => {
+  await pool.query(
+    `UPDATE salaries SET active = false WHERE user_id = $1`,
+    [userId]
+  );
+};
+
+// ── Liquidaciones ─────────────────────────────────────────────
+
+const createLiquidation = async (client, {
+  userId, weekStart, weekEnd,
+  commissionsTotal, salaryAmount, totalPaid,
+  paymentMethod, transferReference, paidBy,
+}) => {
+  const r = await client.query(
+    `INSERT INTO commission_liquidations
+       (user_id, week_start, week_end, commissions_total, salary_amount,
+        total_paid, payment_method, transfer_reference, paid_by, paid_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+     RETURNING *`,
+    [
+      userId, weekStart, weekEnd,
+      commissionsTotal, salaryAmount, totalPaid,
+      paymentMethod, transferReference || null, paidBy,
+    ]
+  );
+  return r.rows[0];
+};
+
+const findLiquidations = async ({ userId } = {}) => {
+  let q = `
+    SELECT cl.*, u.full_name AS user_name, adm.full_name AS paid_by_name
+    FROM commission_liquidations cl
+    JOIN users u   ON u.id  = cl.user_id
+    JOIN users adm ON adm.id = cl.paid_by
+    WHERE 1=1`;
+  const params = [];
+  if (userId) { params.push(userId); q += ` AND cl.user_id = $${params.length}`; }
+  q += ` ORDER BY cl.paid_at DESC`;
+  return (await pool.query(q, params)).rows;
+};
+
+// Resumen semanal pendiente para cada usuario que tiene comisiones o sueldo
+const getWeeklySummary = async (weekStart, weekEnd) => {
+  const r = await pool.query(
+    `SELECT
+       u.id AS user_id,
+       u.full_name,
+       u.role,
+       COALESCE(SUM(cm.amount) FILTER (WHERE cm.status = 'PENDING'), 0) AS commissions_total,
+       COALESCE(s.weekly_amount, 0) AS salary_amount
+     FROM users u
+     LEFT JOIN commissions cm
+       ON cm.user_id = u.id AND cm.week_start = $1 AND cm.week_end = $2
+     LEFT JOIN salaries s
+       ON s.user_id = u.id AND s.active = true
+     WHERE u.status = 'ACTIVE'
+       AND u.role IN ('SELLER','COLLECTOR')
+       AND (cm.id IS NOT NULL OR s.id IS NOT NULL)
+     GROUP BY u.id, u.full_name, u.role, s.weekly_amount
+     ORDER BY u.full_name`,
+    [weekStart, weekEnd]
+  );
+  return r.rows.map(row => ({
+    ...row,
+    commissions_total: parseFloat(row.commissions_total),
+    salary_amount:     parseFloat(row.salary_amount),
+    total_net:         parseFloat(row.commissions_total) + parseFloat(row.salary_amount),
+  }));
+};
+
+module.exports = {
+  findCommissions, getPendingTotal, getPendingIds, markCommissionsPaid,
+  findSalary, createSalary, updateSalary, deactivateSalary,
+  createLiquidation, findLiquidations, getWeeklySummary,
+};
