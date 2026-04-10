@@ -8,11 +8,11 @@ router.use(authenticate);
 
 // Lectura — Admin y Vendedor
 router.get('/',
-  authorize('ADMIN','SELLER'),
+  authorize('ADMIN','SELLER','SELLER_COLLECTOR'),
   controller.getAll
 );
 router.get('/:id',
-  authorize('ADMIN','SELLER'), v.products.id, validate,
+  authorize('ADMIN','SELLER','SELLER_COLLECTOR'), v.products.id, validate,
   controller.getById
 );
 

@@ -35,7 +35,7 @@ const generate = async (data, adminId) => {
 
 const getAll = async (filters, requestingUser) => {
   // Cobrador solo ve sus propias planillas
-  if (requestingUser.role === 'COLLECTOR')
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role))
     filters = { ...filters, collectorId: requestingUser.id };
   return queries.findAll(filters);
 };
@@ -44,8 +44,8 @@ const getById = async (id, requestingUser) => {
   const sheet = await queries.findById(id);
   if (!sheet) throw { status: 404, message: 'Planilla no encontrada.' };
 
-  // Cobrador solo puede ver sus propias planillas
-  if (requestingUser.role === 'COLLECTOR' && sheet.collector_id !== requestingUser.id)
+  // Cobrador (y vendedor-cobrador) solo puede ver sus propias planillas
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role) && sheet.collector_id !== requestingUser.id)
     throw { status: 403, message: 'No tenés acceso a esta planilla.' };
 
   return sheet;

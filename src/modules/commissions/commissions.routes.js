@@ -8,14 +8,14 @@ const { authenticate, authorize } = require('../../middlewares/auth.middleware')
 router.use(authenticate);
 
 // Comisiones — Admin ve todas, Vendedor/Cobrador solo las suyas
-router.get('/', authorize('ADMIN','SELLER','COLLECTOR'), controller.getCommissions);
+router.get('/', authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), controller.getCommissions);
 
 // Resumen semanal para liquidación — solo Admin
 router.get('/weekly-summary', authorize('ADMIN'), controller.getWeeklySummary);
 
 // Liquidaciones
 router.get('/liquidations',
-  authorize('ADMIN','SELLER','COLLECTOR'),
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   controller.getLiquidations
 );
 router.post('/liquidate',

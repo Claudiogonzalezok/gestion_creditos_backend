@@ -8,21 +8,23 @@ router.use(authenticate);
 
 // Lectura — Admin, Vendedor y Cobrador
 router.get('/',
-  authorize('ADMIN','SELLER','COLLECTOR'),
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   controller.getAll
 );
 router.get('/:id',
-  authorize('ADMIN','SELLER','COLLECTOR'), v.customers.id, validate,
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.customers.id, validate,
   controller.getById
 );
 
-// Alta y edición — Admin y Vendedor
+// Alta — Admin, Vendedor y Vendedor-Cobrador
 router.post('/',
-  authorize('ADMIN','SELLER'), v.customers.create, validate,
+  authorize('ADMIN','SELLER','SELLER_COLLECTOR'), v.customers.create, validate,
   controller.create
 );
+
+// Edición — solo Admin
 router.put('/:id',
-  authorize('ADMIN','SELLER'), v.customers.update, validate,
+  authorize('ADMIN'), v.customers.update, validate,
   controller.update
 );
 

@@ -16,7 +16,7 @@ const getCommissions = async (filters, requestingUser) => {
 const getSalary = async (userId) => {
   // Verificar que el usuario exista y sea COLLECTOR
   const check = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND role = 'COLLECTOR' AND status = 'ACTIVE'`,
+    `SELECT id FROM users WHERE id = $1 AND role IN ('COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
     [userId]
   );
   if (!check.rows.length)
@@ -28,7 +28,7 @@ const getSalary = async (userId) => {
 
 const setSalary = async (userId, weeklyAmount) => {
   const check = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND role = 'COLLECTOR' AND status = 'ACTIVE'`,
+    `SELECT id FROM users WHERE id = $1 AND role IN ('COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
     [userId]
   );
   if (!check.rows.length)
@@ -62,7 +62,7 @@ const liquidate = async (data, adminId) => {
   if (!userCheck.rows.length)
     throw { status: 404, message: 'Usuario no encontrado o inactivo.' };
   const user = userCheck.rows[0];
-  if (!['SELLER','COLLECTOR'].includes(user.role))
+  if (!['SELLER','COLLECTOR','SELLER_COLLECTOR'].includes(user.role))
     throw { status: 409, message: 'Solo se pueden liquidar Vendedores y Cobradores.' };
 
   const commissionsTotal = await queries.getPendingTotal(user_id, week_start, week_end);

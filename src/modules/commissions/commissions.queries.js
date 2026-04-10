@@ -139,7 +139,7 @@ const getWeeklySummary = async (weekStart, weekEnd) => {
      LEFT JOIN salaries s
        ON s.user_id = u.id AND s.active = true
      WHERE u.status = 'ACTIVE'
-       AND u.role IN ('SELLER','COLLECTOR')
+       AND u.role IN ('SELLER','COLLECTOR','SELLER_COLLECTOR')
        AND (cm.id IS NOT NULL OR s.id IS NOT NULL)
      GROUP BY u.id, u.full_name, u.role, s.weekly_amount
      ORDER BY u.full_name`,

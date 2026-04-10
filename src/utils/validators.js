@@ -127,7 +127,7 @@ const users = {
     isEmail(false),
     body('address').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 255 }).withMessage('La dirección no puede superar los 255 caracteres.'),
-    isEnum('role', 'El rol', ['ADMIN','SELLER','COLLECTOR']),
+    isEnum('role', 'El rol', ['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR']),
   ],
   update: [
     isUUIDParam('id', 'El ID de usuario'),
@@ -136,7 +136,7 @@ const users = {
     isEmail(false),
     body('address').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 255 }).withMessage('La dirección no puede superar los 255 caracteres.'),
-    isEnum('role', 'El rol', ['ADMIN','SELLER','COLLECTOR'], false),
+    isEnum('role', 'El rol', ['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'], false),
   ],
   changePassword: [
     body('current_password')

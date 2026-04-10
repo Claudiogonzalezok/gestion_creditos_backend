@@ -7,7 +7,7 @@ const { getInstallmentAmount, getDueDates, getWeekBounds } = require('../../util
 
 const getAll = async (filters, requestingUser) => {
   // SELLER solo ve los créditos que él mismo generó
-  if (requestingUser.role === 'SELLER')
+  if (['SELLER','SELLER_COLLECTOR'].includes(requestingUser.role))
     filters = { ...filters, created_by: requestingUser.id };
   return queries.findAll(filters);
 };

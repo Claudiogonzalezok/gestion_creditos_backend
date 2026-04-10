@@ -7,7 +7,7 @@ const { authenticate, authorize } = require('../../middlewares/auth.middleware')
 router.use(authenticate);
 
 // Lectura: Admin y Vendedor (para cotizador interno)
-router.get('/',    authorize('ADMIN','SELLER'), controller.getAll);
+router.get('/',    authorize('ADMIN','SELLER','SELLER_COLLECTOR'), controller.getAll);
 router.get('/:id', authorize('ADMIN'), v.interestRates.id, validate, controller.getById);
 
 // Gestión: solo Admin

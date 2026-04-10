@@ -55,6 +55,16 @@ const update = async (id, data) => {
       throw { status: 409, message: 'No es posible cambiar el rol del único administrador activo del sistema.' };
   }
 
+  // Un cobrador con clientes asignados no puede cambiar de rol
+  if (roleCambia && ['COLLECTOR','SELLER_COLLECTOR'].includes(existing.role)) {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) FROM customers WHERE assigned_collector_id = $1 AND status = 'ACTIVE'`,
+      [id]
+    );
+    if (parseInt(rows[0].count) > 0)
+      throw { status: 409, message: 'No es posible cambiar el rol porque el usuario tiene clientes asignados. Reasignelos primero.' };
+  }
+
   const updated = await queries.update(id, data);
 
   // Invalidar sesión activa del usuario si cambió su rol (CU02)
@@ -76,6 +86,15 @@ const deactivate = async (id) => {
     const admins = await queries.countActiveAdmins();
     if (admins <= 1)
       throw { status: 409, message: 'No es posible desactivar el único administrador activo del sistema.' };
+  }
+
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(user.role)) {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) FROM customers WHERE assigned_collector_id = $1 AND status = 'ACTIVE'`,
+      [id]
+    );
+    if (parseInt(rows[0].count) > 0)
+      throw { status: 409, message: 'No es posible desactivar el usuario porque tiene clientes asignados. Reasignelos primero.' };
   }
 
   await queries.deactivate(id);

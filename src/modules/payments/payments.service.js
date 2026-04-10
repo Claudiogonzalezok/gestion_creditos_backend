@@ -3,7 +3,7 @@ const queries = require('./payments.queries');
 const { withTransaction } = require('../../utils/transaction');
 
 const getAll = async (filters, requestingUser) => {
-  if (requestingUser.role === 'COLLECTOR')
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role))
     filters = { ...filters, collector_id: requestingUser.id };
   return queries.findAll(filters);
 };

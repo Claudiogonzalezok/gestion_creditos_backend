@@ -7,12 +7,12 @@ const { authenticate, authorize } = require('../../middlewares/auth.middleware')
 router.use(authenticate);
 
 // Listado y detalle — Admin ve todos, Cobrador solo los suyos (filtrado en service)
-router.get('/',    authorize('ADMIN','COLLECTOR'), controller.getAll);
-router.get('/:id', authorize('ADMIN','COLLECTOR'), v.payments.id, validate, controller.getById);
+router.get('/',    authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'), controller.getAll);
+router.get('/:id', authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'), v.payments.id, validate, controller.getById);
 
 // Registrar pre-carga de cobro
 router.post('/',
-  authorize('ADMIN','COLLECTOR'),
+  authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'),
   v.payments.create, validate,
   controller.create
 );

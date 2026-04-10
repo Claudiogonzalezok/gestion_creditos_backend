@@ -7,8 +7,11 @@ const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10');
 /**
  * Elimina el campo address del objeto si el rol solicitante es COLLECTOR (CU06).
  */
+const IS_COLLECTOR = (role) => ['COLLECTOR','SELLER_COLLECTOR'].includes(role);
+
 const stripFieldsByRole = (customer, requestingUser) => {
-  if (requestingUser.role === 'COLLECTOR') {
+  // COLLECTOR y SELLER_COLLECTOR no ven el domicilio completo (CU06)
+  if (IS_COLLECTOR(requestingUser.role)) {
     const { address, ...rest } = customer;
     return rest;
   }
@@ -16,7 +19,8 @@ const stripFieldsByRole = (customer, requestingUser) => {
 };
 
 const getAll = async (filters, requestingUser) => {
-  // COLLECTOR solo ve sus propios clientes asignados
+  // COLLECTOR puro solo ve sus propios clientes asignados
+  // SELLER_COLLECTOR ve todos (tiene rol vendedor también)
   if (requestingUser.role === 'COLLECTOR') {
     filters = { ...filters, collector_id: requestingUser.id };
   }

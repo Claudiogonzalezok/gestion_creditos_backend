@@ -10,10 +10,10 @@ router.post('/simulate', v.credits.simulate, validate, controller.simulate);
 // ── Rutas protegidas ──────────────────────────────────────────
 router.use(authenticate);
 
-router.get('/',    authorize('ADMIN','SELLER','COLLECTOR'), controller.getAll);
-router.get('/:id', authorize('ADMIN','SELLER','COLLECTOR'), v.credits.id, validate, controller.getById);
+router.get('/',    authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), controller.getAll);
+router.get('/:id', authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.credits.id, validate, controller.getById);
 
-router.post('/', authorize('ADMIN','SELLER'), v.credits.create, validate, controller.create);
+router.post('/', authorize('ADMIN','SELLER','SELLER_COLLECTOR'), v.credits.create, validate, controller.create);
 
 router.patch('/:id/approve',
   authorize('ADMIN'), v.credits.approve, validate, controller.approve
