@@ -106,7 +106,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
     const installmentAmount = getInstallmentAmount(credit.total_amount, rateRecord.rate, installmentsCount);
     const dueDates          = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
-    await queries.generateInstallments(client, id, installmentAmount, dueDates);
+    await queries.generateInstallments(client, id, installmentAmount, dueDates, credit.payment_frequency);
 
     if (credit.type === 'SALE') {
       for (const p of creditProducts) {
@@ -146,6 +146,8 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
     sum + parseFloat(inst.amount_due) - parseFloat(inst.amount_paid) + parseFloat(inst.penalty_amount), 0
   );
 
+  const roundedSettlementAmount = Math.round(settlementAmount * 100) / 100;
+
   return withTransaction(async (client) => {
     await queries.settleAllInstallments(client, id);
     await client.query(
@@ -155,8 +157,14 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
        FROM installments WHERE credit_id = $4 AND installment_number = 1`,
       [adminId, paymentMethod, transferReference || null, id]
     );
-    await queries.settleCredit(client, id);
-    return { credit_id: id, settlement_amount: Math.round(settlementAmount * 100) / 100, payment_method: paymentMethod };
+    await client.query(
+      `UPDATE credits
+       SET status = 'SETTLED', settled_at = NOW(),
+           settlement_amount = $1, settlement_type = 'EARLY', updated_at = NOW()
+       WHERE id = $2`,
+      [roundedSettlementAmount, id]
+    );
+    return { credit_id: id, settlement_amount: roundedSettlementAmount, payment_method: paymentMethod };
   });
 };
 

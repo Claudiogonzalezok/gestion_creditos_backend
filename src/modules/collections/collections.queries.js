@@ -49,15 +49,21 @@ const create = async ({ collectorId, date, filter, adminId }) => {
   return r.rows[0];
 };
 
+// Nota: la tabla usa "sheet_id" (no "collection_sheet_id") y tiene "planned_amount"
 const createDetails = async (sheetId, items) => {
   if (!items.length) return;
   const values = items.map((item, i) => {
-    const base = i * 3;
-    return `($${base + 1}, $${base + 2}, $${base + 3})`;
+    const base = i * 4;
+    return `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`;
   }).join(', ');
-  const params = items.flatMap((item, i) => [sheetId, item.installment_id, i + 1]);
+  const params = items.flatMap((item, i) => [
+    sheetId,
+    item.installment_id,
+    i + 1,
+    item.amount_due,   // planned_amount — snapshot del monto al emitir la planilla
+  ]);
   await pool.query(
-    `INSERT INTO collection_sheet_details (collection_sheet_id, installment_id, order_number)
+    `INSERT INTO collection_sheet_details (sheet_id, installment_id, order_number, planned_amount)
      VALUES ${values}`,
     params
   );
@@ -70,7 +76,7 @@ const findAll = async ({ collectorId, date } = {}) => {
            COUNT(csd.id) AS total_items
     FROM collection_sheets cs
     JOIN users u ON u.id = cs.collector_id
-    LEFT JOIN collection_sheet_details csd ON csd.collection_sheet_id = cs.id
+    LEFT JOIN collection_sheet_details csd ON csd.sheet_id = cs.id
     WHERE 1=1`;
   const params = [];
   if (collectorId) { params.push(collectorId); q += ` AND cs.collector_id = $${params.length}`; }
@@ -95,6 +101,7 @@ const findById = async (id) => {
 
   const detailsRes = await pool.query(
     `SELECT csd.order_number,
+            csd.planned_amount,
             i.id AS installment_id,
             i.installment_number,
             i.due_date,
@@ -111,7 +118,7 @@ const findById = async (id) => {
      JOIN installments i ON i.id  = csd.installment_id
      JOIN credits c      ON c.id  = i.credit_id
      JOIN customers cu   ON cu.id = c.customer_id
-     WHERE csd.collection_sheet_id = $1
+     WHERE csd.sheet_id = $1
      ORDER BY csd.order_number`,
     [id]
   );

@@ -2,15 +2,20 @@
  * Calcula el monto por cuota redondeado hacia arriba a 2 decimales.
  */
 const getInstallmentAmount = (totalAmount, interestRate, installmentsCount) => {
-  const totalWithInterest = totalAmount * (1 + interestRate);
-  return Math.ceil((totalWithInterest / installmentsCount) * 100) / 100;
+  const amount = parseFloat(totalAmount);
+  const rate   = parseFloat(interestRate);
+  const count  = parseInt(installmentsCount);
+  const totalWithInterest = amount * (1 + rate);
+  return Math.ceil((totalWithInterest / count) * 100) / 100;
 };
 
 /**
  * Calcula el total a pagar con intereses incluidos.
  */
 const getTotalWithInterest = (totalAmount, interestRate) => {
-  return Math.round(totalAmount * (1 + interestRate) * 100) / 100;
+  const amount = parseFloat(totalAmount);
+  const rate   = parseFloat(interestRate);
+  return Math.round(amount * (1 + rate) * 100) / 100;
 };
 
 /**

@@ -91,9 +91,13 @@ const countPendingInstallments = async (client, creditId) => {
   return parseInt(r.rows[0].count);
 };
 
+// Liquidación por cobro normal (última cuota pagada)
 const settleCredit = async (client, creditId) => {
   await client.query(
-    `UPDATE credits SET status = 'SETTLED', updated_at = NOW() WHERE id = $1`, [creditId]
+    `UPDATE credits
+     SET status = 'SETTLED', settled_at = NOW(), settlement_type = 'NORMAL', updated_at = NOW()
+     WHERE id = $1`,
+    [creditId]
   );
 };
 

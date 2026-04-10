@@ -26,14 +26,6 @@ const getDailyTransferTotal = async (date) => {
   return parseFloat(r.rows[0].total);
 };
 
-// Cobros pendientes de aprobación
-const getPendingPaymentsCount = async () => {
-  const r = await pool.query(
-    `SELECT COUNT(*) FROM payments WHERE status = 'PENDING'`
-  );
-  return parseInt(r.rows[0].count);
-};
-
 // Verifica si ya existe un cierre para la fecha
 const findByDate = async (date) => {
   const r = await pool.query(
@@ -45,7 +37,10 @@ const findByDate = async (date) => {
 
 const findAll = async ({ dateFrom, dateTo } = {}) => {
   let q = `
-    SELECT cr.*, u.full_name AS closed_by_name
+    SELECT cr.id, cr.register_date, cr.total_collected, cr.cash_amount,
+           cr.transfer_amount, cr.declared_cash, cr.difference,
+           cr.difference_status, cr.observations, cr.created_at,
+           u.full_name AS closed_by_name
     FROM cash_registers cr
     JOIN users u ON u.id = cr.closed_by
     WHERE 1=1`;
@@ -58,7 +53,10 @@ const findAll = async ({ dateFrom, dateTo } = {}) => {
 
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT cr.*, u.full_name AS closed_by_name
+    `SELECT cr.id, cr.register_date, cr.total_collected, cr.cash_amount,
+            cr.transfer_amount, cr.declared_cash, cr.difference,
+            cr.difference_status, cr.observations, cr.created_at,
+            u.full_name AS closed_by_name
      FROM cash_registers cr
      JOIN users u ON u.id = cr.closed_by
      WHERE cr.id = $1`,
@@ -68,21 +66,19 @@ const findById = async (id) => {
 };
 
 const create = async ({
-  registerDate, totalCash, totalTransfer, totalApproved,
-  declaredCash, cashDifference, status,
-  pendingPaymentsCount, observations, closedBy,
+  registerDate, cashAmount, transferAmount, totalCollected,
+  declaredCash, difference, differenceStatus, observations, closedBy,
 }) => {
   const r = await pool.query(
     `INSERT INTO cash_registers
-       (register_date, total_cash, total_transfer, total_approved,
-        declared_cash, cash_difference, status,
-        pending_payments_count, observations, closed_by, closed_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW())
-     RETURNING *`,
+       (register_date, cash_amount, transfer_amount, total_collected,
+        declared_cash, difference, difference_status, observations, closed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, register_date, total_collected, cash_amount, transfer_amount,
+               declared_cash, difference, difference_status, observations, created_at`,
     [
-      registerDate, totalCash, totalTransfer, totalApproved,
-      declaredCash, cashDifference, status,
-      pendingPaymentsCount, observations || null, closedBy,
+      registerDate, cashAmount, transferAmount, totalCollected,
+      declaredCash, difference, differenceStatus, observations || null, closedBy,
     ]
   );
   return r.rows[0];
@@ -92,19 +88,20 @@ const create = async ({
 const getDashboard = async (date) => {
   const r = await pool.query(
     `SELECT
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),       0) AS total_cash,
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'),    0) AS total_transfer,
-       COALESCE(SUM(p.amount_received), 0)                                                 AS total_approved,
-       COUNT(*) FILTER (WHERE p.status = 'APPROVED')                                       AS approved_count,
-       COUNT(*) FILTER (WHERE p.status = 'PENDING')                                        AS pending_count
+       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),    0) AS cash_amount,
+       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS transfer_amount,
+       COALESCE(SUM(p.amount_received) FILTER (WHERE p.status = 'APPROVED'),         0) AS total_collected,
+       COUNT(*) FILTER (WHERE p.status = 'APPROVED')                                    AS approved_count,
+       COUNT(*) FILTER (WHERE p.status = 'PENDING')                                     AS pending_count
      FROM payments p
-     WHERE p.approved_at::date = $1::date OR (p.status = 'PENDING' AND p.created_at::date = $1::date)`,
+     WHERE (p.status = 'APPROVED' AND p.approved_at::date = $1::date)
+        OR (p.status = 'PENDING'  AND p.created_at::date  = $1::date)`,
     [date]
   );
   return r.rows[0];
 };
 
 module.exports = {
-  getDailyCashTotal, getDailyTransferTotal, getPendingPaymentsCount,
+  getDailyCashTotal, getDailyTransferTotal,
   findByDate, findAll, findById, create, getDashboard,
 };

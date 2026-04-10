@@ -4,12 +4,12 @@ const getDashboard = async () => {
   const today = new Date().toISOString().split('T')[0];
   const data  = await queries.getDashboard(today);
   return {
-    date:           today,
-    total_cash:     parseFloat(data.total_cash),
-    total_transfer: parseFloat(data.total_transfer),
-    total_approved: parseFloat(data.total_approved),
-    approved_count: parseInt(data.approved_count),
-    pending_count:  parseInt(data.pending_count),
+    date:            today,
+    cash_amount:     parseFloat(data.cash_amount),
+    transfer_amount: parseFloat(data.transfer_amount),
+    total_collected: parseFloat(data.total_collected),
+    approved_count:  parseInt(data.approved_count),
+    pending_count:   parseInt(data.pending_count),
   };
 };
 
@@ -21,33 +21,30 @@ const close = async (data, adminId) => {
   if (existing)
     throw { status: 409, message: 'Ya existe un cierre de caja para hoy.' };
 
-  const totalCash     = await queries.getDailyCashTotal(today);
-  const totalTransfer = await queries.getDailyTransferTotal(today);
-  const totalApproved = totalCash + totalTransfer;
-  const declaredCash  = parseFloat(data.declared_cash);
-  const difference    = declaredCash - totalCash;
+  const cashAmount     = await queries.getDailyCashTotal(today);
+  const transferAmount = await queries.getDailyTransferTotal(today);
+  const totalCollected = cashAmount + transferAmount;
+  const declaredCash   = parseFloat(data.declared_cash);
+  const difference     = declaredCash - cashAmount;
 
-  const pendingCount  = await queries.getPendingPaymentsCount();
-
-  let status = 'BALANCED';
-  if (difference > 0)  status = 'SURPLUS';
-  if (difference < 0)  status = 'SHORTAGE';
+  let differenceStatus = 'BALANCED';
+  if (difference > 0)  differenceStatus = 'SURPLUS';
+  if (difference < 0)  differenceStatus = 'SHORTAGE';
 
   return queries.create({
-    registerDate:         today,
-    totalCash,
-    totalTransfer,
-    totalApproved,
+    registerDate:     today,
+    cashAmount,
+    transferAmount,
+    totalCollected,
     declaredCash,
-    cashDifference:       difference,
-    status,
-    pendingPaymentsCount: pendingCount,
-    observations:         data.observations,
-    closedBy:             adminId,
+    difference,
+    differenceStatus,
+    observations:     data.observations,
+    closedBy:         adminId,
   });
 };
 
-const getAll = async (filters) => queries.findAll(filters);
+const getAll  = async (filters) => queries.findAll(filters);
 
 const getById = async (id) => {
   const register = await queries.findById(id);

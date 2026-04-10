@@ -97,12 +97,13 @@ const approve = async (client, id, adminId, interestRate, installmentsCount) => 
   );
 };
 
-const generateInstallments = async (client, creditId, installmentAmount, dueDates) => {
+const generateInstallments = async (client, creditId, installmentAmount, dueDates, paymentFrequency) => {
   for (let i = 0; i < dueDates.length; i++) {
     await client.query(
-      `INSERT INTO installments (credit_id, installment_number, due_date, amount_due)
-       VALUES ($1, $2, $3, $4)`,
-      [creditId, i + 1, dueDates[i], installmentAmount]
+      `INSERT INTO installments
+         (credit_id, installment_number, due_date, amount_due, original_amount, payment_frequency)
+       VALUES ($1, $2, $3, $4, $4, $5)`,
+      [creditId, i + 1, dueDates[i], installmentAmount, paymentFrequency]
     );
   }
 };
@@ -158,9 +159,12 @@ const settleAllInstallments = async (client, creditId) => {
   );
 };
 
+// Liquidación por cobro normal (última cuota pagada)
 const settleCredit = async (client, creditId) => {
   await client.query(
-    `UPDATE credits SET status = 'SETTLED', updated_at = NOW() WHERE id = $1`,
+    `UPDATE credits
+     SET status = 'SETTLED', settled_at = NOW(), settlement_type = 'NORMAL', updated_at = NOW()
+     WHERE id = $1`,
     [creditId]
   );
 };
