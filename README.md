@@ -328,3 +328,115 @@ CREATE TABLE stock_movements (
   created_at           TIMESTAMPTZ DEFAULT NOW()
 );
 ```
+-------------------------------------------------------------------------------
+
+  Campos del crédito (credits)
+
+  Campos que ingresa el usuario al crear
+
+  ┌────────────────────┬─────────────┬────────────────────────────────────────────────────────────────────┐
+  │       Campo        │   Ejemplo   │                            Descripción                             │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ customer_id        │ UUID        │ Cliente al que se le otorga el crédito                             │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ type               │ LOAN / SALE │ LOAN = préstamo en efectivo, SALE = venta de productos             │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ total_amount       │ 50000       │ Monto del capital — lo que el cliente recibe/compra, sin intereses │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ installments_count │ 6           │ Cantidad de cuotas                                                 │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ payment_frequency  │ MONTHLY     │ Frecuencia: WEEKLY / BIWEEKLY / MONTHLY                            │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ notes              │ texto       │ Observaciones opcionales                                           │
+  ├────────────────────┼─────────────┼────────────────────────────────────────────────────────────────────┤
+  │ products[]         │ array       │ Solo para SALE — productos con product_id y quantity               │
+  └────────────────────┴─────────────┴────────────────────────────────────────────────────────────────────┘
+
+  ---
+  Campos que el sistema asigna al crear (antes de aprobar)
+
+  ┌───────────────┬──────────────────┬────────────────────────────────────┐
+  │     Campo     │      Valor       │            Descripción             │
+  ├───────────────┼──────────────────┼────────────────────────────────────┤
+  │ status        │ PENDING_APPROVAL │ Estado inicial siempre             │
+  ├───────────────┼──────────────────┼────────────────────────────────────┤
+  │ interest_rate │ null             │ Se asigna recién al aprobar        │
+  ├───────────────┼──────────────────┼────────────────────────────────────┤
+  │ created_by    │ ID del usuario   │ Quién generó la pre-venta/préstamo │
+  ├───────────────┼──────────────────┼────────────────────────────────────┤
+  │ created_at    │ timestamp        │ Cuándo se creó                     │
+  └───────────────┴──────────────────┴────────────────────────────────────┘
+
+  ---
+  Campos que el sistema asigna al aprobar
+
+  ┌───────────────┬──────────────┬───────────────────────────────────────────────────────────────┐
+  │     Campo     │    Valor     │                          Descripción                          │
+  ├───────────────┼──────────────┼───────────────────────────────────────────────────────────────┤
+  │ status        │ ACTIVE       │ Crédito activado                                              │
+  ├───────────────┼──────────────┼───────────────────────────────────────────────────────────────┤
+  │ interest_rate │ ej: 0.08     │ Tasa leída de interest_rates según tipo + frecuencia + cuotas │
+  ├───────────────┼──────────────┼───────────────────────────────────────────────────────────────┤
+  │ approved_by   │ ID del Admin │ Quién aprobó                                                  │
+  ├───────────────┼──────────────┼───────────────────────────────────────────────────────────────┤
+  │ approved_at   │ timestamp    │ Cuándo se aprobó                                              │
+  └───────────────┴──────────────┴───────────────────────────────────────────────────────────────┘
+
+  ---
+  Cómo se calculan los montos
+
+  Fórmula de la cuota
+
+  // creditCalculator.js:4-7
+  const totalWithInterest = totalAmount * (1 + interestRate);
+  installmentAmount = Math.ceil((totalWithInterest / installmentsCount) * 100) / 100;
+
+  Ejemplo concreto — préstamo de $50.000, 6 cuotas mensuales, tasa 8%:
+
+  totalWithInterest  = 50.000 × (1 + 0.08) = 54.000
+  installmentAmount  = Math.ceil(54.000 / 6 × 100) / 100
+                     = Math.ceil(9.000 × 100) / 100
+                     = Math.ceil(900.000) / 100
+                     = 9.000,00
+
+  ▎ El Math.ceil redondea hacia arriba para que la suma de cuotas nunca quede por debajo del total. El último centavo siempre paga el banco, no el cliente.
+
+  ---
+  Campos de cada cuota (installments)
+
+  ┌────────────────────┬───────────────┬────────────────────────────────────────────────────────────┐
+  │       Campo        │ Valor inicial │                        Descripción                         │
+  ├────────────────────┼───────────────┼────────────────────────────────────────────────────────────┤
+  │ installment_number │ 1, 2, 3...    │ Número de la cuota                                         │
+  ├────────────────────┼───────────────┼────────────────────────────────────────────────────────────┤
+  │ due_date           │ calculado     │ Fecha de vencimiento (ver abajo)                           │
+  ├────────────────────┼───────────────┼────────────────────────────────────────────────────────────┤
+  │ amount_due         │ 9000.00       │ Lo que debe pagar en esa cuota (incluye mora si se aplica) │
+  ├────────────────────┼───────────────┼────────────────────────────────────────────────────────────┤
+  │ amount_paid        │ 0             │ Lo que ya se pagó (se acumula con cobros parciales)        │
+  ├────────────────────┼───────────────┼────────────────────────────────────────────────────────────┤
+  │ penalty_amount     │ 0             │ Mora acumulada separada del capital                        │
+  ├────────────────────┼───────────────┼────────────────────────────────────────────────────────────┤
+  │ status             │ PENDING       │ Estado inicial                                             │
+  └────────────────────┴───────────────┴────────────────────────────────────────────────────────────┘
+
+  ---
+  Cómo se calculan las fechas de vencimiento
+
+  // creditCalculator.js:20-35
+  // La primera cuota vence 1 período después de la aprobación
+  for (let i = 1; i <= installmentsCount; i++) {
+    switch (frequency) {
+      case 'WEEKLY':   due = startDate + 7 * i días;   break;
+      case 'BIWEEKLY': due = startDate + 14 * i días;  break;
+      case 'MONTHLY':  due = startDate + i meses;       break;
+    }
+  }
+
+  Ejemplo — aprobado el 9 de abril, 6 cuotas mensuales:
+
+  Cuota 1 → 9 de mayo
+  Cuota 2 → 9 de junio
+  Cuota 3 → 9 de julio
+  ...
+  Cuota 6 → 9 de octubre
