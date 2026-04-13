@@ -9,17 +9,23 @@ const getById = async (id) => {
 };
 
 const create = async (data) => {
-  const existing = await queries.findDuplicate(data.credit_type, data.payment_frequency, data.installments_count);
-  if (existing) {
-    if (!existing.active) return queries.reactivate(existing.id, data.rate);
-    throw { status: 409, message: 'Ya existe una tasa activa para esta combinación.' };
+  const { payment_frequency, installments_count, min_amount, max_amount, rate } = data;
+
+  const exact = await queries.findExact(payment_frequency, installments_count, min_amount, max_amount);
+  if (exact) {
+    if (!exact.active) return queries.reactivate(exact.id, rate);
+    throw { status: 409, message: 'Ya existe una tasa activa para esta combinación y rango de montos.' };
   }
-  return queries.create(data);
+
+  const overlap = await queries.findOverlap(payment_frequency, installments_count, min_amount, max_amount);
+  if (overlap) throw { status: 409, message: 'El rango de montos se superpone con una tasa activa existente.' };
+
+  return queries.create({ payment_frequency, installments_count, min_amount, max_amount, rate });
 };
 
 const update = async (id, data) => {
   if (!await queries.findById(id)) throw { status: 404, message: 'Tasa no encontrada.' };
-  return queries.update(id, data);
+  return queries.update(id, { rate: data.rate ?? null, active: data.active ?? null });
 };
 
 const deactivate = async (id) => {
@@ -33,10 +39,15 @@ const activate = async (id) => {
   const rate = await queries.findById(id);
   if (!rate) throw { status: 404, message: 'Tasa no encontrada.' };
   if (rate.active) throw { status: 409, message: 'La tasa ya está activa.' };
-  const conflict = await queries.findDuplicate(rate.credit_type, rate.payment_frequency, rate.installments_count);
-  if (conflict && conflict.id !== id && conflict.active)
-    throw { status: 409, message: 'Ya existe una tasa activa para esta combinación.' };
+
+  const overlap = await queries.findOverlap(
+    rate.payment_frequency, rate.installments_count,
+    rate.min_amount, rate.max_amount, id
+  );
+  if (overlap) throw { status: 409, message: 'El rango de montos se superpone con una tasa activa existente.' };
+
   await queries.activate(id);
+  return queries.findById(id);
 };
 
 module.exports = { getAll, getById, create, update, deactivate, activate };

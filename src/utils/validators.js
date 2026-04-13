@@ -276,20 +276,30 @@ const payments = {
 // ── INTEREST RATES ────────────────────────────────────────────
 const interestRates = {
   create: [
-    isEnum('credit_type', 'El tipo de crédito', ['SALE','LOAN']),
     body('installments_count')
       .isInt({ min: 1, max: 120 })
       .withMessage('La cantidad de cuotas debe ser entre 1 y 120.'),
     isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
+    body('min_amount')
+      .isFloat({ min: 0 })
+      .withMessage('El monto mínimo debe ser un número mayor o igual a 0.'),
+    body('max_amount').optional({ nullable: true })
+      .isFloat({ min: 1 })
+      .withMessage('El monto máximo debe ser un número mayor a 0.')
+      .custom((val, { req }) => {
+        if (val != null && parseFloat(val) <= parseFloat(req.body.min_amount))
+          throw new Error('El monto máximo debe ser mayor al monto mínimo.');
+        return true;
+      }),
     body('rate')
-      .isFloat({ min: 0.01, max: 100 })
-      .withMessage('La tasa debe ser un número entre 0.01 y 100 (ej: 8 = 8%, 12.5 = 12.5%).'),
+      .isFloat({ min: 0.001, max: 100 })
+      .withMessage('El coeficiente debe ser un número positivo (ej: 0.6 = 60%, 1.2 = 120%).'),
   ],
   update: [
     isUUIDParam('id', 'El ID de tasa'),
     body('rate').optional()
-      .isFloat({ min: 0.01, max: 100 })
-      .withMessage('La tasa debe ser un número entre 0.01 y 100 (ej: 8 = 8%, 12.5 = 12.5%).'),
+      .isFloat({ min: 0.001, max: 100 })
+      .withMessage('El coeficiente debe ser un número positivo (ej: 0.6 = 60%, 1.2 = 120%).'),
     isBool('active', 'El estado', false),
   ],
   id: [ isUUIDParam('id', 'El ID de tasa') ],

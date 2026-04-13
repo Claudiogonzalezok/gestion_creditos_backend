@@ -3,7 +3,7 @@ const queries     = require('./credits.queries');
 const irQueries   = require('../interestRates/interestRates.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
 const { withTransaction }    = require('../../utils/transaction');
-const { getInstallmentAmount, getDueDates, getWeekBounds } = require('../../utils/creditCalculator');
+const { getInstallmentAmount, getTotalWithInterest, getTotalToReturn, getDueDates, getWeekBounds } = require('../../utils/creditCalculator');
 
 const getAll = async (filters, requestingUser) => {
   // SELLER solo ve los créditos que él mismo generó
@@ -61,19 +61,24 @@ const create = async (data, requestingUser) => {
 };
 
 const simulate = async ({ type, total_amount, installments_count, payment_frequency }) => {
-  const rate = await irQueries.findActiveRate(type, payment_frequency, installments_count);
-  if (!rate) throw { status: 404, message: 'No existe una tasa configurada para esta combinación.' };
+  const rateRecord = await irQueries.findActiveRate(payment_frequency, installments_count, total_amount);
+  if (!rateRecord) throw { status: 404, message: 'No existe una tasa configurada para esta combinación y monto.' };
 
-  const installmentAmount  = getInstallmentAmount(total_amount, rate.rate, installments_count);
-  const totalWithInterest  = Math.round(installmentAmount * installments_count * 100) / 100;
-  const interestAmount     = Math.round((totalWithInterest - total_amount) * 100) / 100;
+  const coef             = parseFloat(rateRecord.rate);
+  const mathematicalTotal = getTotalWithInterest(total_amount, coef);
+  const installmentAmount = getInstallmentAmount(total_amount, coef, installments_count);
+  const totalToReturn     = getTotalToReturn(total_amount, coef, installments_count);
+  const interestAmount    = Math.round((mathematicalTotal - parseFloat(total_amount)) * 100) / 100;
 
   return {
-    type, payment_frequency, installments_count, total_amount,
-    interest_rate:       rate.rate,
+    type,
+    payment_frequency,
+    installments_count,
+    total_amount:        parseFloat(total_amount),
+    coefficient:         coef,
     interest_amount:     interestAmount,
-    total_with_interest: totalWithInterest,
     installment_amount:  installmentAmount,
+    total_to_return:     totalToReturn,
     note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
   };
 };
@@ -85,8 +90,8 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     throw { status: 409, message: 'Solo se pueden aprobar créditos en estado PENDIENTE DE APROBACIÓN.' };
 
   const installmentsCount = newInstallmentsCount || credit.installments_count;
-  const rateRecord = await irQueries.findActiveRate(credit.type, credit.payment_frequency, installmentsCount);
-  if (!rateRecord) throw { status: 409, message: 'No existe tasa de interés activa para esta combinación.' };
+  const rateRecord = await irQueries.findActiveRate(credit.payment_frequency, installmentsCount, credit.total_amount);
+  if (!rateRecord) throw { status: 409, message: 'No existe tasa de interés activa para esta combinación y monto.' };
 
   // Verificar stock antes de la transacción (solo SALE)
   let creditProducts = [];

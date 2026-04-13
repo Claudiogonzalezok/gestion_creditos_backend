@@ -1,21 +1,36 @@
 /**
- * Calcula el monto por cuota redondeado hacia arriba a 2 decimales.
+ * Calcula el monto por cuota redondeado hacia arriba al millar más cercano.
+ * Todas las cuotas son iguales entre sí.
+ *
+ * Fórmula:
+ *   Monto total = monto + (monto × coeficiente)
+ *   Cuota       = ceil(Monto total / cantidad / 1000) × 1000
  */
-const getInstallmentAmount = (totalAmount, interestRate, installmentsCount) => {
+const getInstallmentAmount = (totalAmount, coefficient, installmentsCount) => {
   const amount = parseFloat(totalAmount);
-  const rate   = parseFloat(interestRate);
+  const coef   = parseFloat(coefficient);
   const count  = parseInt(installmentsCount);
-  const totalWithInterest = amount * (1 + rate);
-  return Math.ceil((totalWithInterest / count) * 100) / 100;
+  const totalWithInterest = amount * (1 + coef);
+  return Math.ceil((totalWithInterest / count) / 1000) * 1000;
 };
 
 /**
- * Calcula el total a pagar con intereses incluidos.
+ * Calcula el monto total matemático antes del redondeo de cuotas.
+ * Útil para mostrar el interés generado.
  */
-const getTotalWithInterest = (totalAmount, interestRate) => {
+const getTotalWithInterest = (totalAmount, coefficient) => {
   const amount = parseFloat(totalAmount);
-  const rate   = parseFloat(interestRate);
-  return Math.round(amount * (1 + rate) * 100) / 100;
+  const coef   = parseFloat(coefficient);
+  return Math.round(amount * (1 + coef) * 100) / 100;
+};
+
+/**
+ * Calcula el monto total real a devolver: cuota redondeada × cantidad de cuotas.
+ * Puede diferir levemente del total matemático por el redondeo al millar.
+ */
+const getTotalToReturn = (totalAmount, coefficient, installmentsCount) => {
+  const count = parseInt(installmentsCount);
+  return getInstallmentAmount(totalAmount, coefficient, count) * count;
 };
 
 /**
@@ -62,4 +77,4 @@ const getWeekBounds = (date = new Date()) => {
   };
 };
 
-module.exports = { getInstallmentAmount, getTotalWithInterest, getDueDates, getWeekBounds };
+module.exports = { getInstallmentAmount, getTotalWithInterest, getTotalToReturn, getDueDates, getWeekBounds };
