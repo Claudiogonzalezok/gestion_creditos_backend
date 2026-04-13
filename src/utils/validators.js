@@ -210,13 +210,19 @@ const credits = {
   create: [
     isUUID('customer_id', 'El cliente'),
     isEnum('type', 'El tipo de crédito', ['SALE','LOAN']),
-    isPositiveNumber('total_amount', 'El monto total', { min: 1, max: 99999999 }),
+    // LOAN requiere total_amount; para SALE se calcula de los productos
+    body('total_amount')
+      .if(body('type').equals('LOAN'))
+      .notEmpty().withMessage('El monto total es obligatorio para préstamos.')
+      .isFloat({ min: 1, max: 99999999 })
+      .withMessage('El monto total debe ser un número entre 1 y 99999999.'),
     body('installments_count')
       .isInt({ min: 1, max: 120 })
       .withMessage('La cantidad de cuotas debe ser un número entre 1 y 120.'),
     isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
-    body('products').optional().isArray({ min: 1 })
-      .withMessage('Los productos deben ser un arreglo con al menos un ítem.'),
+    body('products')
+      .if(body('type').equals('SALE'))
+      .isArray({ min: 1 }).withMessage('Las ventas deben incluir al menos un producto.'),
     body('products.*.product_id').optional()
       .isUUID().withMessage('Cada product_id debe ser un UUID válido.'),
     body('products.*.quantity').optional()

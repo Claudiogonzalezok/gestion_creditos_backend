@@ -48,7 +48,7 @@ const approve = async (id, adminId) => {
   if (payment.status !== 'PENDING')
     throw { status: 409, message: 'Solo se pueden aprobar cobros en estado PENDIENTE.' };
 
-  return withTransaction(async (client) => {
+  await withTransaction(async (client) => {
     await queries.approve(client, id, adminId);
 
     const newInstStatus = await queries.updateInstallment(
@@ -63,9 +63,10 @@ const approve = async (id, adminId) => {
       const remaining = await queries.countPendingInstallments(client, payment.credit_id);
       if (remaining === 0) await queries.settleCredit(client, payment.credit_id);
     }
-
-    return queries.findById(id);
   });
+
+  // Leemos DESPUÉS del COMMIT para reflejar el estado actualizado
+  return queries.findById(id);
 };
 
 const reject = async (id, rejectionReason, adminId) => {

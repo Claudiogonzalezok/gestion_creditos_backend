@@ -30,18 +30,13 @@ const create = async (data, requestingUser) => {
     throw { status: 400, message: 'Las ventas a crédito deben incluir al menos un producto.' };
 
   return withTransaction(async (client) => {
-    const credit = await queries.create(client, {
-      customer_id:        data.customer_id,
-      created_by:         requestingUser.id,
-      type:               data.type,
-      total_amount:       data.total_amount,
-      installments_count: data.installments_count,
-      payment_frequency:  data.payment_frequency,
-      notes:              data.notes,
-    });
+    let totalAmount = data.total_amount;
 
     if (data.type === 'SALE') {
+      // Validar productos y calcular total_amount a partir del precio actual de cada uno
       const productsWithPrice = [];
+      let computed = 0;
+
       for (const item of data.products) {
         const pRes = await client.query(
           `SELECT id, name, current_price, available_stock, status FROM products WHERE id = $1`,
@@ -52,11 +47,37 @@ const create = async (data, requestingUser) => {
         if (p.status !== 'ACTIVE') throw { status: 409, message: `El producto "${p.name}" no está disponible.` };
         if (p.available_stock < item.quantity)
           throw { status: 409, message: `Stock insuficiente para "${p.name}". Disponible: ${p.available_stock}.` };
+
+        computed += parseFloat(p.current_price) * item.quantity;
         productsWithPrice.push({ product_id: p.id, quantity: item.quantity, historical_price: p.current_price });
       }
+
+      totalAmount = computed;
+
+      const credit = await queries.create(client, {
+        customer_id:        data.customer_id,
+        created_by:         requestingUser.id,
+        type:               data.type,
+        total_amount:       totalAmount,
+        installments_count: data.installments_count,
+        payment_frequency:  data.payment_frequency,
+        notes:              data.notes,
+      });
+
       await queries.createCreditProducts(client, credit.id, productsWithPrice);
+      return credit;
     }
-    return credit;
+
+    // LOAN: total_amount viene directo del cuerpo del request
+    return queries.create(client, {
+      customer_id:        data.customer_id,
+      created_by:         requestingUser.id,
+      type:               data.type,
+      total_amount:       totalAmount,
+      installments_count: data.installments_count,
+      payment_frequency:  data.payment_frequency,
+      notes:              data.notes,
+    });
   });
 };
 
@@ -106,7 +127,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   const commissionRate     = parseFloat(await getValue('commission_rate') || '0.08');
   const { week_start, week_end } = getWeekBounds();
 
-  return withTransaction(async (client) => {
+  await withTransaction(async (client) => {
     await queries.approve(client, id, adminId, rateRecord.rate, installmentsCount);
 
     const installmentAmount = getInstallmentAmount(credit.total_amount, rateRecord.rate, installmentsCount);
@@ -125,8 +146,10 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         await queries.createCommission(client, credit.created_by, id, commissionAmount, week_start, week_end);
       }
     }
-    return queries.findById(id);
   });
+
+  // Leemos DESPUÉS del COMMIT para reflejar el estado actualizado
+  return queries.findById(id);
 };
 
 const reject = async (id, rejectionReason, adminId) => {
