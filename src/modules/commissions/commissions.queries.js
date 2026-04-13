@@ -23,27 +23,25 @@ const findCommissions = async ({ userId, status, weekStart } = {}) => {
   return (await pool.query(q, params)).rows;
 };
 
-// Suma neto de comisiones pendientes de un usuario en un ciclo
-const getPendingTotal = async (userId, weekStart, weekEnd) => {
+// Suma neto de todas las comisiones pendientes de un usuario (sin filtro de semana)
+const getPendingTotal = async (userId) => {
   const r = await pool.query(
     `SELECT COALESCE(SUM(amount), 0) AS total
      FROM commissions
-     WHERE user_id = $1 AND status = 'PENDING'
-       AND week_start = $2 AND week_end = $3`,
-    [userId, weekStart, weekEnd]
+     WHERE user_id = $1 AND status = 'PENDING'`,
+    [userId]
   );
   return parseFloat(r.rows[0].total);
 };
 
-// IDs de comisiones pendientes de un usuario en un ciclo
-const getPendingIds = async (client, userId, weekStart, weekEnd) => {
+// IDs y rango de semanas de todas las comisiones pendientes de un usuario
+const getPendingIds = async (client, userId) => {
   const r = await client.query(
-    `SELECT id FROM commissions
-     WHERE user_id = $1 AND status = 'PENDING'
-       AND week_start = $2 AND week_end = $3`,
-    [userId, weekStart, weekEnd]
+    `SELECT id, week_start, week_end FROM commissions
+     WHERE user_id = $1 AND status = 'PENDING'`,
+    [userId]
   );
-  return r.rows.map(row => row.id);
+  return r.rows;
 };
 
 const markCommissionsPaid = async (client, ids) => {
@@ -124,26 +122,26 @@ const findLiquidations = async ({ userId } = {}) => {
   return (await pool.query(q, params)).rows;
 };
 
-// Resumen semanal pendiente para cada usuario que tiene comisiones o sueldo
-const getWeeklySummary = async (weekStart, weekEnd) => {
+// Resumen de lo pendiente de liquidar para cada usuario activo.
+// Muestra todas las comisiones PENDING (puede abarcar varios ciclos si no se liquidó el lunes anterior).
+const getWeeklySummary = async () => {
   const r = await pool.query(
     `SELECT
        u.id AS user_id,
        u.full_name,
        u.role,
        COALESCE(SUM(cm.amount) FILTER (WHERE cm.status = 'PENDING'), 0) AS commissions_total,
+       MIN(cm.week_start) FILTER (WHERE cm.status = 'PENDING') AS earliest_week,
+       MAX(cm.week_end)   FILTER (WHERE cm.status = 'PENDING') AS latest_week,
        COALESCE(s.weekly_amount, 0) AS salary_amount
      FROM users u
-     LEFT JOIN commissions cm
-       ON cm.user_id = u.id AND cm.week_start = $1 AND cm.week_end = $2
-     LEFT JOIN salaries s
-       ON s.user_id = u.id AND s.active = true
+     LEFT JOIN commissions cm ON cm.user_id = u.id
+     LEFT JOIN salaries s     ON s.user_id  = u.id AND s.active = true
      WHERE u.status = 'ACTIVE'
        AND u.role IN ('SELLER','COLLECTOR','SELLER_COLLECTOR')
        AND (cm.id IS NOT NULL OR s.id IS NOT NULL)
      GROUP BY u.id, u.full_name, u.role, s.weekly_amount
-     ORDER BY u.full_name`,
-    [weekStart, weekEnd]
+     ORDER BY u.full_name`
   );
   return r.rows.map(row => ({
     ...row,

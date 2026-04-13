@@ -25,8 +25,8 @@ const markOverdueAndApplyPenalty = async () => {
     );
 
     // 2. Aplicar mora diaria a todas las cuotas ya OVERDUE
-    //    Respetando el tope máximo configurado
-    if (overdueResult.rows.length > 0 || true) {
+    //    Se ejecuta siempre, independientemente de si hubo nuevas cuotas vencidas hoy
+    {
       await client.query(
         `UPDATE installments i
          SET penalty_amount = LEAST(

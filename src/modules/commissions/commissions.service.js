@@ -41,18 +41,15 @@ const setSalary = async (userId, weeklyAmount) => {
 
 // ── Resumen semanal ───────────────────────────────────────────
 
-const getWeeklySummary = async (date) => {
-  const { week_start, week_end } = getWeekBounds(date ? new Date(date) : new Date());
-  const rows = await queries.getWeeklySummary(week_start, week_end);
-  return { week_start, week_end, employees: rows };
+const getWeeklySummary = async () => {
+  const rows = await queries.getWeeklySummary();
+  return { employees: rows };
 };
 
 // ── Liquidación ───────────────────────────────────────────────
 
 const liquidate = async (data, adminId) => {
   const { user_id, payment_method, transfer_reference } = data;
-
-  const { week_start, week_end } = getWeekBounds(new Date());
 
   // Verificar usuario
   const userCheck = await pool.query(
@@ -65,7 +62,8 @@ const liquidate = async (data, adminId) => {
   if (!['SELLER','COLLECTOR','SELLER_COLLECTOR'].includes(user.role))
     throw { status: 409, message: 'Solo se pueden liquidar Vendedores y Cobradores.' };
 
-  const commissionsTotal = await queries.getPendingTotal(user_id, week_start, week_end);
+  // Busca TODAS las comisiones pendientes, sin filtro de semana
+  const commissionsTotal = await queries.getPendingTotal(user_id);
   const salary = await queries.findSalary(user_id);
   const salaryAmount = salary ? parseFloat(salary.weekly_amount) : 0;
   const totalNet = commissionsTotal + salaryAmount;
@@ -74,13 +72,23 @@ const liquidate = async (data, adminId) => {
     throw { status: 409, message: `El total neto es $${totalNet.toFixed(2)}. No hay monto positivo a liquidar.` };
 
   return withTransaction(async (client) => {
-    const pendingIds = await queries.getPendingIds(client, user_id, week_start, week_end);
+    const pendingRows = await queries.getPendingIds(client, user_id);
+    const pendingIds  = pendingRows.map(r => r.id);
+
+    // Determina el rango real de semanas que cubre esta liquidación
+    const weekStart = pendingRows.length
+      ? pendingRows.reduce((min, r) => r.week_start < min ? r.week_start : min, pendingRows[0].week_start)
+      : getWeekBounds().week_start;
+    const weekEnd = pendingRows.length
+      ? pendingRows.reduce((max, r) => r.week_end > max ? r.week_end : max, pendingRows[0].week_end)
+      : getWeekBounds().week_end;
+
     await queries.markCommissionsPaid(client, pendingIds);
 
     const liquidation = await queries.createLiquidation(client, {
       userId: user_id,
-      weekStart: week_start,
-      weekEnd: week_end,
+      weekStart,
+      weekEnd,
       commissionsTotal,
       salaryAmount,
       totalPaid: totalNet,
