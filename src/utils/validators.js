@@ -232,7 +232,23 @@ const credits = {
   ],
   simulate: [
     isEnum('type', 'El tipo de crédito', ['SALE','LOAN']),
-    isPositiveNumber('total_amount', 'El monto total', { min: 1, max: 99999999 }),
+    // LOAN: total_amount obligatorio. SALE: total_amount O products (no ambos vacíos)
+    body('total_amount').optional()
+      .isFloat({ min: 1, max: 99999999 })
+      .withMessage('El monto total debe ser un número entre 1 y 99999999.'),
+    body('products').optional().isArray({ min: 1 })
+      .withMessage('Los productos deben ser un arreglo con al menos un ítem.'),
+    body('products.*.product_id').optional()
+      .isUUID().withMessage('Cada product_id debe ser un UUID válido.'),
+    body('products.*.quantity').optional()
+      .isInt({ min: 1, max: 9999 }).withMessage('La cantidad debe ser entre 1 y 9999.'),
+    body().custom((body) => {
+      if (body.type === 'LOAN' && !body.total_amount)
+        throw new Error('El monto total es obligatorio para préstamos.');
+      if (body.type === 'SALE' && !body.total_amount && (!body.products || !body.products.length))
+        throw new Error('Para ventas indicá el monto total o los productos.');
+      return true;
+    }),
     body('installments_count')
       .isInt({ min: 1, max: 120 })
       .withMessage('La cantidad de cuotas debe ser un número entre 1 y 120.'),

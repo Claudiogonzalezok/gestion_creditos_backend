@@ -32,8 +32,8 @@ const create = async (req, res) => {
 
 const simulate = async (req, res) => {
   try {
-    const { type, total_amount, installments_count, payment_frequency } = req.body;
-    return response.success(res, await service.simulate({ type, total_amount, installments_count, payment_frequency }), 'Simulación calculada.');
+    const { type, total_amount, installments_count, payment_frequency, products } = req.body;
+    return response.success(res, await service.simulate({ type, total_amount, installments_count, payment_frequency, products }), 'Simulación calculada.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     return response.serverError(res, err);

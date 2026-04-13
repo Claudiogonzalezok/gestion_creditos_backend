@@ -81,25 +81,40 @@ const create = async (data, requestingUser) => {
   });
 };
 
-const simulate = async ({ type, total_amount, installments_count, payment_frequency }) => {
-  const rateRecord = await irQueries.findActiveRate(payment_frequency, installments_count, total_amount);
+const simulate = async ({ type, total_amount, installments_count, payment_frequency, products }) => {
+  let amount = total_amount ? parseFloat(total_amount) : null;
+
+  // Para SALE con productos: calcular total desde precios actuales
+  if (type === 'SALE' && !amount && products?.length) {
+    let computed = 0;
+    for (const item of products) {
+      const res = await pool.query(
+        `SELECT current_price, status FROM products WHERE id = $1`, [item.product_id]
+      );
+      const p = res.rows[0];
+      if (!p) throw { status: 404, message: `Producto ${item.product_id} no encontrado.` };
+      if (p.status !== 'ACTIVE') throw { status: 409, message: `El producto ${item.product_id} no está disponible.` };
+      computed += parseFloat(p.current_price) * item.quantity;
+    }
+    amount = computed;
+  }
+
+  const rateRecord = await irQueries.findActiveRate(payment_frequency, installments_count, amount);
   if (!rateRecord) throw { status: 404, message: 'No existe una tasa configurada para esta combinación y monto.' };
 
-  const coef             = parseFloat(rateRecord.rate);
-  const mathematicalTotal = getTotalWithInterest(total_amount, coef);
-  const installmentAmount = getInstallmentAmount(total_amount, coef, installments_count);
-  const totalToReturn     = getTotalToReturn(total_amount, coef, installments_count);
-  const interestAmount    = Math.round((mathematicalTotal - parseFloat(total_amount)) * 100) / 100;
+  const coef              = parseFloat(rateRecord.rate);
+  const mathematicalTotal = getTotalWithInterest(amount, coef);
+  const installmentAmount = getInstallmentAmount(amount, coef, installments_count);
+  const totalToReturn     = getTotalToReturn(amount, coef, installments_count);
+  const interestAmount    = Math.round((mathematicalTotal - amount) * 100) / 100;
 
   return {
     type,
     payment_frequency,
     installments_count,
-    total_amount:        parseFloat(total_amount),
-    coefficient:         coef,
-    interest_amount:     interestAmount,
-    installment_amount:  installmentAmount,
-    total_to_return:     totalToReturn,
+    total_amount:       amount,
+    installment_amount: installmentAmount,
+    total_to_return:    totalToReturn,
     note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
   };
 };
