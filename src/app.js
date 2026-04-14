@@ -58,6 +58,14 @@ app.use((req, res) => {
 
 // ── Error handler global ──────────────────────────────────────
 app.use((err, req, res, next) => {
+  // JSON mal formado enviado por el cliente
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ ok: false, message: 'El cuerpo de la petición no es un JSON válido.' });
+  }
+  // Errores de negocio lanzados con { status, message }
+  if (err.status && err.status < 500) {
+    return res.status(err.status).json({ ok: false, message: err.message });
+  }
   console.error('🔴  Error no controlado:', err);
   res.status(500).json({ ok: false, message: 'Error interno del servidor.' });
 });

@@ -203,7 +203,7 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
     await client.query(
       `UPDATE credits
        SET status = 'SETTLED', settled_at = NOW(),
-           settlement_amount = $1, settlement_type = 'EARLY', updated_at = NOW()
+           settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION', updated_at = NOW()
        WHERE id = $2`,
       [roundedSettlementAmount, id]
     );
