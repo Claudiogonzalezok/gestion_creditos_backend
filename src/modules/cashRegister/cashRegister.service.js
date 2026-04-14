@@ -1,13 +1,16 @@
+const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
 
 const getDashboard = async () => {
   const today = new Date().toISOString().split('T')[0];
-  const data  = await queries.getDashboard(today);
+  const data      = await queries.getDashboard(today);
+  const egreses   = await queries.getDailyEgresesTotal(today);
   return {
     date:            today,
     cash_amount:     parseFloat(data.cash_amount),
     transfer_amount: parseFloat(data.transfer_amount),
     total_collected: parseFloat(data.total_collected),
+    total_egreses:   egreses,
     approved_count:  parseInt(data.approved_count),
     pending_count:   parseInt(data.pending_count),
   };
@@ -24,6 +27,7 @@ const close = async (data, adminId) => {
   const cashAmount     = await queries.getDailyCashTotal(today);
   const transferAmount = await queries.getDailyTransferTotal(today);
   const totalCollected = cashAmount + transferAmount;
+  const totalEgreses   = await queries.getDailyEgresesTotal(today);
   const declaredCash   = parseFloat(data.declared_cash);
   const difference     = declaredCash - cashAmount;
 
@@ -31,17 +35,34 @@ const close = async (data, adminId) => {
   if (difference > 0)  differenceStatus = 'SURPLUS';
   if (difference < 0)  differenceStatus = 'SHORTAGE';
 
-  return queries.create({
-    registerDate:     today,
-    cashAmount,
-    transferAmount,
-    totalCollected,
-    declaredCash,
-    difference,
-    differenceStatus,
-    observations:     data.observations,
-    closedBy:         adminId,
-  });
+  // Transacción: crear cierre y vincular liquidaciones del día
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const register = await queries.create(client, {
+      registerDate:     today,
+      cashAmount,
+      transferAmount,
+      totalCollected,
+      totalEgreses,
+      declaredCash,
+      difference,
+      differenceStatus,
+      observations:     data.observations,
+      closedBy:         adminId,
+    });
+
+    await queries.linkLiquidations(client, register.id, today);
+
+    await client.query('COMMIT');
+    return register;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 };
 
 const getAll  = async (filters) => queries.findAll(filters);

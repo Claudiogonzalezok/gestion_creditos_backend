@@ -65,23 +65,45 @@ const findById = async (id) => {
   return r.rows[0] || null;
 };
 
-const create = async ({
+const create = async (client, {
   registerDate, cashAmount, transferAmount, totalCollected,
-  declaredCash, difference, differenceStatus, observations, closedBy,
+  totalEgreses, declaredCash, difference, differenceStatus, observations, closedBy,
 }) => {
-  const r = await pool.query(
+  const r = await client.query(
     `INSERT INTO cash_registers
        (register_date, cash_amount, transfer_amount, total_collected,
-        declared_cash, difference, difference_status, observations, closed_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     RETURNING id, register_date, total_collected, cash_amount, transfer_amount,
+        total_egreses, declared_cash, difference, difference_status, observations, closed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, register_date, total_collected, total_egreses, cash_amount, transfer_amount,
                declared_cash, difference, difference_status, observations, created_at`,
     [
       registerDate, cashAmount, transferAmount, totalCollected,
-      declaredCash, difference, differenceStatus, observations || null, closedBy,
+      totalEgreses, declaredCash, difference, differenceStatus, observations || null, closedBy,
     ]
   );
   return r.rows[0];
+};
+
+// Total de egresos del día (liquidaciones de sueldos y comisiones)
+const getDailyEgresesTotal = async (date) => {
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(total_paid), 0) AS total
+     FROM commission_liquidations
+     WHERE paid_at::date = $1::date`,
+    [date]
+  );
+  return parseFloat(r.rows[0].total);
+};
+
+// Vincula las liquidaciones del día al cierre de caja recién creado
+const linkLiquidations = async (client, cashRegisterId, date) => {
+  await client.query(
+    `UPDATE commission_liquidations
+     SET cash_register_id = $1
+     WHERE paid_at::date = $2::date
+       AND cash_register_id IS NULL`,
+    [cashRegisterId, date]
+  );
 };
 
 // Dashboard del día actual
@@ -102,6 +124,6 @@ const getDashboard = async (date) => {
 };
 
 module.exports = {
-  getDailyCashTotal, getDailyTransferTotal,
-  findByDate, findAll, findById, create, getDashboard,
+  getDailyCashTotal, getDailyTransferTotal, getDailyEgresesTotal,
+  findByDate, findAll, findById, create, linkLiquidations, getDashboard,
 };
