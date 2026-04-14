@@ -43,12 +43,15 @@ const findById = async (id) => {
   return r.rows[0] || null;
 };
 
-const hasPendingPayment = async (installmentId) => {
+// Suma de pre-cargas PENDING para una cuota (monto comprometido pendiente de aprobación)
+const getPendingCommittedAmount = async (installmentId) => {
   const r = await pool.query(
-    `SELECT id FROM payments WHERE installment_id = $1 AND status = 'PENDING' LIMIT 1`,
+    `SELECT COALESCE(SUM(amount_received), 0) AS total
+     FROM payments
+     WHERE installment_id = $1 AND status = 'PENDING'`,
     [installmentId]
   );
-  return r.rows.length > 0;
+  return parseFloat(r.rows[0].total);
 };
 
 const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes }) => {
@@ -69,15 +72,19 @@ const approve = async (client, id, adminId) => {
   );
 };
 
-const updateInstallment = async (client, installmentId, amountReceived, amountDue) => {
-  const newStatus = amountReceived >= amountDue ? 'PAID' : 'PARTIAL';
+// Aplica el cobro sobre la cuota, sin exceder el saldo real pendiente
+const updateInstallment = async (client, installmentId, amountReceived, amountDue, currentAmountPaid) => {
+  const remaining   = amountDue - currentAmountPaid;
+  const toApply     = Math.min(amountReceived, remaining);
+  const newTotal    = currentAmountPaid + toApply;
+  const newStatus   = newTotal >= amountDue ? 'PAID' : 'PARTIAL';
   await client.query(
     `UPDATE installments
      SET status      = $1,
-         amount_paid = amount_paid + $2,
+         amount_paid = $2,
          updated_at  = NOW()
      WHERE id = $3`,
-    [newStatus, amountReceived, installmentId]
+    [newStatus, newTotal, installmentId]
   );
   return newStatus;
 };
@@ -111,6 +118,6 @@ const reject = async (id, rejectionReason, adminId) => {
 };
 
 module.exports = {
-  findAll, findById, hasPendingPayment, create,
+  findAll, findById, getPendingCommittedAmount, create,
   approve, updateInstallment, countPendingInstallments, settleCredit, reject,
 };

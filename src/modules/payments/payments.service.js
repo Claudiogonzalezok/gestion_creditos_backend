@@ -15,19 +15,29 @@ const getById = async (id) => {
 };
 
 const create = async (data, requestingUser) => {
-  // Verificar que la cuota exista y esté pendiente
+  // Verificar que la cuota exista y tenga saldo pendiente
   const instCheck = await pool.query(
-    `SELECT id, status, amount_due, credit_id FROM installments WHERE id = $1`,
+    `SELECT id, status, amount_due, amount_paid, credit_id FROM installments WHERE id = $1`,
     [data.installment_id]
   );
   if (!instCheck.rows.length) throw { status: 404, message: 'Cuota no encontrada.' };
   const inst = instCheck.rows[0];
   if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
 
-  // Advertir si ya hay una pre-carga pendiente (no bloquea, solo alerta en la respuesta)
-  const hasPending = await queries.hasPendingPayment(data.installment_id);
+  // Calcular saldo disponible descontando pre-cargas PENDING ya registradas
+  const amountDue      = parseFloat(inst.amount_due);
+  const amountPaid     = parseFloat(inst.amount_paid);
+  const pendingAmount  = await queries.getPendingCommittedAmount(data.installment_id);
+  const available      = amountDue - amountPaid - pendingAmount;
 
-  const payment = await queries.create({
+  if (available <= 0)
+    throw { status: 409, message: 'Esta cuota ya tiene pre-cargas pendientes que cubren el saldo total.' };
+
+  const amountReceived = parseFloat(data.amount_received);
+  if (amountReceived > available)
+    throw { status: 422, message: `El monto ingresado ($${amountReceived.toLocaleString('es-AR')}) supera el saldo disponible ($${available.toLocaleString('es-AR')}).` };
+
+  return queries.create({
     installment_id:     data.installment_id,
     collector_id:       requestingUser.id,
     amount_received:    data.amount_received,
@@ -35,11 +45,6 @@ const create = async (data, requestingUser) => {
     transfer_reference: data.transfer_reference,
     notes:              data.notes,
   });
-
-  return {
-    ...payment,
-    warning: hasPending ? 'Ya existía una pre-carga pendiente para esta cuota. El Admin resolverá el conflicto.' : undefined,
-  };
 };
 
 const approve = async (id, adminId) => {
@@ -48,6 +53,12 @@ const approve = async (id, adminId) => {
   if (payment.status !== 'PENDING')
     throw { status: 409, message: 'Solo se pueden aprobar cobros en estado PENDIENTE.' };
 
+  // Verificar que la cuota aún tenga saldo pendiente
+  const amountDue  = parseFloat(payment.amount_due);
+  const amountPaid = parseFloat(payment.amount_paid);
+  if (amountPaid >= amountDue)
+    throw { status: 409, message: 'Esta cuota ya se encuentra totalmente pagada.' };
+
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId);
 
@@ -55,7 +66,8 @@ const approve = async (id, adminId) => {
       client,
       payment.installment_id,
       parseFloat(payment.amount_received),
-      parseFloat(payment.amount_due)
+      amountDue,
+      amountPaid
     );
 
     // Si la cuota quedó PAID, verificar si el crédito está liquidado
