@@ -1,0 +1,99 @@
+const pool = require('../../config/db');
+
+/**
+ * Resumen de cuenta del cliente:
+ * - deuda total vigente
+ * - conteo de cuotas por estado
+ * - próximos vencimientos (30 días)
+ */
+const getAccountSummary = async (customerId) => {
+  // Totales de cuotas
+  const totals = await pool.query(
+    `SELECT
+       COALESCE(SUM(CASE WHEN i.status IN ('PENDING','OVERDUE','PARTIAL')
+                    THEN i.amount_due - i.amount_paid ELSE 0 END), 0) AS total_owed,
+       COUNT(*) FILTER (WHERE i.status = 'PAID')                       AS paid_count,
+       COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))        AS pending_count,
+       COUNT(*) FILTER (WHERE i.status = 'OVERDUE')                    AS overdue_count
+     FROM installments i
+     JOIN credits c ON c.id = i.credit_id
+     WHERE c.customer_id = $1
+       AND c.status IN ('ACTIVE','SETTLED')`,
+    [customerId]
+  );
+
+  // Próximos vencimientos (30 días), solo cuotas pendientes
+  const upcoming = await pool.query(
+    `SELECT
+       i.id, i.installment_number, i.due_date,
+       i.amount_due, i.amount_paid, i.penalty_amount, i.status,
+       c.id AS credit_id, c.type AS credit_type
+     FROM installments i
+     JOIN credits c ON c.id = i.credit_id
+     WHERE c.customer_id = $1
+       AND c.status = 'ACTIVE'
+       AND i.status IN ('PENDING','OVERDUE','PARTIAL')
+       AND i.due_date <= CURRENT_DATE + INTERVAL '30 days'
+     ORDER BY i.due_date ASC`,
+    [customerId]
+  );
+
+  return { totals: totals.rows[0], upcoming: upcoming.rows };
+};
+
+/**
+ * Lista de créditos visibles para el cliente (excluye PENDING_APPROVAL, REJECTED, EXPIRED).
+ */
+const findCredits = async (customerId) => {
+  const r = await pool.query(
+    `SELECT
+       c.id, c.type, c.total_amount, c.installments_count,
+       c.payment_frequency, c.status, c.created_at, c.approved_at,
+       COUNT(i.id)                                          AS total_installments,
+       COUNT(i.id) FILTER (WHERE i.status = 'PAID')        AS paid_installments,
+       MIN(i.due_date) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
+                                                            AS next_due_date,
+       MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
+                                                            AS next_due_amount
+     FROM credits c
+     LEFT JOIN installments i ON i.credit_id = c.id
+     WHERE c.customer_id = $1
+       AND c.status IN ('ACTIVE','SETTLED')
+     GROUP BY c.id
+     ORDER BY c.created_at DESC`,
+    [customerId]
+  );
+  return r.rows;
+};
+
+/**
+ * Detalle de un crédito con su cronograma completo de cuotas.
+ * Solo retorna el crédito si pertenece al cliente autenticado.
+ */
+const findCreditById = async (creditId, customerId) => {
+  const credit = await pool.query(
+    `SELECT
+       c.id, c.type, c.total_amount, c.installments_count,
+       c.payment_frequency, c.status, c.created_at, c.approved_at
+     FROM credits c
+     WHERE c.id = $1
+       AND c.customer_id = $2
+       AND c.status IN ('ACTIVE','SETTLED')`,
+    [creditId, customerId]
+  );
+  if (!credit.rows[0]) return null;
+
+  const installments = await pool.query(
+    `SELECT
+       id, installment_number, due_date,
+       amount_due, amount_paid, penalty_amount, status
+     FROM installments
+     WHERE credit_id = $1
+     ORDER BY installment_number ASC`,
+    [creditId]
+  );
+
+  return { ...credit.rows[0], installments: installments.rows };
+};
+
+module.exports = { getAccountSummary, findCredits, findCreditById };

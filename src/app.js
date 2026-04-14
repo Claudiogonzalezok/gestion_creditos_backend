@@ -49,6 +49,7 @@ app.use('/api/collections',  require('./modules/collections/collections.routes')
 app.use('/api/commissions',  require('./modules/commissions/commissions.routes'));
 app.use('/api/cash-register',require('./modules/cashRegister/cashRegister.routes'));
 app.use('/api/reports',      require('./modules/reports/reports.routes'));
+app.use('/api/portal',       require('./modules/portal/portal.routes'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {
