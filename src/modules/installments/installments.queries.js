@@ -62,6 +62,32 @@ const waivePenalty = async (id) => {
   return r.rows[0] || null;
 };
 
+// Pago anticipado directo de una cuota (sin flujo de pre-carga)
+const earlyPay = async (client, id, adminId, paymentMethod, transferReference) => {
+  // Marca la cuota como PAID con el saldo restante
+  const instRes = await client.query(
+    `UPDATE installments
+     SET status      = 'PAID',
+         amount_paid = amount_due,
+         updated_at  = NOW()
+     WHERE id = $1
+     RETURNING id, credit_id, amount_due, installment_number`,
+    [id]
+  );
+  const inst = instRes.rows[0];
+
+  // Registra el pago directamente aprobado
+  await client.query(
+    `INSERT INTO payments
+       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+        status, approved_by, approved_at, notes)
+     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Pago anticipado de cuota')`,
+    [inst.id, adminId, inst.amount_due, paymentMethod, transferReference || null]
+  );
+
+  return inst;
+};
+
 // Proceso automático — ejecutado desde el cron job de mora
 const markOverdue = async (graceDays) => {
   const r = await pool.query(
@@ -74,4 +100,4 @@ const markOverdue = async (graceDays) => {
   return r.rowCount;
 };
 
-module.exports = { findAll, findById, applyPenalty, waivePenalty, markOverdue };
+module.exports = { findAll, findById, applyPenalty, waivePenalty, earlyPay, markOverdue };

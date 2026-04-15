@@ -39,4 +39,19 @@ const waivePenalty = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, applyPenalty, waivePenalty };
+const earlyPay = async (req, res) => {
+  try {
+    const { payment_method, transfer_reference } = req.body;
+    const result = await service.earlyPay(req.params.id, payment_method, transfer_reference, req.user.id);
+    const msg = result.credit_settled
+      ? 'Pago anticipado aplicado. El crédito quedó liquidado.'
+      : 'Pago anticipado de cuota aplicado correctamente.';
+    return response.success(res, result, msg);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { getAll, getById, applyPenalty, waivePenalty, earlyPay };

@@ -348,6 +348,12 @@ const penalties = {
     body('reason').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 255 }).withMessage('El motivo no puede superar los 255 caracteres.'),
   ],
+  earlyPay: [
+    isUUIDParam('id', 'El ID de cuota'),
+    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
+    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia no puede superar los 100 caracteres.'),
+  ],
   id: [ isUUIDParam('id', 'El ID de cuota') ],
 };
 
