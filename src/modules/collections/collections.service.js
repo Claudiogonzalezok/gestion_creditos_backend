@@ -4,15 +4,36 @@ const queries = require('./collections.queries');
 const generate = async (data, adminId) => {
   const { collector_id, date, filter } = data;
 
-  // Verificar que el cobrador exista y tenga rol COLLECTOR
+  // Verificar que el cobrador exista y tenga rol COLLECTOR o SELLER_COLLECTOR
   const collectorCheck = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND role = 'COLLECTOR' AND status = 'ACTIVE'`,
+    `SELECT id FROM users WHERE id = $1 AND role IN ('COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
     [collector_id]
   );
   if (!collectorCheck.rows.length)
     throw { status: 404, message: 'Cobrador no encontrado o inactivo.' };
 
+  // Si ya existen planillas para ese cobrador en esa fecha, eliminarlas todas
+  const existing = await pool.query(
+    `SELECT id FROM collection_sheets
+     WHERE collector_id = $1 AND sheet_date = $2::date`,
+    [collector_id, date]
+  );
+  if (existing.rows.length) {
+    const ids = existing.rows.map(r => r.id);
+    await pool.query(
+      `DELETE FROM collection_sheet_details WHERE sheet_id = ANY($1::uuid[])`,
+      [ids]
+    );
+    await pool.query(
+      `DELETE FROM collection_sheets WHERE id = ANY($1::uuid[])`,
+      [ids]
+    );
+  }
+
   const items = await queries.findInstallmentsForSheet(collector_id, date, filter || 'ALL_PENDING');
+
+  if (!items.length)
+    throw { status: 409, message: 'No hay cuotas para cobrar en el filtro seleccionado. No se generó la planilla.' };
 
   const sheet = await queries.create({
     collectorId: collector_id,
@@ -27,9 +48,6 @@ const generate = async (data, adminId) => {
     ...sheet,
     total_items: items.length,
     items,
-    warning: items.length === 0
-      ? 'No se encontraron cuotas para el cobrador en el filtro seleccionado.'
-      : undefined,
   };
 };
 

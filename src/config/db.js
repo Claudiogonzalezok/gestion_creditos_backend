@@ -1,4 +1,8 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// Evita que el driver convierta columnas DATE a objetos Date de JS.
+// Sin esto, "2026-06-14" llega al cliente como "2026-06-14T03:00:00.000Z" (offset UTC-3).
+types.setTypeParser(1082, (val) => val); // 1082 = OID del tipo DATE en PostgreSQL
 
 const pool = new Pool({
   host:     process.env.DB_HOST     || 'localhost',

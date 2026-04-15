@@ -4,16 +4,13 @@ const response = require('../../utils/response');
 const generate = async (req, res) => {
   try {
     const result = await service.generate(req.body, req.user.id);
-    return response.created(res, result,
-      result.warning
-        ? `Planilla generada sin cuotas: ${result.warning}`
-        : 'Planilla de cobro generada correctamente.'
-    );
+    return response.created(res, result, 'Planilla de cobro generada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }
+
 };
 
 const getAll = async (req, res) => {

@@ -2,15 +2,23 @@ const pool = require('../../config/db');
 
 // Busca cuotas pendientes/vencidas asignadas a un cobrador para una fecha dada
 const findInstallmentsForSheet = async (collectorId, date, filter) => {
-  let statusFilter = `i.status IN ('PENDING','OVERDUE','PARTIAL')`;
+  let statusFilter;
+  let params;
+
   if (filter === 'TODAY') {
     statusFilter = `i.status IN ('PENDING','PARTIAL') AND i.due_date::date = $2::date`;
+    params = [collectorId, date];
   } else if (filter === 'OVERDUE') {
     statusFilter = `i.status = 'OVERDUE'`;
+    params = [collectorId];
   } else if (filter === 'TODAY_AND_OVERDUE') {
     statusFilter = `(i.status = 'OVERDUE' OR (i.status IN ('PENDING','PARTIAL') AND i.due_date::date = $2::date))`;
+    params = [collectorId, date];
+  } else {
+    // ALL_PENDING
+    statusFilter = `i.status IN ('PENDING','OVERDUE','PARTIAL')`;
+    params = [collectorId];
   }
-  // ALL_PENDING usa el default arriba
 
   const r = await pool.query(
     `SELECT
@@ -34,7 +42,7 @@ const findInstallmentsForSheet = async (collectorId, date, filter) => {
        AND cu.assigned_collector_id = $1
        AND ${statusFilter}
      ORDER BY cu.full_name, i.due_date`,
-    [collectorId, date]
+    params
   );
   return r.rows;
 };
