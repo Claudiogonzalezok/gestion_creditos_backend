@@ -42,6 +42,7 @@ app.use('/api/customers',    require('./modules/customers/customers.routes'));
 app.use('/api/products',     require('./modules/products/products.routes'));
 app.use('/api/system-config',require('./modules/systemConfig/systemConfig.routes'));
 app.use('/api/interest-rates',require('./modules/interestRates/interestRates.routes'));
+app.use('/api/product-rates', require('./modules/productRates/productRates.routes'));
 app.use('/api/credits',      require('./modules/credits/credits.routes'));
 app.use('/api/installments', require('./modules/installments/installments.routes'));
 app.use('/api/payments',     require('./modules/payments/payments.routes'));

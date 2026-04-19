@@ -1,26 +1,40 @@
 const pool = require('../../config/db');
 
-// Total recaudado en efectivo del día (cobros aprobados)
+// Total recaudado en efectivo del día (cobros aprobados + enganches en efectivo)
 const getDailyCashTotal = async (date) => {
   const r = await pool.query(
-    `SELECT COALESCE(SUM(p.amount_received), 0) AS total
-     FROM payments p
-     WHERE p.status = 'APPROVED'
-       AND p.payment_method = 'CASH'
-       AND p.approved_at::date = $1::date`,
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM (
+       SELECT amount_received AS amount
+       FROM payments
+       WHERE status = 'APPROVED' AND payment_method = 'CASH'
+         AND approved_at::date = $1::date
+       UNION ALL
+       SELECT amount
+       FROM credit_down_payments
+       WHERE payment_method = 'CASH'
+         AND created_at::date = $1::date
+     ) combined`,
     [date]
   );
   return parseFloat(r.rows[0].total);
 };
 
-// Total recaudado por transferencia del día
+// Total recaudado por transferencia del día (cobros aprobados + enganches por transferencia)
 const getDailyTransferTotal = async (date) => {
   const r = await pool.query(
-    `SELECT COALESCE(SUM(p.amount_received), 0) AS total
-     FROM payments p
-     WHERE p.status = 'APPROVED'
-       AND p.payment_method = 'TRANSFER'
-       AND p.approved_at::date = $1::date`,
+    `SELECT COALESCE(SUM(amount), 0) AS total
+     FROM (
+       SELECT amount_received AS amount
+       FROM payments
+       WHERE status = 'APPROVED' AND payment_method = 'TRANSFER'
+         AND approved_at::date = $1::date
+       UNION ALL
+       SELECT amount
+       FROM credit_down_payments
+       WHERE payment_method = 'TRANSFER'
+         AND created_at::date = $1::date
+     ) combined`,
     [date]
   );
   return parseFloat(r.rows[0].total);
@@ -106,21 +120,47 @@ const linkLiquidations = async (client, cashRegisterId, date) => {
   );
 };
 
-// Dashboard del día actual
+// Dashboard del día actual (incluye enganches en los totales)
 const getDashboard = async (date) => {
-  const r = await pool.query(
+  // Cobros de cuotas (aprobados y pendientes)
+  const payments = await pool.query(
     `SELECT
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),    0) AS cash_amount,
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS transfer_amount,
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.status = 'APPROVED'),         0) AS total_collected,
-       COUNT(*) FILTER (WHERE p.status = 'APPROVED')                                    AS approved_count,
-       COUNT(*) FILTER (WHERE p.status = 'PENDING')                                     AS pending_count
+       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'    AND p.status = 'APPROVED'), 0) AS cash_amount,
+       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER' AND p.status = 'APPROVED'), 0) AS transfer_amount,
+       COALESCE(SUM(p.amount_received) FILTER (WHERE p.status = 'APPROVED'),                                   0) AS total_collected,
+       COUNT(*) FILTER (WHERE p.status = 'APPROVED')                                                              AS approved_count,
+       COUNT(*) FILTER (WHERE p.status = 'PENDING')                                                               AS pending_count
      FROM payments p
      WHERE (p.status = 'APPROVED' AND p.approved_at::date = $1::date)
         OR (p.status = 'PENDING'  AND p.created_at::date  = $1::date)`,
     [date]
   );
-  return r.rows[0];
+
+  // Enganches del día (siempre aprobados al momento de registrarse)
+  const downPayments = await pool.query(
+    `SELECT
+       COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+       COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+       COALESCE(SUM(amount),                                            0) AS total,
+       COUNT(*)                                                             AS count
+     FROM credit_down_payments
+     WHERE created_at::date = $1::date`,
+    [date]
+  );
+
+  const p  = payments.rows[0];
+  const dp = downPayments.rows[0];
+
+  return {
+    cash_amount:          parseFloat(p.cash_amount)     + parseFloat(dp.cash_amount),
+    transfer_amount:      parseFloat(p.transfer_amount) + parseFloat(dp.transfer_amount),
+    total_collected:      parseFloat(p.total_collected) + parseFloat(dp.total),
+    approved_count:       parseInt(p.approved_count),
+    pending_count:        parseInt(p.pending_count),
+    // Enganches desglosados por separado para visibilidad en el dashboard
+    down_payments_total:  parseFloat(dp.total),
+    down_payments_count:  parseInt(dp.count),
+  };
 };
 
 module.exports = {

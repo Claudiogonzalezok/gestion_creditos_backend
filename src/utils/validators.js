@@ -227,12 +227,22 @@ const credits = {
       .isUUID().withMessage('Cada product_id debe ser un UUID válido.'),
     body('products.*.quantity').optional()
       .isInt({ min: 1, max: 9999 }).withMessage('La cantidad de cada producto debe ser entre 1 y 9999.'),
+    // Enganche (solo aplica a SALE)
+    body('down_payment').optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage('El enganche debe ser un número mayor o igual a 0.'),
+    body('down_payment_method')
+      .if(body('down_payment').exists().isFloat({ min: 0.01 }))
+      .isIn(['CASH','TRANSFER'])
+      .withMessage('El método de pago del enganche debe ser CASH o TRANSFER.'),
+    body('down_payment_transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia del enganche no puede superar los 100 caracteres.'),
     body('notes').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las notas no pueden superar los 500 caracteres.'),
   ],
   simulate: [
     isEnum('type', 'El tipo de crédito', ['SALE','LOAN']),
-    // LOAN: total_amount obligatorio. SALE: total_amount O products (no ambos vacíos)
+    // LOAN: total_amount obligatorio. SALE: productos obligatorios (tasa es por producto)
     body('total_amount').optional()
       .isFloat({ min: 1, max: 99999999 })
       .withMessage('El monto total debe ser un número entre 1 y 99999999.'),
@@ -245,8 +255,8 @@ const credits = {
     body().custom((body) => {
       if (body.type === 'LOAN' && !body.total_amount)
         throw new Error('El monto total es obligatorio para préstamos.');
-      if (body.type === 'SALE' && !body.total_amount && (!body.products || !body.products.length))
-        throw new Error('Para ventas indicá el monto total o los productos.');
+      if (body.type === 'SALE' && (!body.products || !body.products.length))
+        throw new Error('Para ventas se deben indicar los productos (la tasa se obtiene por producto).');
       return true;
     }),
     body('installments_count')
@@ -368,6 +378,27 @@ const collections = {
   id: [ isUUIDParam('id', 'El ID de planilla') ],
 };
 
+// ── PRODUCT RATES ────────────────────────────────────────────
+const productRates = {
+  create: [
+    isUUID('product_id', 'El producto'),
+    isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
+    body('installments_count')
+      .isInt({ min: 1, max: 120 })
+      .withMessage('La cantidad de cuotas debe ser entre 1 y 120.'),
+    body('rate')
+      .isFloat({ min: 0.001, max: 100 })
+      .withMessage('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).'),
+  ],
+  update: [
+    isUUIDParam('id', 'El ID de tasa'),
+    body('rate').optional()
+      .isFloat({ min: 0.001, max: 100 })
+      .withMessage('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).'),
+  ],
+  id: [ isUUIDParam('id', 'El ID de tasa') ],
+};
+
 // ── COMMISSIONS ───────────────────────────────────────────────
 const commissions = {
   liquidate: [
@@ -402,6 +433,7 @@ module.exports = {
   credits,
   payments,
   interestRates,
+  productRates,
   cashRegister,
   penalties,
   collections,

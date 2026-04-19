@@ -21,7 +21,9 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
 
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT c.id, c.type, c.total_amount, c.installments_count, c.payment_frequency,
+    `SELECT c.id, c.type, c.total_amount, c.down_payment,
+            c.down_payment_method, c.down_payment_transfer_reference,
+            c.installments_count, c.payment_frequency,
             c.interest_rate, c.status, c.rejection_reason, c.notes, c.created_by,
             c.created_at, c.approved_at, c.approved_by,
             cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
@@ -38,7 +40,7 @@ const findById = async (id) => {
 
   if (credit.type === 'SALE') {
     const products = await pool.query(
-      `SELECT cp.id, cp.quantity, cp.historical_price,
+      `SELECT cp.id, cp.quantity, cp.historical_price, cp.historical_rate,
               p.id AS product_id, p.name AS product_name
        FROM credit_products cp
        JOIN products p ON p.id = cp.product_id
@@ -58,7 +60,8 @@ const findById = async (id) => {
 
 const findCreditProducts = async (creditId) => {
   const r = await pool.query(
-    `SELECT cp.product_id, cp.quantity, cp.historical_price, p.available_stock, p.name
+    `SELECT cp.id, cp.product_id, cp.quantity, cp.historical_price, cp.historical_rate,
+            p.available_stock, p.name
      FROM credit_products cp
      JOIN products p ON p.id = cp.product_id
      WHERE cp.credit_id = $1`,
@@ -67,12 +70,24 @@ const findCreditProducts = async (creditId) => {
   return r.rows;
 };
 
-const create = async (client, { customer_id, created_by, type, total_amount, installments_count, payment_frequency, notes }) => {
+const create = async (client, {
+  customer_id, created_by, type, total_amount,
+  down_payment, down_payment_method, down_payment_transfer_reference,
+  installments_count, payment_frequency, notes,
+}) => {
   const r = await client.query(
-    `INSERT INTO credits (customer_id, created_by, type, total_amount, installments_count, payment_frequency, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, type, total_amount, installments_count, payment_frequency, status, created_at`,
-    [customer_id, created_by, type, total_amount, installments_count, payment_frequency, notes || null]
+    `INSERT INTO credits
+       (customer_id, created_by, type, total_amount,
+        down_payment, down_payment_method, down_payment_transfer_reference,
+        installments_count, payment_frequency, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, type, total_amount, down_payment, down_payment_method,
+               installments_count, payment_frequency, status, created_at`,
+    [
+      customer_id, created_by, type, total_amount,
+      down_payment || 0, down_payment_method || null, down_payment_transfer_reference || null,
+      installments_count, payment_frequency, notes || null,
+    ]
   );
   return r.rows[0];
 };
@@ -87,13 +102,17 @@ const createCreditProducts = async (client, creditId, products) => {
   }
 };
 
+/**
+ * interestRate: coeficiente para créditos LOAN; NULL para créditos SALE
+ * (los SALE guardan historical_rate por producto en credit_products).
+ */
 const approve = async (client, id, adminId, interestRate, installmentsCount) => {
   await client.query(
     `UPDATE credits
      SET status = 'ACTIVE', approved_by = $1, approved_at = NOW(),
          interest_rate = $2, installments_count = $3, updated_at = NOW()
      WHERE id = $4`,
-    [adminId, interestRate, installmentsCount, id]
+    [adminId, interestRate ?? null, installmentsCount, id]
   );
 };
 
@@ -118,6 +137,16 @@ const decrementProductStock = async (client, productId, quantity, reason, adminI
     `INSERT INTO stock_movements (product_id, movement, quantity, reason, available_stock_after, user_id)
      VALUES ($1, 'OUT', $2, $3, $4, $5)`,
     [productId, quantity, reason, updated.rows[0].available_stock, adminId]
+  );
+};
+
+/**
+ * Congela el coeficiente de interés vigente en el ítem de crédito al aprobar.
+ */
+const saveHistoricalRate = async (client, creditProductId, rate) => {
+  await client.query(
+    `UPDATE credit_products SET historical_rate = $1 WHERE id = $2`,
+    [rate, creditProductId]
   );
 };
 
@@ -180,10 +209,23 @@ const expireOldCredits = async (days) => {
   return r.rowCount;
 };
 
+/**
+ * Registra el enganche abonado al momento de aprobar un crédito SALE.
+ * No está ligado a ninguna cuota; impacta directamente en caja.
+ */
+const createDownPayment = async (client, { creditId, amount, paymentMethod, transferReference, approvedBy }) => {
+  await client.query(
+    `INSERT INTO credit_down_payments
+       (credit_id, amount, payment_method, transfer_reference, approved_by)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [creditId, amount, paymentMethod, transferReference || null, approvedBy]
+  );
+};
+
 module.exports = {
   findAll, findById, findCreditProducts,
-  create, createCreditProducts,
-  approve, generateInstallments, decrementProductStock, createCommission,
+  create, createCreditProducts, saveHistoricalRate,
+  approve, generateInstallments, decrementProductStock, createCommission, createDownPayment,
   reject, getPendingInstallments, settleAllInstallments, settleCredit,
   expireOldCredits,
 };

@@ -77,4 +77,19 @@ const getWeekBounds = (date = new Date()) => {
   };
 };
 
-module.exports = { getInstallmentAmount, getTotalWithInterest, getTotalToReturn, getDueDates, getWeekBounds };
+/**
+ * Calcula la contribución a la cuota de un ítem de venta a crédito.
+ * lineTotal = historical_price × quantity
+ * El redondeo al millar se aplica por producto, igual que en getInstallmentAmount.
+ */
+const getProductInstallmentContribution = (lineTotal, rate, installmentsCount) =>
+  getInstallmentAmount(lineTotal, rate, installmentsCount);
+
+module.exports = {
+  getInstallmentAmount,
+  getTotalWithInterest,
+  getTotalToReturn,
+  getDueDates,
+  getWeekBounds,
+  getProductInstallmentContribution,
+};

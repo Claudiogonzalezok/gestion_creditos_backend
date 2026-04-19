@@ -24,18 +24,27 @@ const create = async (data, requestingUser) => {
   const inst = instCheck.rows[0];
   if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
 
-  // Calcular saldo disponible descontando pre-cargas PENDING ya registradas
-  const amountDue      = parseFloat(inst.amount_due);
-  const amountPaid     = parseFloat(inst.amount_paid);
-  const pendingAmount  = await queries.getPendingCommittedAmount(data.installment_id);
-  const available      = amountDue - amountPaid - pendingAmount;
+  // Calcular saldo disponible en la cuota descontando pre-cargas PENDING ya registradas
+  const amountDue     = parseFloat(inst.amount_due);
+  const amountPaid    = parseFloat(inst.amount_paid);
+  const pendingAmount = await queries.getPendingCommittedAmount(data.installment_id);
+  const available     = amountDue - amountPaid - pendingAmount;
 
   if (available <= 0)
     throw { status: 409, message: 'Esta cuota ya tiene pre-cargas pendientes que cubren el saldo total.' };
 
   const amountReceived = parseFloat(data.amount_received);
-  if (amountReceived > available)
-    throw { status: 422, message: `El monto ingresado ($${amountReceived.toLocaleString('es-AR')}) supera el saldo disponible ($${available.toLocaleString('es-AR')}).` };
+
+  // Permitir que el monto supere la cuota actual (adelanto de cuotas):
+  // el límite superior es el saldo total pendiente del crédito completo.
+  if (amountReceived > available) {
+    const totalPending = await queries.getTotalPendingBalance(inst.credit_id);
+    if (amountReceived > totalPending)
+      throw {
+        status: 422,
+        message: `El monto ingresado ($${amountReceived.toLocaleString('es-AR')}) supera el saldo total pendiente del crédito ($${totalPending.toLocaleString('es-AR')}).`,
+      };
+  }
 
   return queries.create({
     installment_id:     data.installment_id,
@@ -53,31 +62,79 @@ const approve = async (id, adminId) => {
   if (payment.status !== 'PENDING')
     throw { status: 409, message: 'Solo se pueden aprobar cobros en estado PENDIENTE.' };
 
-  // Verificar que la cuota aún tenga saldo pendiente
-  const amountDue  = parseFloat(payment.amount_due);
-  const amountPaid = parseFloat(payment.amount_paid);
+  const amountDue      = parseFloat(payment.amount_due);
+  const amountPaid     = parseFloat(payment.amount_paid);
+  const amountReceived = parseFloat(payment.amount_received);
+
   if (amountPaid >= amountDue)
     throw { status: 409, message: 'Esta cuota ya se encuentra totalmente pagada.' };
 
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId);
 
+    // Aplicar el monto recibido a la cuota principal
     const newInstStatus = await queries.updateInstallment(
       client,
       payment.installment_id,
-      parseFloat(payment.amount_received),
+      amountReceived,
       amountDue,
       amountPaid
     );
 
-    // Si la cuota quedó PAID, verificar si el crédito está liquidado
-    if (newInstStatus === 'PAID') {
-      const remaining = await queries.countPendingInstallments(client, payment.credit_id);
-      if (remaining === 0) await queries.settleCredit(client, payment.credit_id);
+    let remaining = amountReceived - (amountDue - amountPaid);
+    let paidCount = 0; // cuotas adelantadas (aparte de la cuota principal)
+
+    // Si sobra saldo, aplicar a cuotas siguientes (adelanto)
+    if (remaining > 0.001 && newInstStatus === 'PAID') {
+      const nextInstallments = await queries.getPendingInstallmentsFrom(
+        client,
+        payment.credit_id,
+        payment.installment_number + 1
+      );
+
+      for (const inst of nextInstallments) {
+        if (remaining <= 0.001) break;
+
+        const instBalance = parseFloat(inst.amount_due) - parseFloat(inst.amount_paid);
+        if (remaining >= instBalance) {
+          // Cubre esta cuota completa → marcar como PAID con nota de adelanto
+          await queries.markInstallmentAsPrepaid(
+            client,
+            inst.id,
+            adminId,
+            'Pago adelantado'
+          );
+          remaining -= instBalance;
+          paidCount++;
+        } else {
+          // Cubre solo parcialmente → actualizar amount_paid
+          await queries.updateInstallment(
+            client,
+            inst.id,
+            remaining,
+            parseFloat(inst.amount_due),
+            parseFloat(inst.amount_paid)
+          );
+          remaining = 0;
+        }
+      }
     }
+
+    // Si se adelantaron cuotas completas, reasignar fechas de las restantes
+    // desde hoy + 1 período (la siguiente cuota siempre vence el mes/semana que viene)
+    if (paidCount > 0) {
+      await queries.shiftInstallmentDates(
+        client,
+        payment.credit_id,
+        payment.payment_frequency
+      );
+    }
+
+    // Verificar si el crédito quedó totalmente liquidado
+    const pendingCount = await queries.countPendingInstallments(client, payment.credit_id);
+    if (pendingCount === 0) await queries.settleCredit(client, payment.credit_id);
   });
 
-  // Leemos DESPUÉS del COMMIT para reflejar el estado actualizado
   return queries.findById(id);
 };
 

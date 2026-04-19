@@ -2741,3 +2741,53 @@ Registra la configuracion de intereses
  
 
  
+ te explico, tuve una reunion con el cliente y cambio el caso de uso de creditos tipo SALE.
+ya que manejan 3 posibilidades:
+1. el curso normal. donde la venta se produce el sistema calcula las cuotas y listo
+2. el cliente adelanta una o mas cuotas. en donde el sistema debe permitirlo y correr las fechas del proximo pago de cuota
+3. que el cliente de un adelanto del total del credito. en ese caso las cuotas se calculan del saldo.
+para eso cree la rama. para hacer los cambios ahi y no tocar main. tampoco quiero realizar cambios en la base de datos local. sino hacer otra de ser posible
+Decisiones de diseño confirmadas
+1. Tasas por producto (product_rates)
+Tabla nueva separada de interest_rates. Cada producto tiene su propia matriz de coeficientes por frecuencia y cantidad de cuotas. La tabla interest_rates queda exclusivamente para LOAN.
+2. Adelanto de cuotas
+
+Flujo normal de doble control: Cobrador registra → Admin aprueba.
+Al aprobar, el sistema marca las cuotas adelantadas como PAID con nota "Pago adelantado".
+Las cuotas restantes se recorren: si la cuota 1 vencía el 16/05 y se adelanta, la cuota 2 pasa a vencer el 16/05, la 3 el 16/06, y así sucesivamente.
+Las fechas originales se guardan en installments.original_due_date para auditoría.
+
+3. Adelanto de dinero al momento de la venta (enganche)
+
+El Vendedor lo ingresa al crear el crédito.
+Reduce el capital: capital_del_credito = precio_producto - down_payment.
+Impacta en caja como ingreso del día (tipo DOWN_PAYMENT).
+credits — cambios en create y approve
+Al crear SALE: el Vendedor puede enviar down_payment opcional. El sistema lo guarda y calcula capital = total_amount - down_payment.
+Al aprobar SALE: en lugar de buscar en interest_rates, busca en product_rates usando product_id + payment_frequency + installments_count. Si el crédito tiene down_payment > 0, genera además un payment de tipo DOWN_PAYMENT ya aprobado, que impacta en caja.
+payments — nuevo flujo para adelanto de cuotas
+Cuando el Cobrador registra un pago que cubre más de una cuota (o cuando el Admin va a aprobar múltiples cuotas), el sistema detecta que el monto supera la cuota actual y ofrece aplicar el excedente a las siguientes cuotas.
+Al aprobar, si hay cuotas adelantadas:
+
+Marca las cuotas cubiertas como PAID con notes: "Pago adelantado"
+Recorre las fechas de las cuotas restantes
+cashRegister — el enganche aparece en el dashboard del día
+El getDashboard() y el close() van a incluir los pagos de tipo DOWN_PAYMENT en el total recaudado del día.
+Comisión = precio completo × 8% (sin importar el enganche)
+Enganche reduce el capital del crédito pero no la comisión
+Tasas de productos en tabla product_rates separada
+Adelanto de cuotas corre fechas hacia adelante
+los adelantos pueden ser en CASH O TRANSFER
+
+Aspectointerest_ratesproduct_ratesAplica aLOAN (préstamos)SALE (ventas de productos)Filtro de montoSí (min/max_amount)No (precio fijo del producto)Administrado porAdmin desde panelAdmin desde el productoLookup al aprobarPor frecuencia + cuotas + montoPor producto + frecuencia + cuotas
+
+Cómo queda el flujo completo para SALE
+Vendedor selecciona producto + frecuencia + cuotas
+        ↓
+Sistema consulta product_rates → obtiene el coeficiente
+        ↓
+Cotizador muestra: cuota = Math.ceil(precio × (1 + rate) / n / 1000) × 1000
+        ↓
+Admin aprueba → se guarda historical_rate en credit_products
+        ↓
+Las cuotas se generan con ese coeficiente congelado

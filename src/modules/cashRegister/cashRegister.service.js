@@ -3,16 +3,18 @@ const queries = require('./cashRegister.queries');
 
 const getDashboard = async () => {
   const today = new Date().toISOString().split('T')[0];
-  const data      = await queries.getDashboard(today);
-  const egreses   = await queries.getDailyEgresesTotal(today);
+  const data    = await queries.getDashboard(today);
+  const egreses = await queries.getDailyEgresesTotal(today);
   return {
-    date:            today,
-    cash_amount:     parseFloat(data.cash_amount),
-    transfer_amount: parseFloat(data.transfer_amount),
-    total_collected: parseFloat(data.total_collected),
-    total_egreses:   egreses,
-    approved_count:  parseInt(data.approved_count),
-    pending_count:   parseInt(data.pending_count),
+    date:                today,
+    cash_amount:         data.cash_amount,
+    transfer_amount:     data.transfer_amount,
+    total_collected:     data.total_collected,
+    total_egreses:       egreses,
+    approved_count:      data.approved_count,
+    pending_count:       data.pending_count,
+    down_payments_total: data.down_payments_total,
+    down_payments_count: data.down_payments_count,
   };
 };
 

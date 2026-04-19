@@ -29,7 +29,7 @@ const findById = async (id) => {
             p.transfer_reference, p.status, p.rejection_reason, p.notes,
             p.created_at, p.approved_at, p.approved_by,
             i.installment_number, i.amount_due, i.amount_paid, i.due_date, i.penalty_amount,
-            c.id AS credit_id, c.type AS credit_type, c.customer_id,
+            c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
             cu.full_name AS customer_name, cu.dni AS customer_dni,
             u.full_name  AS collector_name
      FROM payments p
@@ -117,7 +117,78 @@ const reject = async (id, rejectionReason, adminId) => {
   );
 };
 
+// Saldo pendiente total de todas las cuotas no pagadas del crédito
+const getTotalPendingBalance = async (creditId) => {
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(amount_due - amount_paid), 0) AS total
+     FROM installments
+     WHERE credit_id = $1 AND status NOT IN ('PAID')`,
+    [creditId]
+  );
+  return parseFloat(r.rows[0].total);
+};
+
+// Cuotas pendientes/vencidas/parciales ordenadas desde un número de cuota dado
+const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumber) => {
+  const r = await client.query(
+    `SELECT id, installment_number, due_date, amount_due, amount_paid, penalty_amount, status
+     FROM installments
+     WHERE credit_id = $1
+       AND status NOT IN ('PAID')
+       AND installment_number >= $2
+     ORDER BY installment_number`,
+    [creditId, fromInstallmentNumber]
+  );
+  return r.rows;
+};
+
+// Reasigna las fechas de vencimiento de las cuotas restantes (no PAID) empezando
+// desde HOY + 1 período. Independientemente de cuántas cuotas se adelantaron,
+// la siguiente cuota siempre vence el próximo período desde la fecha de aprobación.
+// Guarda original_due_date antes de modificar (solo si aún no fue guardada).
+const shiftInstallmentDates = async (client, creditId, paymentFrequency) => {
+  let interval;
+  if (paymentFrequency === 'WEEKLY')        interval = '1 week';
+  else if (paymentFrequency === 'BIWEEKLY') interval = '2 weeks';
+  else                                       interval = '1 month';
+
+  // CTE numerada: asigna rn=1 a la próxima cuota pendiente, rn=2 a la siguiente, etc.
+  // La nueva fecha = CURRENT_DATE + rn * intervalo
+  await client.query(
+    `WITH ordered AS (
+       SELECT id, ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
+       FROM installments
+       WHERE credit_id = $1 AND status NOT IN ('PAID')
+     )
+     UPDATE installments i
+     SET original_due_date = COALESCE(i.original_due_date, i.due_date),
+         due_date           = (CURRENT_DATE + (ordered.rn * $2::interval))::date,
+         updated_at         = NOW()
+     FROM ordered
+     WHERE i.id = ordered.id`,
+    [creditId, interval]
+  );
+};
+
+// Marca una cuota como pagada por adelanto con nota auditada
+const markInstallmentAsPrepaid = async (client, installmentId, adminId, note) => {
+  await client.query(
+    `INSERT INTO payments
+       (installment_id, collector_id, amount_received, payment_method, status, approved_by, approved_at, notes)
+     SELECT id, $1, amount_due - amount_paid, 'CASH', 'APPROVED', $1, NOW(), $2
+     FROM installments WHERE id = $3`,
+    [adminId, note, installmentId]
+  );
+  await client.query(
+    `UPDATE installments
+     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
+     WHERE id = $1`,
+    [installmentId]
+  );
+};
+
 module.exports = {
   findAll, findById, getPendingCommittedAmount, create,
   approve, updateInstallment, countPendingInstallments, settleCredit, reject,
+  getTotalPendingBalance, getPendingInstallmentsFrom, shiftInstallmentDates, markInstallmentAsPrepaid,
 };
