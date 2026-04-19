@@ -34,10 +34,10 @@ const getPendingTotal = async (userId) => {
   return parseFloat(r.rows[0].total);
 };
 
-// IDs y rango de semanas de todas las comisiones pendientes de un usuario
+// IDs, montos y rango de semanas de todas las comisiones pendientes de un usuario
 const getPendingIds = async (client, userId) => {
   const r = await client.query(
-    `SELECT id, week_start, week_end FROM commissions
+    `SELECT id, amount, week_start, week_end FROM commissions
      WHERE user_id = $1 AND status = 'PENDING'`,
     [userId]
   );

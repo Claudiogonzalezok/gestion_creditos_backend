@@ -14,13 +14,12 @@ const getCommissions = async (filters, requestingUser) => {
 // ── Sueldo fijo ───────────────────────────────────────────────
 
 const getSalary = async (userId) => {
-  // Verificar que el usuario exista y sea COLLECTOR
   const check = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND role IN ('COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
+    `SELECT id FROM users WHERE id = $1 AND role IN ('SELLER','COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
     [userId]
   );
   if (!check.rows.length)
-    throw { status: 404, message: 'Cobrador no encontrado o inactivo.' };
+    throw { status: 404, message: 'Usuario no encontrado o inactivo.' };
 
   const salary = await queries.findSalary(userId);
   return salary || { user_id: userId, weekly_amount: 0, active: false };
@@ -28,11 +27,11 @@ const getSalary = async (userId) => {
 
 const setSalary = async (userId, weeklyAmount) => {
   const check = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND role IN ('COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
+    `SELECT id FROM users WHERE id = $1 AND role IN ('SELLER','COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
     [userId]
   );
   if (!check.rows.length)
-    throw { status: 404, message: 'Cobrador no encontrado o inactivo.' };
+    throw { status: 404, message: 'Usuario no encontrado o inactivo.' };
 
   const existing = await queries.findSalary(userId);
   if (existing) return queries.updateSalary(existing.id, weeklyAmount);
@@ -62,20 +61,25 @@ const liquidate = async (data, adminId) => {
   if (!['SELLER','COLLECTOR','SELLER_COLLECTOR'].includes(user.role))
     throw { status: 409, message: 'Solo se pueden liquidar Vendedores y Cobradores.' };
 
-  // Busca TODAS las comisiones pendientes, sin filtro de semana
-  const commissionsTotal = await queries.getPendingTotal(user_id);
-  const salary = await queries.findSalary(user_id);
-  const salaryAmount = salary ? parseFloat(salary.weekly_amount) : 0;
-  const totalNet = commissionsTotal + salaryAmount;
-
-  if (totalNet <= 0)
-    throw { status: 409, message: `El total neto es $${totalNet.toFixed(2)}. No hay monto positivo a liquidar.` };
+  // Pre-check rápido fuera de la transacción para fallo temprano
+  const salaryRecord = await queries.findSalary(user_id);
+  const salaryAmount = salaryRecord ? parseFloat(salaryRecord.weekly_amount) : 0;
+  const preTotal = await queries.getPendingTotal(user_id);
+  if (preTotal + salaryAmount <= 0)
+    throw { status: 409, message: `El total neto es $${(preTotal + salaryAmount).toFixed(2)}. No hay monto positivo a liquidar.` };
 
   return withTransaction(async (client) => {
     const pendingRows = await queries.getPendingIds(client, user_id);
     const pendingIds  = pendingRows.map(r => r.id);
 
-    // Determina el rango real de semanas que cubre esta liquidación
+    // Total calculado dentro de la transacción para evitar race conditions
+    const commissionsTotal = pendingRows.reduce((sum, r) => sum + parseFloat(r.amount), 0);
+    const totalNet = commissionsTotal + salaryAmount;
+
+    if (totalNet <= 0)
+      throw { status: 409, message: `El total neto es $${totalNet.toFixed(2)}. No hay monto positivo a liquidar.` };
+
+    // Rango real de semanas que cubre esta liquidación
     const weekStart = pendingRows.length
       ? pendingRows.reduce((min, r) => r.week_start < min ? r.week_start : min, pendingRows[0].week_start)
       : getWeekBounds().week_start;
@@ -85,7 +89,7 @@ const liquidate = async (data, adminId) => {
 
     await queries.markCommissionsPaid(client, pendingIds);
 
-    const liquidation = await queries.createLiquidation(client, {
+    return queries.createLiquidation(client, {
       userId: user_id,
       weekStart,
       weekEnd,
@@ -96,8 +100,6 @@ const liquidate = async (data, adminId) => {
       transferReference: transfer_reference,
       paidBy: adminId,
     });
-
-    return liquidation;
   });
 };
 

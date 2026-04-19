@@ -10,7 +10,7 @@ const getCommissions = async (req, res) => {
 
 const getWeeklySummary = async (req, res) => {
   try {
-    return response.success(res, await service.getWeeklySummary(req.query.date));
+    return response.success(res, await service.getWeeklySummary());
   } catch (err) { return response.serverError(res, err); }
 };
 
