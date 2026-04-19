@@ -1,33 +1,86 @@
 const pool = require('../../config/db');
 
 // ── Reporte de recaudación ────────────────────────────────────
+// Incluye cobros de cuotas aprobados y enganches (credit_down_payments).
 
 const getCollectionReport = async (dateFrom, dateTo) => {
   const r = await pool.query(
     `SELECT
-       p.approved_at::date                                    AS day,
-       COALESCE(SUM(p.amount_received), 0)                   AS total,
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
-       COUNT(*)                                               AS payments_count
-     FROM payments p
-     WHERE p.status = 'APPROVED'
-       AND p.approved_at::date BETWEEN $1 AND $2
-     GROUP BY 1
-     ORDER BY 1`,
+       day,
+       SUM(total)               AS total,
+       SUM(total_cash)          AS total_cash,
+       SUM(total_transfer)      AS total_transfer,
+       SUM(installments_count)  AS installments_count,
+       SUM(down_payments_total) AS down_payments_total,
+       SUM(down_payments_count) AS down_payments_count
+     FROM (
+       SELECT
+         p.approved_at::date                                                        AS day,
+         COALESCE(SUM(p.amount_received), 0)                                       AS total,
+         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
+         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
+         COUNT(*)                                                                   AS installments_count,
+         0::numeric                                                                 AS down_payments_total,
+         0                                                                          AS down_payments_count
+       FROM payments p
+       WHERE p.status = 'APPROVED'
+         AND p.approved_at::date BETWEEN $1 AND $2
+       GROUP BY p.approved_at::date
+
+       UNION ALL
+
+       SELECT
+         cdp.created_at::date                                                       AS day,
+         COALESCE(SUM(cdp.amount), 0)                                              AS total,
+         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0) AS total_cash,
+         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0) AS total_transfer,
+         0                                                                          AS installments_count,
+         COALESCE(SUM(cdp.amount), 0)                                              AS down_payments_total,
+         COUNT(*)                                                                   AS down_payments_count
+       FROM credit_down_payments cdp
+       WHERE cdp.created_at::date BETWEEN $1 AND $2
+       GROUP BY cdp.created_at::date
+     ) sub
+     GROUP BY day
+     ORDER BY day`,
     [dateFrom, dateTo]
   );
+
   const summary = await pool.query(
     `SELECT
-       COALESCE(SUM(amount_received), 0)                             AS grand_total,
-       COALESCE(SUM(amount_received) FILTER (WHERE payment_method = 'CASH'),     0) AS total_cash,
-       COALESCE(SUM(amount_received) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS total_transfer,
-       COUNT(*)                                                       AS payments_count,
-       ROUND(AVG(amount_received)::numeric, 2)                       AS avg_payment
-     FROM payments
-     WHERE status = 'APPROVED' AND approved_at::date BETWEEN $1 AND $2`,
+       SUM(total)                AS grand_total,
+       SUM(total_cash)           AS total_cash,
+       SUM(total_transfer)       AS total_transfer,
+       SUM(installments_count)   AS installments_count,
+       SUM(down_payments_total)  AS down_payments_total,
+       SUM(down_payments_count)  AS down_payments_count
+     FROM (
+       SELECT
+         COALESCE(SUM(p.amount_received), 0)                                       AS total,
+         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
+         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
+         COUNT(*)                                                                   AS installments_count,
+         0::numeric                                                                 AS down_payments_total,
+         0                                                                          AS down_payments_count
+       FROM payments p
+       WHERE p.status = 'APPROVED'
+         AND p.approved_at::date BETWEEN $1 AND $2
+
+       UNION ALL
+
+       SELECT
+         COALESCE(SUM(cdp.amount), 0)                                              AS total,
+         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0) AS total_cash,
+         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0) AS total_transfer,
+         0                                                                          AS installments_count,
+         COALESCE(SUM(cdp.amount), 0)                                              AS down_payments_total,
+         COUNT(*)                                                                   AS down_payments_count
+       FROM credit_down_payments cdp
+       WHERE cdp.created_at::date BETWEEN $1 AND $2
+     ) sub`,
     [dateFrom, dateTo]
   );
+
   return { summary: summary.rows[0], daily: r.rows };
 };
 
@@ -70,9 +123,10 @@ const getOverdueReport = async () => {
        cu.id AS customer_id,
        cu.full_name AS customer_name,
        cu.phone,
-       COUNT(i.id)                           AS overdue_count,
-       COALESCE(SUM(i.amount_due - i.amount_paid), 0) AS total_overdue,
-       MAX(CURRENT_DATE - i.due_date::date)            AS max_days_overdue
+       COUNT(i.id)                                      AS overdue_count,
+       COALESCE(SUM(i.amount_due - i.amount_paid), 0)  AS total_overdue,
+       COALESCE(SUM(i.penalty_amount), 0)               AS total_penalties,
+       MAX(CURRENT_DATE - i.due_date::date)             AS max_days_overdue
      FROM installments i
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
@@ -120,12 +174,15 @@ const getProductsReport = async () => {
        p.current_price,
        p.available_stock,
        p.status,
-       COUNT(cp.id)              AS times_sold,
-       COALESCE(SUM(cp.quantity), 0) AS total_units_sold,
-       COALESCE(SUM(cp.quantity * cp.historical_price), 0) AS total_revenue
+       COUNT(DISTINCT cp.id)                                                        AS times_sold,
+       COALESCE(SUM(cp.quantity), 0)                                               AS total_units_sold,
+       COALESCE(SUM(cp.quantity * cp.historical_price), 0)                         AS total_revenue,
+       COUNT(pr.id) FILTER (WHERE pr.active = TRUE)                                AS active_rates_count,
+       COUNT(pr.id)                                                                 AS total_rates_count
      FROM products p
      LEFT JOIN credit_products cp ON cp.product_id = p.id
      LEFT JOIN credits c          ON c.id = cp.credit_id AND c.status IN ('ACTIVE','SETTLED')
+     LEFT JOIN product_rates pr   ON pr.product_id = p.id
      GROUP BY p.id, p.name, p.current_price, p.available_stock, p.status
      ORDER BY times_sold DESC`
   );
