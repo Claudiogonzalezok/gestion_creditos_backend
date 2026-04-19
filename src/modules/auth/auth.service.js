@@ -1,12 +1,16 @@
-const bcrypt  = require('bcryptjs');
-const queries = require('./auth.queries');
-const jwtUtil = require('../../utils/jwt');
-
-const MAX_ATTEMPTS = parseInt(process.env.LOGIN_MAX_ATTEMPTS || '3');
+const bcrypt       = require('bcryptjs');
+const queries      = require('./auth.queries');
+const jwtUtil      = require('../../utils/jwt');
+const { getValue } = require('../systemConfig/systemConfig.queries');
 
 // ── Login sistema interno ─────────────────────────────────────
 const loginInternal = async (dni, password) => {
-  const user = await queries.findUserByDni(dni);
+  const [user, maxAttemptsStr, expiryHs] = await Promise.all([
+    queries.findUserByDni(dni),
+    getValue('login_max_attempts'),
+    getValue('jwt_expiry_internal_hs'),
+  ]);
+  const maxAttempts = parseInt(maxAttemptsStr || '3');
 
   // Usuario no encontrado — mismo mensaje para no revelar si existe
   if (!user) throw { status: 401, message: 'Credenciales incorrectas. Verificá tus datos e intentá nuevamente.' };
@@ -21,7 +25,7 @@ const loginInternal = async (dni, password) => {
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
     await queries.incrementFailedAttempts(user.id);
-    const remaining = MAX_ATTEMPTS - (user.failed_attempts + 1);
+    const remaining = maxAttempts - (user.failed_attempts + 1);
     if (remaining <= 0) {
       await queries.lockUser(user.id);
       throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
@@ -31,7 +35,7 @@ const loginInternal = async (dni, password) => {
 
   // Login exitoso
   await queries.resetFailedAttempts(user.id);
-  const token = jwtUtil.generateInternalToken(user);
+  const token = jwtUtil.generateInternalToken(user, `${expiryHs || '8'}h`);
 
   return {
     token,
@@ -47,7 +51,12 @@ const loginInternal = async (dni, password) => {
 
 // ── Login portal público ──────────────────────────────────────
 const loginPortal = async (dni, password) => {
-  const customer = await queries.findCustomerByDni(dni);
+  const [customer, maxAttemptsStr, expiryMin] = await Promise.all([
+    queries.findCustomerByDni(dni),
+    getValue('login_max_attempts'),
+    getValue('jwt_expiry_portal_min'),
+  ]);
+  const maxAttempts = parseInt(maxAttemptsStr || '3');
 
   if (!customer) throw { status: 401, message: 'DNI o contraseña incorrectos. Verificá tus datos e intentá nuevamente.' };
 
@@ -60,7 +69,7 @@ const loginPortal = async (dni, password) => {
   const valid = await bcrypt.compare(password, customer.portal_password_hash);
   if (!valid) {
     await queries.incrementPortalFailedAttempts(customer.id);
-    const remaining = MAX_ATTEMPTS - (customer.portal_failed_attempts + 1);
+    const remaining = maxAttempts - (customer.portal_failed_attempts + 1);
     if (remaining <= 0) {
       await queries.lockCustomer(customer.id);
       throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el negocio para reactivarla.' };
@@ -69,7 +78,7 @@ const loginPortal = async (dni, password) => {
   }
 
   await queries.resetPortalFailedAttempts(customer.id);
-  const token = jwtUtil.generatePortalToken(customer);
+  const token = jwtUtil.generatePortalToken(customer, `${expiryMin || '30'}m`);
 
   return {
     token,

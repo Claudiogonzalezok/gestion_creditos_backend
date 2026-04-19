@@ -24,7 +24,18 @@ const create = async (data) => {
 };
 
 const update = async (id, data) => {
-  if (!await queries.findById(id)) throw { status: 404, message: 'Tasa no encontrada.' };
+  const rate = await queries.findById(id);
+  if (!rate) throw { status: 404, message: 'Tasa no encontrada.' };
+
+  // Si se activa via PUT (en lugar del endpoint /activate), verificar solapamiento
+  if (data.active === true && !rate.active) {
+    const overlap = await queries.findOverlap(
+      rate.payment_frequency, rate.installments_count,
+      rate.min_amount, rate.max_amount, id
+    );
+    if (overlap) throw { status: 409, message: 'El rango de montos se superpone con una tasa activa existente.' };
+  }
+
   return queries.update(id, { rate: data.rate ?? null, active: data.active ?? null });
 };
 

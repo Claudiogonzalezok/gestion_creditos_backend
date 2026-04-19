@@ -33,6 +33,28 @@ const update = async (key, value, userId) => {
   if (range && (num < range.min || num > range.max))
     throw { status: 400, message: `El valor debe estar entre ${range.min} y ${range.max}.` };
 
+  // Validaciones cruzadas entre parámetros relacionados
+  if (key === 'min_credit_amount') {
+    const maxVal = parseFloat(await queries.getValue('max_credit_amount'));
+    if (num >= maxVal)
+      throw { status: 400, message: 'El monto mínimo debe ser menor al monto máximo configurado.' };
+  }
+  if (key === 'max_credit_amount') {
+    const minVal = parseFloat(await queries.getValue('min_credit_amount'));
+    if (num <= minVal)
+      throw { status: 400, message: 'El monto máximo debe ser mayor al monto mínimo configurado.' };
+  }
+  if (key === 'commission_week_close_day') {
+    const payDay = parseInt(await queries.getValue('commission_pay_day'));
+    if (num === payDay)
+      throw { status: 400, message: 'El día de cierre no puede ser igual al día de pago de liquidaciones.' };
+  }
+  if (key === 'commission_pay_day') {
+    const closeDay = parseInt(await queries.getValue('commission_week_close_day'));
+    if (num === closeDay)
+      throw { status: 400, message: 'El día de pago no puede ser igual al día de cierre del ciclo.' };
+  }
+
   return queries.update(key, String(value), userId);
 };
 
