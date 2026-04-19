@@ -7,7 +7,11 @@ const { body, param, query } = require('express-validator');
 // ── Strings generales ─────────────────────────────────────────
 const isString = (field, label, { min = 1, max = 150, required = true } = {}) => {
   let rule = body(field).trim();
-  if (!required) rule = rule.optional({ nullable: true, checkFalsy: true });
+  if (!required) {
+    rule = rule.optional({ nullable: true, checkFalsy: true });
+  } else {
+    rule = rule.notEmpty().withMessage(`${label} es obligatorio.`).bail();
+  }
   return rule
     .isString().withMessage(`${label} debe ser texto.`)
     .isLength({ min, max })
@@ -17,7 +21,11 @@ const isString = (field, label, { min = 1, max = 150, required = true } = {}) =>
 // ── DNI ───────────────────────────────────────────────────────
 const isDni = (field = 'dni', required = true) => {
   let rule = body(field).trim();
-  if (!required) rule = rule.optional({ nullable: true, checkFalsy: true });
+  if (!required) {
+    rule = rule.optional({ nullable: true, checkFalsy: true });
+  } else {
+    rule = rule.notEmpty().withMessage('El DNI es obligatorio.').bail();
+  }
   return rule
     .isString().withMessage('El DNI debe ser texto.')
     .isLength({ min: 7, max: 9 }).withMessage('El DNI debe tener entre 7 y 9 caracteres.')
@@ -68,7 +76,11 @@ const isEnum = (field, label, values, required = true) => {
 // ── Numérico positivo ─────────────────────────────────────────
 const isPositiveNumber = (field, label, { min = 0.01, max = 99999999, required = true } = {}) => {
   let rule = body(field);
-  if (!required) rule = rule.optional();
+  if (!required) {
+    rule = rule.optional();
+  } else {
+    rule = rule.notEmpty().withMessage(`${label} es obligatorio.`).bail();
+  }
   return rule
     .isFloat({ min, max })
     .withMessage(`${label} debe ser un número entre ${min} y ${max}.`);
@@ -77,7 +89,11 @@ const isPositiveNumber = (field, label, { min = 0.01, max = 99999999, required =
 // ── Entero positivo ───────────────────────────────────────────
 const isPositiveInt = (field, label, { min = 1, max = 9999, required = true } = {}) => {
   let rule = body(field);
-  if (!required) rule = rule.optional();
+  if (!required) {
+    rule = rule.optional();
+  } else {
+    rule = rule.notEmpty().withMessage(`${label} es obligatorio.`).bail();
+  }
   return rule
     .isInt({ min, max })
     .withMessage(`${label} debe ser un número entero entre ${min} y ${max}.`);
