@@ -82,6 +82,7 @@ app.listen(PORT, () => {
     require('./jobs/overdueInstallments.job').start();
     require('./jobs/creditExpiry.job').start();
     require('./jobs/weeklyCommissionCycle.job').start();
+    require('./jobs/tokenCleanup.job').start();
   }
 });
 

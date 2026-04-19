@@ -5,6 +5,7 @@
 const cron = require('node-cron');
 const pool = require('../config/db');
 const { getWeekBounds } = require('../utils/creditCalculator');
+const { getValue } = require('../modules/systemConfig/systemConfig.queries');
 
 const closeWeeklyCycle = async () => {
   try {
@@ -42,12 +43,12 @@ const closeWeeklyCycle = async () => {
   }
 };
 
-const start = () => {
-  // Sábados a las 23:59
-  cron.schedule('59 23 * * 6', closeWeeklyCycle, {
+const start = async () => {
+  const closeDay = parseInt(await getValue('commission_week_close_day') || '6');
+  cron.schedule(`59 23 * * ${closeDay}`, closeWeeklyCycle, {
     timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
   });
-  console.log('[JOB weeklyCommissionCycle] Programado — sábados a las 23:59.');
+  console.log(`[JOB weeklyCommissionCycle] Programado — día ${closeDay} a las 23:59.`);
 };
 
 module.exports = { start, closeWeeklyCycle };
