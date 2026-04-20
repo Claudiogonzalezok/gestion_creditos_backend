@@ -89,17 +89,23 @@ const liquidate = async (data, adminId) => {
 
     await queries.markCommissionsPaid(client, pendingIds);
 
-    return queries.createLiquidation(client, {
-      userId: user_id,
-      weekStart,
-      weekEnd,
-      commissionsTotal,
-      salaryAmount,
-      totalPaid: totalNet,
-      paymentMethod: payment_method,
-      transferReference: transfer_reference,
-      paidBy: adminId,
-    });
+    try {
+      return await queries.createLiquidation(client, {
+        userId: user_id,
+        weekStart,
+        weekEnd,
+        commissionsTotal,
+        salaryAmount,
+        totalPaid: totalNet,
+        paymentMethod: payment_method,
+        transferReference: transfer_reference,
+        paidBy: adminId,
+      });
+    } catch (err) {
+      if (err.code === '23505')
+        throw { status: 409, message: 'Este empleado ya fue liquidado para el período correspondiente.' };
+      throw err;
+    }
   });
 };
 
