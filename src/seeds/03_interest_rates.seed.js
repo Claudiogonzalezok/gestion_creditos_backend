@@ -58,16 +58,14 @@ const rates = [
 ];
 
 const seed = async () => {
-  console.log('🌱  [3/3] Cargando tasas de interés...');
-
-  // Limpiar y recargar para evitar duplicados
-  await pool.query(`DELETE FROM interest_rates`);
+  console.log('  Cargando tasas de interés...');
 
   for (const r of rates) {
     await pool.query(
       `INSERT INTO interest_rates
          (installments_count, payment_frequency, rate, active, min_amount, max_amount)
-       VALUES ($1, $2, $3, TRUE, $4, $5)`,
+       VALUES ($1, $2, $3, TRUE, $4, $5)
+       ON CONFLICT (payment_frequency, installments_count, min_amount, max_amount) DO NOTHING`,
       [r.installments_count, r.payment_frequency, r.rate, r.min_amount, r.max_amount]
     );
   }

@@ -3,7 +3,7 @@ const bcrypt = require('bcryptjs');
 const pool   = require('../config/db');
 
 const seed = async () => {
-  console.log('🌱  [1/3] Creando usuario Admin...');
+  console.log('  Creando usuario Admin...');
 
   const tempPassword = 'Admin1234';
   const hash = await bcrypt.hash(tempPassword, 10);

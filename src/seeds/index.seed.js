@@ -5,6 +5,12 @@ const seed01 = require('./01_admin.seed');
 const seed02 = require('./02_system_config.seed');
 const seed03 = require('./03_interest_rates.seed');
 
+const seeds = [
+  { name: 'Admin inicial',          fn: seed01 },
+  { name: 'Parámetros del sistema', fn: seed02 },
+  { name: 'Tasas de interés',       fn: seed03 },
+];
+
 const run = async () => {
   console.log('');
   console.log('╔════════════════════════════════════════╗');
@@ -13,12 +19,13 @@ const run = async () => {
   console.log('');
 
   try {
-    await seed01();
-    console.log('');
-    await seed02();
-    console.log('');
-    await seed03();
-    console.log('');
+    for (let i = 0; i < seeds.length; i++) {
+      const { name, fn } = seeds[i];
+      console.log(`🌱  [${i + 1}/${seeds.length}] ${name}`);
+      await fn();
+      console.log('');
+    }
+
     console.log('╔════════════════════════════════════════╗');
     console.log('║  ✅  Todas las semillas ejecutadas OK   ║');
     console.log('╚════════════════════════════════════════╝');

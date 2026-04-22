@@ -18,7 +18,7 @@ const configs = [
 ];
 
 const seed = async () => {
-  console.log('🌱  [2/3] Cargando parámetros del sistema...');
+  console.log('  Cargando parámetros del sistema...');
   for (const cfg of configs) {
     await pool.query(
       `INSERT INTO system_config (key, value, description)
