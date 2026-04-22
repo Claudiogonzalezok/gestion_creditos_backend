@@ -33,7 +33,7 @@ const close = async (data, adminId) => {
   const declaredCash   = parseFloat(data.declared_cash);
   const difference     = declaredCash - cashAmount;
 
-  let differenceStatus = 'BALANCED';
+  let differenceStatus = 'EXACT';
   if (difference > 0)  differenceStatus = 'SURPLUS';
   if (difference < 0)  differenceStatus = 'SHORTAGE';
 
