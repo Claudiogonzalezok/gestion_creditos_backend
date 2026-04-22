@@ -30,6 +30,7 @@ const create = async (req, res) => {
     const customer = await service.create({ full_name, dni, address, phone, email, assigned_collector_id });
     return response.created(res, customer, 'Cliente registrado correctamente.');
   } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }

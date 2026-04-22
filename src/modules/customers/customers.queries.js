@@ -56,11 +56,11 @@ const findByDni = async (dni) => {
 };
 
 /**
- * Verifica que el usuario con el id dado exista, esté activo y sea COLLECTOR.
+ * Verifica que el usuario con el id dado exista, esté activo y sea COLLECTOR o SELLER_COLLECTOR.
  */
 const findCollectorById = async (id) => {
   const result = await pool.query(
-    `SELECT id FROM users WHERE id = $1 AND role = 'COLLECTOR' AND status = 'ACTIVE'`,
+    `SELECT id FROM users WHERE id = $1 AND role IN ('COLLECTOR','SELLER_COLLECTOR') AND status = 'ACTIVE'`,
     [id]
   );
   return result.rows[0] || null;
