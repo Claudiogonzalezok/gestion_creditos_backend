@@ -9,7 +9,7 @@ const loginInternal = async (req, res) => {
     const result = await service.loginInternal(dni, password);
     return response.success(res, result, 'Inicio de sesión exitoso.');
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ ok: false, message: err.message });
+    if (err.status === 401) return response.unauthorized(res, err.message);
     return response.serverError(res, err);
   }
 };
@@ -21,7 +21,7 @@ const loginPortal = async (req, res) => {
     const result = await service.loginPortal(dni, password);
     return response.success(res, result, 'Inicio de sesión exitoso.');
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ ok: false, message: err.message });
+    if (err.status === 401) return response.unauthorized(res, err.message);
     return response.serverError(res, err);
   }
 };

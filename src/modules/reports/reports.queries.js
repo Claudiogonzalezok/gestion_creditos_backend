@@ -114,7 +114,7 @@ const getOverdueReport = async () => {
        COUNT(*)                           AS overdue_installments,
        COALESCE(SUM(i.amount_due - i.amount_paid), 0) AS total_overdue_amount,
        COALESCE(SUM(i.penalty_amount), 0)             AS total_penalties,
-       AVG(CURRENT_DATE - i.due_date::date)::int      AS avg_days_overdue
+       COALESCE(AVG(CURRENT_DATE - i.due_date::date)::int, 0) AS avg_days_overdue
      FROM installments i
      WHERE i.status = 'OVERDUE'`
   );
@@ -148,10 +148,10 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
        COUNT(p.id) FILTER (WHERE p.status = 'APPROVED')  AS approved_count,
        COUNT(p.id) FILTER (WHERE p.status = 'REJECTED')  AS rejected_count,
        COALESCE(SUM(p.amount_received) FILTER (WHERE p.status = 'APPROVED'), 0) AS total_collected,
-       ROUND(
+       COALESCE(ROUND(
          COUNT(p.id) FILTER (WHERE p.status = 'APPROVED')::numeric /
          NULLIF(COUNT(p.id), 0) * 100, 2
-       ) AS approval_rate
+       ), 0) AS approval_rate
      FROM users u
      LEFT JOIN payments p
        ON p.collector_id = u.id
