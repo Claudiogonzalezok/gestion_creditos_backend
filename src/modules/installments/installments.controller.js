@@ -3,8 +3,8 @@ const response = require('../../utils/response');
 
 const getAll = async (req, res) => {
   try {
-    const { credit_id, status } = req.query;
-    return response.success(res, await service.getAll({ credit_id, status }, req.user));
+    const { credit_id, status, collector_id } = req.query;
+    return response.success(res, await service.getAll({ credit_id, status, collector_id }, req.user));
   } catch (err) { return response.serverError(res, err); }
 };
 
@@ -19,7 +19,7 @@ const getById = async (req, res) => {
 
 const applyPenalty = async (req, res) => {
   try {
-    const result = await service.applyPenalty(req.params.id, req.body.penalty_amount);
+    const result = await service.applyPenalty(req.params.id, parseFloat(req.body.penalty_amount));
     return response.success(res, result, 'Mora aplicada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

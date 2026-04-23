@@ -1,12 +1,26 @@
-const router     = require('express').Router();
-const controller = require('./installments.controller');
-const v          = require('../../utils/validators');
+const router        = require('express').Router();
+const controller    = require('./installments.controller');
+const { query }     = require('express-validator');
+const v             = require('../../utils/validators');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
 router.use(authenticate);
 
-router.get('/',    authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), controller.getAll);
+router.get('/',
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
+  [
+    query('status').optional()
+      .isIn(['PENDING','OVERDUE','PAID','PARTIAL'])
+      .withMessage('status debe ser PENDING, OVERDUE, PAID o PARTIAL.'),
+    query('collector_id').optional()
+      .isUUID().withMessage('collector_id debe ser un UUID válido.'),
+    query('credit_id').optional()
+      .isUUID().withMessage('credit_id debe ser un UUID válido.'),
+  ],
+  validate,
+  controller.getAll
+);
 router.get('/:id', authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.penalties.id, validate, controller.getById);
 
 router.patch('/:id/apply-penalty',

@@ -17,9 +17,9 @@ const getById = async (id) => {
 
 const applyPenalty = async (id, penaltyAmount) => {
   const inst = await queries.findById(id);
-  if (!inst)                    throw { status: 404, message: 'Cuota no encontrada.' };
-  if (inst.status === 'PAID')   throw { status: 409, message: 'No se puede aplicar mora a una cuota ya pagada.' };
-  if (inst.status === 'PENDING') throw { status: 409, message: 'La cuota aún no está vencida. Solo se aplica mora a cuotas OVERDUE.' };
+  if (!inst) throw { status: 404, message: 'Cuota no encontrada.' };
+  if (!['OVERDUE'].includes(inst.status))
+    throw { status: 409, message: `No se puede aplicar mora a una cuota en estado ${inst.status}. Solo se aplica mora a cuotas OVERDUE.` };
 
   const maxRate      = parseFloat(await getValue('penalty_max_rate') || '0.50');
   const original     = parseFloat(inst.amount_due) - parseFloat(inst.penalty_amount);
