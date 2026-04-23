@@ -43,7 +43,7 @@ const getSalary = async (req, res) => {
 
 const setSalary = async (req, res) => {
   try {
-    const result = await service.setSalary(req.params.userId, req.body.weekly_amount);
+    const result = await service.setSalary(req.params.userId, parseFloat(req.body.weekly_amount));
     return response.success(res, result, 'Sueldo actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

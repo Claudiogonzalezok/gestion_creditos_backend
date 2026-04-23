@@ -5,14 +5,14 @@ const { getWeekBounds } = require('../../utils/creditCalculator');
 
 const findCommissions = async ({ userId, status, weekStart } = {}) => {
   let q = `
-    SELECT cm.id, cm.user_id, cm.credit_id, cm.amount, cm.status,
+    SELECT cm.id, cm.user_id, cm.credit_id, cm.amount::float8, cm.status,
            cm.week_start, cm.week_end, cm.created_at,
            u.full_name AS user_name, u.role AS user_role,
-           c.type AS credit_type, c.total_amount AS credit_amount,
+           c.type AS credit_type, c.total_amount::float8 AS credit_amount,
            cu.full_name AS customer_name
     FROM commissions cm
-    JOIN users u     ON u.id  = cm.user_id
-    JOIN credits c   ON c.id  = cm.credit_id
+    JOIN users u      ON u.id  = cm.user_id
+    JOIN credits c    ON c.id  = cm.credit_id
     JOIN customers cu ON cu.id = c.customer_id
     WHERE 1=1`;
   const params = [];
@@ -37,7 +37,7 @@ const getPendingTotal = async (userId) => {
 // IDs, montos y rango de semanas de todas las comisiones pendientes de un usuario
 const getPendingIds = async (client, userId) => {
   const r = await client.query(
-    `SELECT id, amount, week_start, week_end FROM commissions
+    `SELECT id, amount::float8, week_start, week_end FROM commissions
      WHERE user_id = $1 AND status = 'PENDING'`,
     [userId]
   );
@@ -55,7 +55,7 @@ const markCommissionsPaid = async (client, ids) => {
 // Sueldo fijo activo del usuario
 const findSalary = async (userId) => {
   const r = await pool.query(
-    `SELECT id, user_id, weekly_amount FROM salaries WHERE user_id = $1 AND active = true`,
+    `SELECT id, user_id, weekly_amount::float8 FROM salaries WHERE user_id = $1 AND active = true`,
     [userId]
   );
   return r.rows[0] || null;
@@ -65,7 +65,7 @@ const createSalary = async (userId, weeklyAmount) => {
   const r = await pool.query(
     `INSERT INTO salaries (user_id, weekly_amount)
      VALUES ($1, $2)
-     RETURNING id, user_id, weekly_amount, active`,
+     RETURNING id, user_id, weekly_amount::float8, active`,
     [userId, weeklyAmount]
   );
   return r.rows[0];
@@ -74,7 +74,7 @@ const createSalary = async (userId, weeklyAmount) => {
 const updateSalary = async (id, weeklyAmount) => {
   const r = await pool.query(
     `UPDATE salaries SET weekly_amount = $1 WHERE id = $2
-     RETURNING id, user_id, weekly_amount, active`,
+     RETURNING id, user_id, weekly_amount::float8, active`,
     [weeklyAmount, id]
   );
   return r.rows[0];
@@ -99,7 +99,9 @@ const createLiquidation = async (client, {
        (user_id, week_start, week_end, commissions_total, salary_amount,
         total_paid, payment_method, transfer_reference, paid_by, paid_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-     RETURNING *`,
+     RETURNING id, user_id, week_start, week_end,
+               commissions_total::float8, salary_amount::float8, total_paid::float8,
+               payment_method, transfer_reference, paid_by, paid_at`,
     [
       userId, weekStart, weekEnd,
       commissionsTotal, salaryAmount, totalPaid,
@@ -111,7 +113,10 @@ const createLiquidation = async (client, {
 
 const findLiquidations = async ({ userId } = {}) => {
   let q = `
-    SELECT cl.*, u.full_name AS user_name, adm.full_name AS paid_by_name
+    SELECT cl.id, cl.user_id, cl.week_start, cl.week_end,
+           cl.commissions_total::float8, cl.salary_amount::float8, cl.total_paid::float8,
+           cl.payment_method, cl.transfer_reference, cl.paid_by, cl.paid_at,
+           u.full_name AS user_name, adm.full_name AS paid_by_name
     FROM commission_liquidations cl
     JOIN users u   ON u.id  = cl.user_id
     JOIN users adm ON adm.id = cl.paid_by
