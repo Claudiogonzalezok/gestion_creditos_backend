@@ -1,3 +1,5 @@
+const { localDate } = require('./date');
+
 /**
  * Calcula el monto por cuota redondeado hacia arriba al millar más cercano.
  * Todas las cuotas son iguales entre sí.
@@ -72,8 +74,8 @@ const getWeekBounds = (date = new Date()) => {
   saturday.setHours(23, 59, 59, 999);
 
   return {
-    week_start: monday.toISOString().split('T')[0],
-    week_end:   saturday.toISOString().split('T')[0],
+    week_start: localDate(monday),
+    week_end:   localDate(saturday),
   };
 };
 

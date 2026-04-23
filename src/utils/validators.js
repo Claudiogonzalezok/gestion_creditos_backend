@@ -81,9 +81,12 @@ const isPositiveNumber = (field, label, { min = 0.01, max = 99999999, required =
   } else {
     rule = rule.notEmpty().withMessage(`${label} es obligatorio.`).bail();
   }
-  return rule
-    .isFloat({ min, max })
-    .withMessage(`${label} debe ser un número entre ${min} y ${max}.`);
+  return rule.custom(val => {
+    const n = parseFloat(val);
+    if (isNaN(n) || n < min || n > max)
+      throw new Error(`${label} debe ser un número entre ${min} y ${max}.`);
+    return true;
+  });
 };
 
 // ── Entero positivo ───────────────────────────────────────────
@@ -230,8 +233,12 @@ const credits = {
     body('total_amount')
       .if(body('type').equals('LOAN'))
       .notEmpty().withMessage('El monto total es obligatorio para préstamos.')
-      .isFloat({ min: 1, max: 99999999 })
-      .withMessage('El monto total debe ser un número entre 1 y 99999999.'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 1 || n > 99999999)
+          throw new Error('El monto total debe ser un número entre 1 y 99999999.');
+        return true;
+      }),
     body('installments_count')
       .isInt({ min: 1, max: 120 })
       .withMessage('La cantidad de cuotas debe ser un número entre 1 y 120.'),
@@ -245,10 +252,14 @@ const credits = {
       .isInt({ min: 1, max: 9999 }).withMessage('La cantidad de cada producto debe ser entre 1 y 9999.'),
     // Enganche (solo aplica a SALE)
     body('down_payment').optional({ nullable: true })
-      .isFloat({ min: 0 })
-      .withMessage('El enganche debe ser un número mayor o igual a 0.'),
+      .custom(val => {
+        if (val == null) return true;
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0) throw new Error('El enganche debe ser un número mayor o igual a 0.');
+        return true;
+      }),
     body('down_payment_method')
-      .if(body('down_payment').exists().isFloat({ min: 0.01 }))
+      .if((val, { req }) => parseFloat(req.body.down_payment) >= 0.01)
       .isIn(['CASH','TRANSFER'])
       .withMessage('El método de pago del enganche debe ser CASH o TRANSFER.'),
     body('down_payment_transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
@@ -260,8 +271,12 @@ const credits = {
     isEnum('type', 'El tipo de crédito', ['SALE','LOAN']),
     // LOAN: total_amount obligatorio. SALE: productos obligatorios (tasa es por producto)
     body('total_amount').optional()
-      .isFloat({ min: 1, max: 99999999 })
-      .withMessage('El monto total debe ser un número entre 1 y 99999999.'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 1 || n > 99999999)
+          throw new Error('El monto total debe ser un número entre 1 y 99999999.');
+        return true;
+      }),
     body('products').optional().isArray({ min: 1 })
       .withMessage('Los productos deben ser un arreglo con al menos un ítem.'),
     body('products.*.product_id').optional()
@@ -329,25 +344,37 @@ const interestRates = {
       .withMessage('La cantidad de cuotas debe ser entre 1 y 120.'),
     isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
     body('min_amount')
-      .isFloat({ min: 0 })
-      .withMessage('El monto mínimo debe ser un número mayor o igual a 0.'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0) throw new Error('El monto mínimo debe ser un número mayor o igual a 0.');
+        return true;
+      }),
     body('max_amount').optional({ nullable: true })
-      .isFloat({ min: 1 })
-      .withMessage('El monto máximo debe ser un número mayor a 0.')
       .custom((val, { req }) => {
-        if (val != null && parseFloat(val) <= parseFloat(req.body.min_amount))
+        if (val == null) return true;
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 1) throw new Error('El monto máximo debe ser un número mayor a 0.');
+        if (n <= parseFloat(req.body.min_amount))
           throw new Error('El monto máximo debe ser mayor al monto mínimo.');
         return true;
       }),
     body('rate')
-      .isFloat({ min: 0.001, max: 100 })
-      .withMessage('El coeficiente debe ser un número positivo (ej: 0.6 = 60%, 1.2 = 120%).'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0.001 || n > 100)
+          throw new Error('El coeficiente debe ser un número positivo (ej: 0.6 = 60%, 1.2 = 120%).');
+        return true;
+      }),
   ],
   update: [
     isUUIDParam('id', 'El ID de tasa'),
     body('rate').optional()
-      .isFloat({ min: 0.001, max: 100 })
-      .withMessage('El coeficiente debe ser un número positivo (ej: 0.6 = 60%, 1.2 = 120%).'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0.001 || n > 100)
+          throw new Error('El coeficiente debe ser un número positivo (ej: 0.6 = 60%, 1.2 = 120%).');
+        return true;
+      }),
     isBool('active', 'El estado', false),
   ],
   id: [ isUUIDParam('id', 'El ID de tasa') ],
@@ -357,8 +384,11 @@ const interestRates = {
 const cashRegister = {
   close: [
     body('declared_cash')
-      .isFloat({ min: 0 })
-      .withMessage('El efectivo declarado debe ser un número mayor o igual a 0.'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0) throw new Error('El efectivo declarado debe ser un número mayor o igual a 0.');
+        return true;
+      }),
     body('observations').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
   ],
@@ -369,8 +399,11 @@ const penalties = {
   apply: [
     isUUIDParam('id', 'El ID de cuota'),
     body('penalty_amount')
-      .isFloat({ min: 0.01 })
-      .withMessage('El monto de mora debe ser mayor a 0.'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0.01) throw new Error('El monto de mora debe ser mayor a 0.');
+        return true;
+      }),
     body('reason').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 255 }).withMessage('El motivo no puede superar los 255 caracteres.'),
   ],
@@ -403,14 +436,22 @@ const productRates = {
       .isInt({ min: 1, max: 120 })
       .withMessage('La cantidad de cuotas debe ser entre 1 y 120.'),
     body('rate')
-      .isFloat({ min: 0.001, max: 100 })
-      .withMessage('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0.001 || n > 100)
+          throw new Error('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).');
+        return true;
+      }),
   ],
   update: [
     isUUIDParam('id', 'El ID de tasa'),
     body('rate').optional()
-      .isFloat({ min: 0.001, max: 100 })
-      .withMessage('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).'),
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0.001 || n > 100)
+          throw new Error('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).');
+        return true;
+      }),
   ],
   id: [ isUUIDParam('id', 'El ID de tasa') ],
 };

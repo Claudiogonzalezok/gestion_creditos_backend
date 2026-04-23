@@ -1,37 +1,45 @@
 const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
+const { localDate } = require('../../utils/date');
 
 const getDashboard = async () => {
-  const today = new Date().toISOString().split('T')[0];
-  const data    = await queries.getDashboard(today);
-  const egreses = await queries.getDailyEgresesTotal(today);
+  const today = localDate();
+  const data  = await queries.getDashboard(today);
   return {
     date:                today,
     cash_amount:         data.cash_amount,
     transfer_amount:     data.transfer_amount,
     total_collected:     data.total_collected,
-    total_egreses:       egreses,
+    total_egreses:       data.total_egreses,
+    net_balance:         data.net_balance,
     approved_count:      data.approved_count,
     pending_count:       data.pending_count,
+    pending_amount:      data.pending_amount,
     down_payments_total: data.down_payments_total,
     down_payments_count: data.down_payments_count,
   };
 };
 
 const close = async (data, adminId) => {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDate();
 
-  // Un solo cierre por día
   const existing = await queries.findByDate(today);
   if (existing)
     throw { status: 409, message: 'Ya existe un cierre de caja para hoy.' };
 
-  const cashAmount     = await queries.getDailyCashTotal(today);
-  const transferAmount = await queries.getDailyTransferTotal(today);
+  if (!data.force) {
+    const pending = await queries.getPendingPaymentsToday(today);
+    if (pending.count > 0)
+      throw { status: 409, message: `Hay ${pending.count} pre-carga(s) pendiente(s) de aprobación por $${pending.amount}. Aprobá o rechazá antes de cerrar, o enviá force: true para cerrar igual.`, pending_payments: pending };
+  }
+
+  const totals       = await queries.getDailyTotals(today);
+  const cashAmount   = totals.cash_amount;
+  const transferAmount = totals.transfer_amount;
   const totalCollected = cashAmount + transferAmount;
-  const totalEgreses   = await queries.getDailyEgresesTotal(today);
-  const declaredCash   = parseFloat(data.declared_cash);
-  const difference     = declaredCash - cashAmount;
+  const totalEgreses = totals.total_egreses;
+  const declaredCash = parseFloat(data.declared_cash);
+  const difference   = declaredCash - cashAmount;
 
   let differenceStatus = 'EXACT';
   if (difference > 0)  differenceStatus = 'SURPLUS';
@@ -67,7 +75,7 @@ const close = async (data, adminId) => {
   }
 };
 
-const getAll  = async (filters) => queries.findAll(filters);
+const getAll = async (filters) => queries.findAll(filters);
 
 const getById = async (id) => {
   const register = await queries.findById(id);
