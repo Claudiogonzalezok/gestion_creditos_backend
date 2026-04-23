@@ -26,12 +26,12 @@ const findCommissions = async ({ userId, status, weekStart } = {}) => {
 // Suma neto de todas las comisiones pendientes de un usuario (sin filtro de semana)
 const getPendingTotal = async (userId) => {
   const r = await pool.query(
-    `SELECT COALESCE(SUM(amount), 0) AS total
+    `SELECT COALESCE(SUM(amount), 0)::float8 AS total
      FROM commissions
      WHERE user_id = $1 AND status = 'PENDING'`,
     [userId]
   );
-  return parseFloat(r.rows[0].total);
+  return r.rows[0].total;
 };
 
 // IDs, montos y rango de semanas de todas las comisiones pendientes de un usuario
@@ -78,13 +78,6 @@ const updateSalary = async (id, weeklyAmount) => {
     [weeklyAmount, id]
   );
   return r.rows[0];
-};
-
-const deactivateSalary = async (userId) => {
-  await pool.query(
-    `UPDATE salaries SET active = false WHERE user_id = $1`,
-    [userId]
-  );
 };
 
 // ── Liquidaciones ─────────────────────────────────────────────
@@ -135,12 +128,12 @@ const getWeeklySummary = async () => {
        u.id AS user_id,
        u.full_name,
        u.role,
-       COALESCE(SUM(cm.amount) FILTER (WHERE cm.status = 'PENDING'), 0) AS commissions_total,
-       MIN(cm.week_start) FILTER (WHERE cm.status = 'PENDING') AS earliest_week,
-       MAX(cm.week_end)   FILTER (WHERE cm.status = 'PENDING') AS latest_week,
-       COALESCE(s.weekly_amount, 0) AS salary_amount
+       COALESCE(SUM(cm.amount), 0)::float8          AS commissions_total,
+       MIN(cm.week_start)                            AS earliest_week,
+       MAX(cm.week_end)                              AS latest_week,
+       COALESCE(s.weekly_amount, 0)::float8          AS salary_amount
      FROM users u
-     LEFT JOIN commissions cm ON cm.user_id = u.id
+     LEFT JOIN commissions cm ON cm.user_id = u.id AND cm.status = 'PENDING'
      LEFT JOIN salaries s     ON s.user_id  = u.id AND s.active = true
      WHERE u.status = 'ACTIVE'
        AND u.role IN ('SELLER','COLLECTOR','SELLER_COLLECTOR')
@@ -150,14 +143,12 @@ const getWeeklySummary = async () => {
   );
   return r.rows.map(row => ({
     ...row,
-    commissions_total: parseFloat(row.commissions_total),
-    salary_amount:     parseFloat(row.salary_amount),
-    total_net:         parseFloat(row.commissions_total) + parseFloat(row.salary_amount),
+    total_net: row.commissions_total + row.salary_amount,
   }));
 };
 
 module.exports = {
   findCommissions, getPendingTotal, getPendingIds, markCommissionsPaid,
-  findSalary, createSalary, updateSalary, deactivateSalary,
+  findSalary, createSalary, updateSalary,
   createLiquidation, findLiquidations, getWeeklySummary,
 };
