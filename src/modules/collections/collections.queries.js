@@ -25,9 +25,9 @@ const findInstallmentsForSheet = async (collectorId, date, filter) => {
        i.id AS installment_id,
        i.installment_number,
        i.due_date,
-       i.amount_due,
-       i.amount_paid,
-       i.penalty_amount,
+       i.amount_due::float8,
+       i.amount_paid::float8,
+       i.penalty_amount::float8,
        i.status AS installment_status,
        c.id AS credit_id,
        c.type AS credit_type,
@@ -81,7 +81,7 @@ const findAll = async ({ collectorId, date } = {}) => {
   let q = `
     SELECT cs.id, cs.sheet_date, cs.filter_used, cs.created_at,
            u.full_name AS collector_name,
-           COUNT(csd.id) AS total_items
+           COUNT(csd.id)::int AS total_items
     FROM collection_sheets cs
     JOIN users u ON u.id = cs.collector_id
     LEFT JOIN collection_sheet_details csd ON csd.sheet_id = cs.id
@@ -109,13 +109,13 @@ const findById = async (id) => {
 
   const detailsRes = await pool.query(
     `SELECT csd.order_number,
-            csd.planned_amount,
+            csd.planned_amount::float8,
             i.id AS installment_id,
             i.installment_number,
             i.due_date,
-            i.amount_due,
-            i.amount_paid,
-            i.penalty_amount,
+            i.amount_due::float8,
+            i.amount_paid::float8,
+            i.penalty_amount::float8,
             i.status AS installment_status,
             c.id AS credit_id,
             c.type AS credit_type,
