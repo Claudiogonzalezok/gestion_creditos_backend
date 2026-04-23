@@ -2,7 +2,7 @@ const pool = require('../../config/db');
 
 const findAll = async ({ status, search } = {}) => {
   let q = `
-    SELECT id, name, description, current_price, available_stock, status, created_at
+    SELECT id, name, description, current_price::float8, available_stock::int, status, created_at
     FROM products
     WHERE 1=1`;
   const params = [];
@@ -22,7 +22,7 @@ const findAll = async ({ status, search } = {}) => {
 
 const findById = async (id) => {
   const result = await pool.query(
-    `SELECT id, name, description, current_price, available_stock, status, created_at, updated_at
+    `SELECT id, name, description, current_price::float8, available_stock::int, status, created_at, updated_at
      FROM products WHERE id = $1`,
     [id]
   );
@@ -51,7 +51,7 @@ const create = async ({ name, description, current_price, available_stock }) => 
   const result = await pool.query(
     `INSERT INTO products (name, description, current_price, available_stock)
      VALUES ($1, $2, $3, $4)
-     RETURNING id, name, description, current_price, available_stock, status, created_at`,
+     RETURNING id, name, description, current_price::float8, available_stock::int, status, created_at`,
     [name, description || null, current_price, available_stock ?? 0]
   );
   return result.rows[0];
@@ -65,7 +65,7 @@ const update = async (id, { name, description, current_price }) => {
          current_price = COALESCE($3, current_price),
          updated_at    = NOW()
      WHERE id = $4
-     RETURNING id, name, description, current_price, available_stock, status, updated_at`,
+     RETURNING id, name, description, current_price::float8, available_stock::int, status, updated_at`,
     [name, description, current_price, id]
   );
   return result.rows[0] || null;
@@ -94,13 +94,12 @@ const adjustStock = async (id, quantity, movement, reason, userId) => {
      SET available_stock = available_stock ${operator} $1,
          updated_at      = NOW()
      WHERE id = $2
-     RETURNING id, name, available_stock`,
+     RETURNING id, name, available_stock::int`,
     [quantity, id]
   );
 
   const product = updated.rows[0];
 
-  // Registrar el movimiento para auditoría
   await pool.query(
     `INSERT INTO stock_movements
        (product_id, movement, quantity, reason, available_stock_after, user_id)

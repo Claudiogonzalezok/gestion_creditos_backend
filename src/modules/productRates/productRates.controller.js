@@ -1,46 +1,58 @@
 const service  = require('./productRates.service');
 const response = require('../../utils/response');
 
-const getAll = async (req, res, next) => {
+const getAll = async (req, res) => {
   try {
-    const data = await service.getAll(req.query.product_id);
-    response.success(res, data, 'Tasas de producto obtenidas.');
-  } catch (e) { next(e); }
+    return response.success(res, await service.getAll(req.query.product_id));
+  } catch (err) { return response.serverError(res, err); }
 };
 
-const getById = async (req, res, next) => {
+const getById = async (req, res) => {
   try {
-    const data = await service.getById(req.params.id);
-    response.success(res, data, 'Tasa de producto obtenida.');
-  } catch (e) { next(e); }
+    return response.success(res, await service.getById(req.params.id));
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
-const create = async (req, res, next) => {
+const create = async (req, res) => {
   try {
-    const data = await service.create(req.body);
-    response.created(res, data, 'Tasa de producto creada.');
-  } catch (e) { next(e); }
+    return response.created(res, await service.create(req.body), 'Tasa de producto creada.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
-const update = async (req, res, next) => {
+const update = async (req, res) => {
   try {
-    const data = await service.update(req.params.id, req.body);
-    response.success(res, data, 'Tasa de producto actualizada.');
-  } catch (e) { next(e); }
+    return response.success(res, await service.update(req.params.id, req.body), 'Tasa de producto actualizada.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
-const deactivate = async (req, res, next) => {
+const deactivate = async (req, res) => {
   try {
-    const data = await service.deactivate(req.params.id);
-    response.success(res, data, 'Tasa de producto desactivada.');
-  } catch (e) { next(e); }
+    return response.success(res, await service.deactivate(req.params.id), 'Tasa de producto desactivada.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
-const activate = async (req, res, next) => {
+const activate = async (req, res) => {
   try {
-    const data = await service.activate(req.params.id);
-    response.success(res, data, 'Tasa de producto activada.');
-  } catch (e) { next(e); }
+    return response.success(res, await service.activate(req.params.id), 'Tasa de producto activada.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
 module.exports = { getAll, getById, create, update, deactivate, activate };

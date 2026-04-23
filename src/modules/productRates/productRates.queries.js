@@ -2,8 +2,8 @@ const pool = require('../../config/db');
 
 const COLS = `
     pr.id, pr.product_id, p.name AS product_name,
-    pr.payment_frequency, pr.installments_count,
-    pr.rate, pr.active, pr.created_at, pr.updated_at`;
+    pr.payment_frequency, pr.installments_count::int,
+    pr.rate::float8, pr.active, pr.created_at, pr.updated_at`;
 
 const findAll = async (productId) => {
   let q = `
@@ -61,9 +61,11 @@ const findActiveRate = async (productId, paymentFrequency, installmentsCount, cl
 };
 
 const create = async ({ product_id, payment_frequency, installments_count, rate }) => {
-  // Si ya existe una entrada desactivada con la misma combinación, la reactiva
   const existing = await findExact(product_id, payment_frequency, installments_count);
   if (existing) {
+    if (existing.active)
+      throw { status: 409, message: 'Ya existe una tasa activa para esta combinación de producto, frecuencia y cuotas.' };
+    // Reactiva la entrada desactivada con la nueva tasa
     const r = await pool.query(
       `UPDATE product_rates
        SET rate = $1, active = TRUE, updated_at = NOW()

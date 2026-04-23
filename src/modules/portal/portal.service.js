@@ -7,10 +7,10 @@ const queries = require('./portal.queries');
 const getAccountSummary = async (customerId) => {
   const { totals, upcoming } = await queries.getAccountSummary(customerId);
 
-  const totalOwed    = parseFloat(totals.total_owed);
-  const paidCount    = parseInt(totals.paid_count);
-  const pendingCount = parseInt(totals.pending_count);
-  const overdueCount = parseInt(totals.overdue_count);
+  const totalOwed    = totals.total_owed;
+  const paidCount    = totals.paid_count;
+  const pendingCount = totals.pending_count;
+  const overdueCount = totals.overdue_count;
 
   // Indicador de riesgo: GREEN / YELLOW / RED
   let statusIndicator;
@@ -32,13 +32,7 @@ const getAccountSummary = async (customerId) => {
  * Lista de créditos del cliente autenticado.
  */
 const getCredits = async (customerId) => {
-  const rows = await queries.findCredits(customerId);
-  return rows.map(r => ({
-    ...r,
-    total_amount:       parseFloat(r.total_amount),
-    total_installments: parseInt(r.total_installments),
-    paid_installments:  parseInt(r.paid_installments),
-  }));
+  return queries.findCredits(customerId);
 };
 
 /**
@@ -48,10 +42,7 @@ const getCredits = async (customerId) => {
 const getCreditById = async (creditId, customerId) => {
   const credit = await queries.findCreditById(creditId, customerId);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-  return {
-    ...credit,
-    total_amount: parseFloat(credit.total_amount),
-  };
+  return credit;
 };
 
 module.exports = { getAccountSummary, getCredits, getCreditById };

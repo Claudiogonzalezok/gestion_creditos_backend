@@ -1,7 +1,7 @@
 const pool = require('../../config/db');
 
-const COLS = `id, payment_frequency, installments_count,
-              min_amount, max_amount, rate, active, created_at, updated_at`;
+const COLS = `id, payment_frequency, installments_count::int,
+              min_amount::float8, max_amount::float8, rate::float8, active, created_at, updated_at`;
 
 const findAll = async ({ payment_frequency, active } = {}) => {
   let q = `SELECT ${COLS} FROM interest_rates WHERE 1=1`;

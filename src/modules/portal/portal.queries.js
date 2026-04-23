@@ -11,10 +11,10 @@ const getAccountSummary = async (customerId) => {
   const totals = await pool.query(
     `SELECT
        COALESCE(SUM(CASE WHEN i.status IN ('PENDING','OVERDUE','PARTIAL')
-                    THEN i.amount_due - i.amount_paid ELSE 0 END), 0) AS total_owed,
-       COUNT(*) FILTER (WHERE i.status = 'PAID')                       AS paid_count,
-       COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))        AS pending_count,
-       COUNT(*) FILTER (WHERE i.status = 'OVERDUE')                    AS overdue_count
+                    THEN i.amount_due - i.amount_paid ELSE 0 END), 0)::float8 AS total_owed,
+       COUNT(*) FILTER (WHERE i.status = 'PAID')::int                         AS paid_count,
+       COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))::int          AS pending_count,
+       COUNT(*) FILTER (WHERE i.status = 'OVERDUE')::int                      AS overdue_count
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
      WHERE c.customer_id = $1
@@ -47,14 +47,14 @@ const getAccountSummary = async (customerId) => {
 const findCredits = async (customerId) => {
   const r = await pool.query(
     `SELECT
-       c.id, c.type, c.total_amount, c.installments_count,
+       c.id, c.type, c.total_amount::float8, c.installments_count::int,
        c.payment_frequency, c.status, c.created_at, c.approved_at,
-       COUNT(i.id)                                          AS total_installments,
-       COUNT(i.id) FILTER (WHERE i.status = 'PAID')        AS paid_installments,
+       COUNT(i.id)::int                                              AS total_installments,
+       COUNT(i.id) FILTER (WHERE i.status = 'PAID')::int            AS paid_installments,
        MIN(i.due_date) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
-                                                            AS next_due_date,
-       MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
-                                                            AS next_due_amount
+                                                                     AS next_due_date,
+       MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))::float8
+                                                                     AS next_due_amount
      FROM credits c
      LEFT JOIN installments i ON i.credit_id = c.id
      WHERE c.customer_id = $1
@@ -73,7 +73,7 @@ const findCredits = async (customerId) => {
 const findCreditById = async (creditId, customerId) => {
   const credit = await pool.query(
     `SELECT
-       c.id, c.type, c.total_amount, c.installments_count,
+       c.id, c.type, c.total_amount::float8, c.installments_count::int,
        c.payment_frequency, c.status, c.created_at, c.approved_at
      FROM credits c
      WHERE c.id = $1
@@ -86,7 +86,7 @@ const findCreditById = async (creditId, customerId) => {
   const installments = await pool.query(
     `SELECT
        id, installment_number, due_date,
-       amount_due, amount_paid, penalty_amount, status
+       amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments
      WHERE credit_id = $1
      ORDER BY installment_number ASC`,

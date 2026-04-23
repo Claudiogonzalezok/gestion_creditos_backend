@@ -452,6 +452,7 @@ const productRates = {
           throw new Error('El coeficiente debe ser un número positivo (ej: 0.32 = 32%, 1.2 = 120%).');
         return true;
       }),
+    isBool('active', 'El estado', false),
   ],
   id: [ isUUIDParam('id', 'El ID de tasa') ],
 };
