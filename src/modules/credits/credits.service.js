@@ -280,7 +280,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
     // Comisión siempre sobre el total_amount bruto (el enganche no la reduce)
     if (credit.created_by) {
-      const commissionAmount = credit.total_amount * commissionRate;
+      const commissionAmount = parseFloat(credit.total_amount) * commissionRate;
       await queries.createCommission(client, credit.created_by, id, commissionAmount, week_start, week_end);
     }
   });
@@ -307,20 +307,21 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
   if (!pendingInstallments.length)
     throw { status: 409, message: 'Este crédito no tiene cuotas pendientes.' };
 
-  const settlementAmount = pendingInstallments.reduce((sum, inst) =>
-    sum + parseFloat(inst.amount_due) - parseFloat(inst.amount_paid) + parseFloat(inst.penalty_amount), 0
+  // amount_due ya incluye la mora — no sumar penalty_amount por separado
+  const settlementAmount = pendingInstallments.reduce(
+    (sum, inst) => sum + inst.amount_due - inst.amount_paid, 0
   );
-
   const roundedSettlementAmount = Math.round(settlementAmount * 100) / 100;
+  const firstPendingId = pendingInstallments[0].id;
 
   return withTransaction(async (client) => {
     await queries.settleAllInstallments(client, id);
     await client.query(
       `INSERT INTO payments
-         (installment_id, collector_id, amount_received, payment_method, transfer_reference, status, approved_by, approved_at, notes)
-       SELECT id, $1, amount_due, $2, $3, 'APPROVED', $1, NOW(), 'Cancelación anticipada'
-       FROM installments WHERE credit_id = $4 AND installment_number = 1`,
-      [adminId, paymentMethod, transferReference || null, id]
+         (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+          status, approved_by, approved_at, notes)
+       VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Cancelación anticipada')`,
+      [firstPendingId, adminId, roundedSettlementAmount, paymentMethod, transferReference || null]
     );
     await client.query(
       `UPDATE credits

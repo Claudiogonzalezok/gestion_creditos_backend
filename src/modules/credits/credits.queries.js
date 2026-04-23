@@ -2,8 +2,8 @@ const pool = require('../../config/db');
 
 const findAll = async ({ status, type, customer_id, created_by } = {}) => {
   let q = `
-    SELECT c.id, c.type, c.total_amount, c.installments_count, c.payment_frequency,
-           c.interest_rate, c.status, c.created_at, c.approved_at,
+    SELECT c.id, c.type, c.total_amount::float8, c.installments_count, c.payment_frequency,
+           c.interest_rate::float8, c.status, c.created_at, c.approved_at,
            cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
            u.id  AS created_by_id, u.full_name AS created_by_name
     FROM credits c
@@ -21,10 +21,10 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
 
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT c.id, c.type, c.total_amount, c.down_payment,
+    `SELECT c.id, c.type, c.total_amount::float8, c.down_payment::float8,
             c.down_payment_method, c.down_payment_transfer_reference,
             c.installments_count, c.payment_frequency,
-            c.interest_rate, c.status, c.rejection_reason, c.notes, c.created_by,
+            c.interest_rate::float8, c.status, c.rejection_reason, c.notes, c.created_by,
             c.created_at, c.approved_at, c.approved_by,
             cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
             cu.phone AS customer_phone,
@@ -40,7 +40,7 @@ const findById = async (id) => {
 
   if (credit.type === 'SALE') {
     const products = await pool.query(
-      `SELECT cp.id, cp.quantity, cp.historical_price, cp.historical_rate,
+      `SELECT cp.id, cp.quantity, cp.historical_price::float8, cp.historical_rate::float8,
               p.id AS product_id, p.name AS product_name
        FROM credit_products cp
        JOIN products p ON p.id = cp.product_id
@@ -50,7 +50,8 @@ const findById = async (id) => {
   }
 
   const inst = await pool.query(
-    `SELECT id, installment_number, due_date, amount_due, amount_paid, penalty_amount, status
+    `SELECT id, installment_number, due_date,
+            amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments WHERE credit_id = $1 ORDER BY installment_number`,
     [id]
   );
@@ -60,8 +61,8 @@ const findById = async (id) => {
 
 const findCreditProducts = async (creditId) => {
   const r = await pool.query(
-    `SELECT cp.id, cp.product_id, cp.quantity, cp.historical_price, cp.historical_rate,
-            p.available_stock, p.name
+    `SELECT cp.id, cp.product_id, cp.quantity, cp.historical_price::float8, cp.historical_rate::float8,
+            p.available_stock::int, p.name
      FROM credit_products cp
      JOIN products p ON p.id = cp.product_id
      WHERE cp.credit_id = $1`,
@@ -81,7 +82,7 @@ const create = async (client, {
         down_payment, down_payment_method, down_payment_transfer_reference,
         installments_count, payment_frequency, notes)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING id, type, total_amount, down_payment, down_payment_method,
+     RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
                installments_count, payment_frequency, status, created_at`,
     [
       customer_id, created_by, type, total_amount,
@@ -170,7 +171,7 @@ const reject = async (id, rejectionReason, adminId) => {
 
 const getPendingInstallments = async (creditId) => {
   const r = await pool.query(
-    `SELECT id, installment_number, amount_due, amount_paid, penalty_amount
+    `SELECT id, installment_number, amount_due::float8, amount_paid::float8, penalty_amount::float8
      FROM installments
      WHERE credit_id = $1 AND status IN ('PENDING','OVERDUE','PARTIAL')
      ORDER BY installment_number`,

@@ -38,6 +38,7 @@ const simulate = async (req, res) => {
     return response.success(res, await service.simulate({ type, total_amount, installments_count, payment_frequency, products }), 'Simulación calculada.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }
 };

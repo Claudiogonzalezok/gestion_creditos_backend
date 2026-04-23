@@ -1,6 +1,7 @@
-const router     = require('express').Router();
-const controller = require('./credits.controller');
-const v          = require('../../utils/validators');
+const router        = require('express').Router();
+const controller    = require('./credits.controller');
+const { query }     = require('express-validator');
+const v             = require('../../utils/validators');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
@@ -10,7 +11,21 @@ router.post('/simulate', v.credits.simulate, validate, controller.simulate);
 // ── Rutas protegidas ──────────────────────────────────────────
 router.use(authenticate);
 
-router.get('/',    authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), controller.getAll);
+router.get('/',
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
+  [
+    query('status').optional()
+      .isIn(['PENDING_APPROVAL','ACTIVE','SETTLED','REJECTED','EXPIRED'])
+      .withMessage('status debe ser PENDING_APPROVAL, ACTIVE, SETTLED, REJECTED o EXPIRED.'),
+    query('type').optional()
+      .isIn(['SALE','LOAN'])
+      .withMessage('type debe ser SALE o LOAN.'),
+    query('customer_id').optional()
+      .isUUID().withMessage('customer_id debe ser un UUID válido.'),
+  ],
+  validate,
+  controller.getAll
+);
 router.get('/:id', authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.credits.id, validate, controller.getById);
 
 router.post('/', authorize('ADMIN','SELLER','SELLER_COLLECTOR'), v.credits.create, validate, controller.create);
