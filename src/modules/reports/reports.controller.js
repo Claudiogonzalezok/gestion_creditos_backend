@@ -33,11 +33,32 @@ const getCollectorsReport = async (req, res) => {
 
 const getProductsReport = async (req, res) => {
   try {
-    return response.success(res, await service.getProductsReport());
+    const threshold = req.query.stock_threshold !== undefined
+      ? parseInt(req.query.stock_threshold)
+      : 5;
+    return response.success(res, await service.getProductsReport(threshold));
+  } catch (err) { return response.serverError(res, err); }
+};
+
+const getUpcomingReport = async (req, res) => {
+  try {
+    const days = req.query.days !== undefined ? parseInt(req.query.days) : 30;
+    return response.success(res, await service.getUpcomingReport(days));
+  } catch (err) { return response.serverError(res, err); }
+};
+
+const getSummaryReport = async (req, res) => {
+  try {
+    return response.success(res, await service.getSummaryReport());
   } catch (err) { return response.serverError(res, err); }
 };
 
 module.exports = {
-  getCollectionReport, getPortfolioReport, getOverdueReport,
-  getCollectorsReport, getProductsReport,
+  getCollectionReport,
+  getPortfolioReport,
+  getOverdueReport,
+  getCollectorsReport,
+  getProductsReport,
+  getUpcomingReport,
+  getSummaryReport,
 };

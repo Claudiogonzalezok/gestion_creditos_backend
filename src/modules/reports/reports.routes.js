@@ -21,10 +21,35 @@ const dateRangeRules = [
   }),
 ];
 
+// Existentes
 router.get('/collection', dateRangeRules, validate, controller.getCollectionReport);
 router.get('/portfolio',  controller.getPortfolioReport);
 router.get('/overdue',    controller.getOverdueReport);
 router.get('/collectors', dateRangeRules, validate, controller.getCollectorsReport);
-router.get('/products',   controller.getProductsReport);
+
+router.get('/products',
+  [
+    query('stock_threshold')
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage('stock_threshold debe ser un entero mayor o igual a 0.'),
+  ],
+  validate,
+  controller.getProductsReport
+);
+
+// Nuevos
+router.get('/summary', controller.getSummaryReport);
+
+router.get('/upcoming',
+  [
+    query('days')
+      .optional()
+      .isInt({ min: 1, max: 90 })
+      .withMessage('days debe ser un entero entre 1 y 90.'),
+  ],
+  validate,
+  controller.getUpcomingReport
+);
 
 module.exports = router;

@@ -10,9 +10,20 @@ const getOverdueReport = () => queries.getOverdueReport();
 const getCollectorsReport = async (dateFrom, dateTo) =>
   queries.getCollectorsReport(dateFrom, dateTo);
 
-const getProductsReport = () => queries.getProductsReport();
+const getProductsReport = (stockThreshold) =>
+  queries.getProductsReport(stockThreshold);
+
+const getUpcomingReport = (days) =>
+  queries.getUpcomingReport(days);
+
+const getSummaryReport = () => queries.getSummaryReport();
 
 module.exports = {
-  getCollectionReport, getPortfolioReport, getOverdueReport,
-  getCollectorsReport, getProductsReport,
+  getCollectionReport,
+  getPortfolioReport,
+  getOverdueReport,
+  getCollectorsReport,
+  getProductsReport,
+  getUpcomingReport,
+  getSummaryReport,
 };
