@@ -20,12 +20,11 @@ const getById = async (req, res) => {
 const create = async (req, res) => {
   try {
     const result = await service.create(req.body, req.user);
-    return response.created(res, result, result.warning
-      ? `Pre-carga registrada con advertencia: ${result.warning}`
-      : 'Pre-carga registrada correctamente. Pendiente de aprobación.');
+    return response.created(res, result, 'Pre-carga registrada correctamente. Pendiente de aprobación.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422) return res.status(422).json({ ok: false, message: err.message });
     return response.serverError(res, err);
   }
 };

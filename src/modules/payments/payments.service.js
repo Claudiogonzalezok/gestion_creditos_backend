@@ -102,7 +102,8 @@ const approve = async (id, adminId) => {
             client,
             inst.id,
             adminId,
-            'Pago adelantado'
+            'Pago adelantado',
+            payment.payment_method
           );
           remaining -= instBalance;
           paidCount++;

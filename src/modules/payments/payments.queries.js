@@ -2,10 +2,10 @@ const pool = require('../../config/db');
 
 const findAll = async ({ status, collector_id, installment_id } = {}) => {
   let q = `
-    SELECT p.id, p.installment_id, p.amount_received, p.payment_method,
+    SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.created_at,
            p.approved_at, p.approved_by,
-           i.installment_number, i.amount_due, i.due_date,
+           i.installment_number, i.amount_due::float8, i.due_date,
            c.id AS credit_id, c.type AS credit_type,
            cu.full_name AS customer_name, cu.dni AS customer_dni,
            u.full_name  AS collector_name
@@ -25,10 +25,11 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
 
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received, p.payment_method,
+    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8, p.payment_method,
             p.transfer_reference, p.status, p.rejection_reason, p.notes,
             p.created_at, p.approved_at, p.approved_by,
-            i.installment_number, i.amount_due, i.amount_paid, i.due_date, i.penalty_amount,
+            i.installment_number, i.amount_due::float8, i.amount_paid::float8,
+            i.due_date, i.penalty_amount::float8,
             c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
             cu.full_name AS customer_name, cu.dni AS customer_dni,
             u.full_name  AS collector_name
@@ -58,7 +59,7 @@ const create = async ({ installment_id, collector_id, amount_received, payment_m
   const r = await pool.query(
     `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, installment_id, amount_received, payment_method, status, created_at`,
+     RETURNING id, installment_id, amount_received::float8, payment_method, status, created_at`,
     [installment_id, collector_id, amount_received, payment_method, transfer_reference || null, notes || null]
   );
   return r.rows[0];
@@ -131,7 +132,8 @@ const getTotalPendingBalance = async (creditId) => {
 // Cuotas pendientes/vencidas/parciales ordenadas desde un número de cuota dado
 const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumber) => {
   const r = await client.query(
-    `SELECT id, installment_number, due_date, amount_due, amount_paid, penalty_amount, status
+    `SELECT id, installment_number, due_date,
+            amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments
      WHERE credit_id = $1
        AND status NOT IN ('PAID')
@@ -171,13 +173,13 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency) => {
 };
 
 // Marca una cuota como pagada por adelanto con nota auditada
-const markInstallmentAsPrepaid = async (client, installmentId, adminId, note) => {
+const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, paymentMethod) => {
   await client.query(
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, payment_method, status, approved_by, approved_at, notes)
-     SELECT id, $1, amount_due - amount_paid, 'CASH', 'APPROVED', $1, NOW(), $2
-     FROM installments WHERE id = $3`,
-    [adminId, note, installmentId]
+     SELECT id, $1, amount_due - amount_paid, $2, 'APPROVED', $1, NOW(), $3
+     FROM installments WHERE id = $4`,
+    [adminId, paymentMethod, note, installmentId]
   );
   await client.query(
     `UPDATE installments
