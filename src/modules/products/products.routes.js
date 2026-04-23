@@ -1,6 +1,7 @@
 const router      = require('express').Router();
 const controller  = require('./products.controller');
 const v           = require('../../utils/validators');
+const { query }   = require('express-validator');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
@@ -9,6 +10,8 @@ router.use(authenticate);
 // Lectura — Admin y Vendedor
 router.get('/',
   authorize('ADMIN','SELLER','SELLER_COLLECTOR'),
+  [ query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.') ],
+  validate,
   controller.getAll
 );
 router.get('/:id',

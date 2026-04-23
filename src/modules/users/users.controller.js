@@ -18,7 +18,7 @@ const getById = async (req, res) => {
     const user = await service.getById(req.params.id);
     return response.success(res, user);
   } catch (err) {
-    if (err.status) return res.status(err.status).json({ ok: false, message: err.message });
+    if (err.status === 404) return response.notFound(res, err.message);
     return response.serverError(res, err);
   }
 };
@@ -31,7 +31,6 @@ const create = async (req, res) => {
     return response.created(res, result, 'Usuario creado correctamente. Comunicá la contraseña temporal al usuario.');
   } catch (err) {
     if (err.status === 409) return response.conflict(res, err.message);
-    if (err.status) return res.status(err.status).json({ ok: false, message: err.message });
     return response.serverError(res, err);
   }
 };
@@ -45,7 +44,6 @@ const update = async (req, res) => {
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
-    if (err.status) return res.status(err.status).json({ ok: false, message: err.message });
     return response.serverError(res, err);
   }
 };

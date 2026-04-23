@@ -1,6 +1,7 @@
 const router      = require('express').Router();
 const controller  = require('./users.controller');
 const v           = require('../../utils/validators');
+const { query }   = require('express-validator');
 const { validate }                                            = require('../../middlewares/validate.middleware');
 const { authenticate, authenticateAllowTemp, authorize }      = require('../../middlewares/auth.middleware');
 
@@ -18,6 +19,11 @@ router.use(authenticate);
 // Rutas de administración (solo Admin)
 router.get('/',
   authorize('ADMIN'),
+  [
+    query('role').optional().isIn(['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR']).withMessage('role inválido.'),
+    query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.'),
+  ],
+  validate,
   controller.getAll
 );
 router.get('/:id',

@@ -1,6 +1,7 @@
 const router      = require('express').Router();
 const controller  = require('./customers.controller');
 const v           = require('../../utils/validators');
+const { query }   = require('express-validator');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
@@ -9,6 +10,11 @@ router.use(authenticate);
 // Lectura — Admin, Vendedor y Cobrador
 router.get('/',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
+  [
+    query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.'),
+    query('collector_id').optional().isUUID().withMessage('collector_id debe ser un UUID válido.'),
+  ],
+  validate,
   controller.getAll
 );
 router.get('/:id',
