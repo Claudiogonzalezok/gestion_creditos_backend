@@ -1,18 +1,38 @@
 const pool = require('../../config/db');
 
-const findAll = async ({ dateFrom, dateTo } = {}) => {
-  let q = `
-    SELECT e.id, e.amount::float8, e.description, e.payment_method,
-           e.transfer_reference, e.created_at,
-           u.full_name AS created_by_name
+const findAll = async ({ dateFrom, dateTo, page = 1, limit = 20 } = {}) => {
+  const offset = (page - 1) * limit;
+
+  let base = `
     FROM expenses e
     JOIN users u ON u.id = e.created_by
     WHERE 1=1`;
   const params = [];
-  if (dateFrom) { params.push(dateFrom); q += ` AND e.created_at::date >= $${params.length}`; }
-  if (dateTo)   { params.push(dateTo);   q += ` AND e.created_at::date <= $${params.length}`; }
-  q += ` ORDER BY e.created_at DESC`;
-  return (await pool.query(q, params)).rows;
+  if (dateFrom) { params.push(dateFrom); base += ` AND e.created_at::date >= $${params.length}`; }
+  if (dateTo)   { params.push(dateTo);   base += ` AND e.created_at::date <= $${params.length}`; }
+
+  const selectFields = `
+    SELECT e.id, e.amount::float8, e.description, e.payment_method,
+           e.transfer_reference, e.created_at,
+           u.full_name AS created_by_name`;
+
+  const [dataResult, countResult] = await Promise.all([
+    pool.query(
+      `${selectFields} ${base} ORDER BY e.created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+      [...params, limit, offset]
+    ),
+    pool.query(`SELECT COUNT(*)::int AS total ${base}`, params),
+  ]);
+
+  return { rows: dataResult.rows, total: countResult.rows[0].total };
+};
+
+const hasCashRegister = async (date) => {
+  const r = await pool.query(
+    `SELECT id FROM cash_registers WHERE register_date = $1::date`,
+    [date]
+  );
+  return r.rows.length > 0;
 };
 
 const findById = async (id) => {
@@ -46,4 +66,4 @@ const remove = async (id) => {
   return r.rowCount > 0;
 };
 
-module.exports = { findAll, findById, create, remove };
+module.exports = { findAll, findById, hasCashRegister, create, remove };

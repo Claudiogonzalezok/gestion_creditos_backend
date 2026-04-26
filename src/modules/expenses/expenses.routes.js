@@ -12,6 +12,7 @@ router.get('/',
   [
     query('date_from').optional().isISO8601().withMessage('date_from debe ser una fecha válida.'),
     query('date_to').optional().isISO8601().withMessage('date_to debe ser una fecha válida.'),
+    ...v.paginationRules,
   ],
   validate,
   controller.getAll
