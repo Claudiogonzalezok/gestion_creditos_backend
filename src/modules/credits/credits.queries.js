@@ -2,7 +2,7 @@ const pool = require('../../config/db');
 
 const findAll = async ({ status, type, customer_id, created_by } = {}) => {
   let q = `
-    SELECT c.id, c.type, c.total_amount::float8, c.installments_count, c.payment_frequency,
+    SELECT c.id, c.type, c.total_amount::float8, c.installments_count::int, c.payment_frequency,
            c.interest_rate::float8, c.status, c.created_at, c.approved_at,
            cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
            u.id  AS created_by_id, u.full_name AS created_by_name
@@ -23,9 +23,12 @@ const findById = async (id) => {
   const r = await pool.query(
     `SELECT c.id, c.type, c.total_amount::float8, c.down_payment::float8,
             c.down_payment_method, c.down_payment_transfer_reference,
-            c.installments_count, c.payment_frequency,
+            c.prepaid_installments::int, c.prepaid_installments_method,
+            c.prepaid_installments_transfer_reference,
+            c.installments_count::int, c.payment_frequency,
             c.interest_rate::float8, c.status, c.rejection_reason, c.notes, c.created_by,
             c.created_at, c.approved_at, c.approved_by,
+            c.settled_at, c.settlement_amount::float8, c.settlement_type,
             cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
             cu.phone AS customer_phone,
             u.id AS created_by_id, u.full_name AS created_by_name
@@ -40,7 +43,7 @@ const findById = async (id) => {
 
   if (credit.type === 'SALE') {
     const products = await pool.query(
-      `SELECT cp.id, cp.quantity, cp.historical_price::float8, cp.historical_rate::float8,
+      `SELECT cp.id, cp.quantity::int, cp.historical_price::float8, cp.historical_rate::float8,
               p.id AS product_id, p.name AS product_name
        FROM credit_products cp
        JOIN products p ON p.id = cp.product_id
@@ -61,7 +64,7 @@ const findById = async (id) => {
 
 const findCreditProducts = async (creditId) => {
   const r = await pool.query(
-    `SELECT cp.id, cp.product_id, cp.quantity, cp.historical_price::float8, cp.historical_rate::float8,
+    `SELECT cp.id, cp.product_id, cp.quantity::int, cp.historical_price::float8, cp.historical_rate::float8,
             p.available_stock::int, p.name
      FROM credit_products cp
      JOIN products p ON p.id = cp.product_id
@@ -74,19 +77,23 @@ const findCreditProducts = async (creditId) => {
 const create = async (client, {
   customer_id, created_by, type, total_amount,
   down_payment, down_payment_method, down_payment_transfer_reference,
+  prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
   installments_count, payment_frequency, notes,
 }) => {
   const r = await client.query(
     `INSERT INTO credits
        (customer_id, created_by, type, total_amount,
         down_payment, down_payment_method, down_payment_transfer_reference,
+        prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
         installments_count, payment_frequency, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
-               installments_count, payment_frequency, status, created_at`,
+               prepaid_installments::int, prepaid_installments_method,
+               installments_count::int, payment_frequency, status, created_at`,
     [
       customer_id, created_by, type, total_amount,
       down_payment || 0, down_payment_method || null, down_payment_transfer_reference || null,
+      prepaid_installments || 0, prepaid_installments_method || null, prepaid_installments_transfer_reference || null,
       installments_count, payment_frequency, notes || null,
     ]
   );
@@ -214,19 +221,31 @@ const expireOldCredits = async (days) => {
  * Registra el enganche abonado al momento de aprobar un crédito SALE.
  * No está ligado a ninguna cuota; impacta directamente en caja.
  */
-const createDownPayment = async (client, { creditId, amount, paymentMethod, transferReference, approvedBy }) => {
+const createDownPayment = async (client, { creditId, amount, paymentMethod, transferReference, approvedBy, paymentType = 'DOWN_PAYMENT' }) => {
   await client.query(
     `INSERT INTO credit_down_payments
-       (credit_id, amount, payment_method, transfer_reference, approved_by)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [creditId, amount, paymentMethod, transferReference || null, approvedBy]
+       (credit_id, amount, payment_method, transfer_reference, approved_by, payment_type)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [creditId, amount, paymentMethod, transferReference || null, approvedBy, paymentType]
   );
+};
+
+const markPrepaidInstallments = async (client, creditId, count) => {
+  const r = await client.query(
+    `UPDATE installments
+     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
+     WHERE credit_id = $1 AND installment_number <= $2
+     RETURNING amount_due::float8`,
+    [creditId, count]
+  );
+  return r.rows.reduce((sum, row) => sum + row.amount_due, 0);
 };
 
 module.exports = {
   findAll, findById, findCreditProducts,
   create, createCreditProducts, saveHistoricalRate,
-  approve, generateInstallments, decrementProductStock, createCommission, createDownPayment,
+  approve, generateInstallments, decrementProductStock, createCommission,
+  createDownPayment, markPrepaidInstallments,
   reject, getPendingInstallments, settleAllInstallments, settleCredit,
   expireOldCredits,
 };

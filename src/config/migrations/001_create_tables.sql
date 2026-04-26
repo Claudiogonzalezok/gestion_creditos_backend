@@ -149,13 +149,19 @@ CREATE TABLE public.credits (
                                           CONSTRAINT credits_type_check CHECK (type IN ('SALE','LOAN')),
     total_amount                      NUMERIC(12,2)   NOT NULL
                                           CONSTRAINT credits_total_amount_check CHECK (total_amount > 0),
-    down_payment                      NUMERIC(12,2)   NOT NULL DEFAULT 0
-                                          CONSTRAINT credits_down_payment_check CHECK (down_payment >= 0),
-    down_payment_method               VARCHAR(15)     NULL
-                                          CONSTRAINT credits_down_payment_method_check
-                                          CHECK (down_payment_method IN ('CASH','TRANSFER')),
-    down_payment_transfer_reference   VARCHAR(100)    NULL,
-    installments_count                SMALLINT        NOT NULL
+    down_payment                              NUMERIC(12,2)   NOT NULL DEFAULT 0
+                                                  CONSTRAINT credits_down_payment_check CHECK (down_payment >= 0),
+    down_payment_method                       VARCHAR(15)     NULL
+                                                  CONSTRAINT credits_down_payment_method_check
+                                                  CHECK (down_payment_method IN ('CASH','TRANSFER')),
+    down_payment_transfer_reference           VARCHAR(100)    NULL,
+    prepaid_installments                      SMALLINT        NOT NULL DEFAULT 0
+                                                  CONSTRAINT credits_prepaid_installments_check CHECK (prepaid_installments >= 0),
+    prepaid_installments_method               VARCHAR(15)     NULL
+                                                  CONSTRAINT credits_prepaid_installments_method_check
+                                                  CHECK (prepaid_installments_method IN ('CASH','TRANSFER')),
+    prepaid_installments_transfer_reference   VARCHAR(100)    NULL,
+    installments_count                        SMALLINT        NOT NULL
                                           CONSTRAINT credits_installments_count_check CHECK (installments_count > 0),
     payment_frequency                 VARCHAR(15)     NOT NULL
                                           CONSTRAINT credits_payment_frequency_check
@@ -255,8 +261,9 @@ CREATE INDEX idx_payments_status      ON payments(status);
 CREATE INDEX idx_payments_created     ON payments(created_at);
 
 -- ── 11. credit_down_payments ─────────────────────────────────
--- Registra los enganches aprobados para trazabilidad en caja.
--- Independiente de payments (los enganches no están ligados a ninguna cuota).
+-- Registra enganches y adelantos de cuotas aprobados al momento de la venta.
+-- Independiente de payments (no están ligados a ninguna cuota específica).
+-- payment_type: DOWN_PAYMENT = enganche, PREPAID_INSTALLMENT = cuotas adelantadas
 CREATE TABLE public.credit_down_payments (
     id                 UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     credit_id          UUID            NOT NULL REFERENCES credits(id) ON UPDATE CASCADE,
@@ -267,6 +274,9 @@ CREATE TABLE public.credit_down_payments (
                            CHECK (payment_method IN ('CASH','TRANSFER')),
     transfer_reference VARCHAR(100)    NULL,
     approved_by        UUID            NOT NULL REFERENCES users(id) ON UPDATE CASCADE,
+    payment_type       VARCHAR(30)     NOT NULL DEFAULT 'DOWN_PAYMENT'
+                           CONSTRAINT credit_down_payments_payment_type_check
+                           CHECK (payment_type IN ('DOWN_PAYMENT','PREPAID_INSTALLMENT')),
     created_at         TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_credit_down_payments_credit ON credit_down_payments(credit_id);
@@ -391,7 +401,23 @@ CREATE TABLE public.commission_liquidations (
 CREATE INDEX idx_comm_liq_user ON commission_liquidations(user_id);
 CREATE INDEX idx_comm_liq_week ON commission_liquidations(week_start);
 
--- ── 19. system_config ────────────────────────────────────────
+-- ── 19. expenses ─────────────────────────────────────────────
+CREATE TABLE public.expenses (
+    id                 UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    amount             NUMERIC(12,2)   NOT NULL
+                           CONSTRAINT expenses_amount_check CHECK (amount > 0),
+    description        TEXT            NOT NULL,
+    payment_method     VARCHAR(15)     NOT NULL
+                           CONSTRAINT expenses_payment_method_check
+                           CHECK (payment_method IN ('CASH','TRANSFER')),
+    transfer_reference VARCHAR(100)    NULL,
+    created_by         UUID            NOT NULL REFERENCES users(id) ON UPDATE CASCADE,
+    created_at         TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_expenses_created_at ON expenses(created_at);
+CREATE INDEX idx_expenses_created_by ON expenses(created_by);
+
+-- ── 20. system_config ────────────────────────────────────────
 CREATE TABLE public.system_config (
     key         VARCHAR(100)    PRIMARY KEY,
     value       VARCHAR(255)    NOT NULL,

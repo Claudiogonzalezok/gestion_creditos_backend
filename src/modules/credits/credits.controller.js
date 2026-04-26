@@ -20,9 +20,13 @@ const getById = async (req, res) => {
 const create = async (req, res) => {
   try {
     const { customer_id, type, total_amount, installments_count, payment_frequency, products, notes,
-            down_payment, down_payment_method, down_payment_transfer_reference } = req.body;
-    const credit = await service.create({ customer_id, type, total_amount, installments_count, payment_frequency, products, notes,
-            down_payment, down_payment_method, down_payment_transfer_reference }, req.user);
+            down_payment, down_payment_method, down_payment_transfer_reference,
+            prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference } = req.body;
+    const credit = await service.create({
+      customer_id, type, total_amount, installments_count, payment_frequency, products, notes,
+      down_payment, down_payment_method, down_payment_transfer_reference,
+      prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
+    }, req.user);
     return response.created(res, credit, 'Pre-operación registrada. Pendiente de aprobación.');
   } catch (err) {
     if (err.status === 400) return response.badRequest(res, err.message);
@@ -34,9 +38,10 @@ const create = async (req, res) => {
 
 const simulate = async (req, res) => {
   try {
-    const { type, total_amount, installments_count, payment_frequency, products } = req.body;
-    return response.success(res, await service.simulate({ type, total_amount, installments_count, payment_frequency, products }), 'Simulación calculada.');
+    const { type, total_amount, installments_count, payment_frequency, products, down_payment } = req.body;
+    return response.success(res, await service.simulate({ type, total_amount, installments_count, payment_frequency, products, down_payment }), 'Simulación calculada.');
   } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);

@@ -11,6 +11,8 @@ router.use(authorize('ADMIN'));
 router.get('/dashboard', controller.getDashboard);
 router.get('/',
   [
+    query('date_from').optional().isISO8601().withMessage('date_from debe ser una fecha válida en formato YYYY-MM-DD.'),
+    query('date_to').optional().isISO8601().withMessage('date_to debe ser una fecha válida en formato YYYY-MM-DD.'),
     query('difference_status')
       .optional()
       .isIn(['EXACT', 'SURPLUS', 'SHORTAGE'])

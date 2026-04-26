@@ -45,9 +45,16 @@ const forbidden = (res, message = 'No tenés permisos para realizar esta acción
   });
 };
 
-// Conflicto (ej: DNI duplicado)
-const conflict = (res, message = 'El recurso ya existe') => {
-  return res.status(409).json({
+// Conflicto (ej: DNI duplicado, pre-cargas pendientes)
+const conflict = (res, message = 'El recurso ya existe', data = null) => {
+  const body = { ok: false, message };
+  if (data !== null) body.data = data;
+  return res.status(409).json(body);
+};
+
+// Entidad no procesable (ej: monto supera el saldo disponible)
+const unprocessableEntity = (res, message = 'No se puede procesar la solicitud') => {
+  return res.status(422).json({
     ok:      false,
     message,
   });
@@ -70,5 +77,6 @@ module.exports = {
   unauthorized,
   forbidden,
   conflict,
+  unprocessableEntity,
   serverError,
 };

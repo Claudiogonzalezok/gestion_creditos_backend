@@ -29,19 +29,30 @@ const getDashboard = async (date) => {
        SELECT COALESCE(SUM(total_paid), 0) AS total
        FROM commission_liquidations
        WHERE paid_at::date = $1::date
+     ),
+     expenses_data AS (
+       SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+         COALESCE(SUM(amount), 0)                                             AS total,
+         COUNT(*)                                                              AS count
+       FROM expenses
+       WHERE created_at::date = $1::date
      )
      SELECT
        (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
        (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
        (p.total_collected + dp.total)::float8               AS total_collected,
-       e.total::float8                                       AS total_egreses,
-       (p.total_collected + dp.total - e.total)::float8     AS net_balance,
-       p.approved_count::int                                 AS approved_count,
-       p.pending_count::int                                  AS pending_count,
-       p.pending_amount::float8                              AS pending_amount,
-       dp.total::float8                                      AS down_payments_total,
-       dp.count::int                                         AS down_payments_count
-     FROM payments_data p, down_payments_data dp, egreses_data e`,
+       (e.total + ex.total)::float8                         AS total_egreses,
+       (p.total_collected + dp.total - e.total - ex.total)::float8 AS net_balance,
+       p.approved_count::int                                AS approved_count,
+       p.pending_count::int                                 AS pending_count,
+       p.pending_amount::float8                             AS pending_amount,
+       dp.total::float8                                     AS down_payments_total,
+       dp.count::int                                        AS down_payments_count,
+       ex.total::float8                                     AS expenses_total,
+       ex.count::int                                        AS expenses_count
+     FROM payments_data p, down_payments_data dp, egreses_data e, expenses_data ex`,
     [date]
   );
   return r.rows[0];
@@ -69,12 +80,20 @@ const getDailyTotals = async (date) => {
        SELECT COALESCE(SUM(total_paid), 0) AS total
        FROM commission_liquidations
        WHERE paid_at::date = $1::date
+     ),
+     expenses_totals AS (
+       SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+         COALESCE(SUM(amount), 0)                                             AS total
+       FROM expenses
+       WHERE created_at::date = $1::date
      )
      SELECT
        (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
        (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
-       e.total::float8                                       AS total_egreses
-     FROM payments_totals p, down_payment_totals dp, egreses_totals e`,
+       (e.total + ex.total)::float8                         AS total_egreses
+     FROM payments_totals p, down_payment_totals dp, egreses_totals e, expenses_totals ex`,
     [date]
   );
   return r.rows[0];
@@ -140,7 +159,7 @@ const findById = async (id) => {
   const register = registerResult.rows[0];
   if (!register) return null;
 
-  const [paymentsResult, downPaymentsResult, liquidationsResult] = await Promise.all([
+  const [paymentsResult, downPaymentsResult, liquidationsResult, expensesResult] = await Promise.all([
     pool.query(
       `SELECT p.id, p.amount_received::float8, p.payment_method,
               p.transfer_reference, p.approved_at,
@@ -181,6 +200,16 @@ const findById = async (id) => {
        ORDER BY cl.paid_at`,
       [id]
     ),
+    pool.query(
+      `SELECT e.id, e.amount::float8, e.description, e.payment_method,
+              e.transfer_reference, e.created_at,
+              u.full_name AS created_by_name
+       FROM expenses e
+       JOIN users u ON u.id = e.created_by
+       WHERE e.created_at::date = $1::date
+       ORDER BY e.created_at`,
+      [register.register_date]
+    ),
   ]);
 
   return {
@@ -189,6 +218,7 @@ const findById = async (id) => {
       payments:      paymentsResult.rows,
       down_payments: downPaymentsResult.rows,
       liquidations:  liquidationsResult.rows,
+      expenses:      expensesResult.rows,
     },
   };
 };

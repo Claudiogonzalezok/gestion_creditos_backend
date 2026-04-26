@@ -3,6 +3,7 @@ const queries     = require('./credits.queries');
 const irQueries   = require('../interestRates/interestRates.queries');
 const prQueries   = require('../productRates/productRates.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
+const { shiftInstallmentDates } = require('../payments/payments.queries');
 const { withTransaction }    = require('../../utils/transaction');
 const {
   getInstallmentAmount,
@@ -12,6 +13,22 @@ const {
   getWeekBounds,
   getProductInstallmentContribution,
 } = require('../../utils/creditCalculator');
+
+const sanitizeCredit = (credit) => {
+  if (!credit) return credit;
+  if (credit.type === 'LOAN') {
+    delete credit.down_payment;
+    delete credit.down_payment_method;
+    delete credit.down_payment_transfer_reference;
+    delete credit.prepaid_installments;
+    delete credit.prepaid_installments_method;
+    delete credit.prepaid_installments_transfer_reference;
+  }
+  if (credit.type === 'SALE') {
+    delete credit.interest_rate;
+  }
+  return credit;
+};
 
 const getAll = async (filters, requestingUser) => {
   // SELLER solo ve los créditos que él mismo generó
@@ -23,7 +40,7 @@ const getAll = async (filters, requestingUser) => {
 const getById = async (id) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-  return credit;
+  return sanitizeCredit(credit);
 };
 
 const create = async (data, requestingUser) => {
@@ -47,7 +64,7 @@ const create = async (data, requestingUser) => {
 
       for (const item of data.products) {
         const pRes = await client.query(
-          `SELECT id, name, current_price, available_stock, status FROM products WHERE id = $1`,
+          `SELECT id, name, current_price::float8, available_stock::int, status FROM products WHERE id = $1`,
           [item.product_id]
         );
         const p = pRes.rows[0];
@@ -66,7 +83,7 @@ const create = async (data, requestingUser) => {
             message: `No existe tasa configurada para "${p.name}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
           };
 
-        computed += parseFloat(p.current_price) * item.quantity;
+        computed += p.current_price * item.quantity;
         productsWithPrice.push({ product_id: p.id, quantity: item.quantity, historical_price: p.current_price });
       }
 
@@ -77,25 +94,32 @@ const create = async (data, requestingUser) => {
       if (downPayment >= totalAmount)
         throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
 
+      const prepaidInstallments = parseInt(data.prepaid_installments || 0);
+      if (prepaidInstallments >= data.installments_count)
+        throw { status: 400, message: 'El adelanto de cuotas no puede ser igual o mayor a la cantidad total de cuotas.' };
+
       const credit = await queries.create(client, {
-        customer_id:                     data.customer_id,
-        created_by:                      requestingUser.id,
-        type:                            data.type,
-        total_amount:                    totalAmount,
-        down_payment:                    downPayment,
-        down_payment_method:             data.down_payment_method             || null,
-        down_payment_transfer_reference: data.down_payment_transfer_reference || null,
-        installments_count:              data.installments_count,
-        payment_frequency:               data.payment_frequency,
-        notes:                           data.notes,
+        customer_id:                              data.customer_id,
+        created_by:                               requestingUser.id,
+        type:                                     data.type,
+        total_amount:                             totalAmount,
+        down_payment:                             downPayment,
+        down_payment_method:                      data.down_payment_method                      || null,
+        down_payment_transfer_reference:          data.down_payment_transfer_reference          || null,
+        prepaid_installments:                     prepaidInstallments,
+        prepaid_installments_method:              data.prepaid_installments_method              || null,
+        prepaid_installments_transfer_reference:  data.prepaid_installments_transfer_reference  || null,
+        installments_count:                       data.installments_count,
+        payment_frequency:                        data.payment_frequency,
+        notes:                                    data.notes,
       });
 
       await queries.createCreditProducts(client, credit.id, productsWithPrice);
       return credit;
     }
 
-    // LOAN: total_amount viene directo del cuerpo del request; sin enganche
-    return queries.create(client, {
+    // LOAN: total_amount viene directo del cuerpo del request; sin enganche ni adelantos
+    const loanCredit = await queries.create(client, {
       customer_id:        data.customer_id,
       created_by:         requestingUser.id,
       type:               data.type,
@@ -105,10 +129,15 @@ const create = async (data, requestingUser) => {
       payment_frequency:  data.payment_frequency,
       notes:              data.notes,
     });
+    delete loanCredit.down_payment;
+    delete loanCredit.down_payment_method;
+    delete loanCredit.prepaid_installments;
+    delete loanCredit.prepaid_installments_method;
+    return loanCredit;
   });
 };
 
-const simulate = async ({ type, total_amount, installments_count, payment_frequency, products }) => {
+const simulate = async ({ type, total_amount, installments_count, payment_frequency, products, down_payment }) => {
   // ── LOAN: tasa global por rango de monto (sin cambios) ────────
   if (type === 'LOAN') {
     const amount     = parseFloat(total_amount);
@@ -135,7 +164,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
 
   for (const item of products) {
     const prodRes = await pool.query(
-      `SELECT id, name, current_price, status FROM products WHERE id = $1`, [item.product_id]
+      `SELECT id, name, current_price::float8, status FROM products WHERE id = $1`, [item.product_id]
     );
     const p = prodRes.rows[0];
     if (!p) throw { status: 404, message: `Producto ${item.product_id} no encontrado.` };
@@ -149,34 +178,45 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
         message: `No existe tasa configurada para "${p.name}" con ${installments_count} cuotas ${payment_frequency}.`,
       };
 
-    const lineTotal      = parseFloat(p.current_price) * item.quantity;
-    const coef           = parseFloat(rateRecord.rate);
-    const contribution   = getProductInstallmentContribution(lineTotal, coef, installments_count);
+    const lineTotal = p.current_price * item.quantity;
+    const coef      = parseFloat(rateRecord.rate);
 
-    totalBase        += lineTotal;
-    totalInstallment += contribution;
-
-    items.push({
-      product_id:              p.id,
-      product_name:            p.name,
-      quantity:                item.quantity,
-      unit_price:              parseFloat(p.current_price),
-      line_total:              lineTotal,
-      rate:                    coef,
-      installment_contribution: contribution,
-    });
+    totalBase += lineTotal;
+    items.push({ product_id: p.id, product_name: p.name, quantity: item.quantity, unit_price: p.current_price, line_total: lineTotal, rate: coef });
   }
 
-  return {
+  const downPayment    = parseFloat(down_payment || 0);
+  const financedAmount = downPayment > 0 ? totalBase - downPayment : totalBase;
+
+  if (downPayment >= totalBase)
+    throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
+
+  const capitalRatio = downPayment > 0 ? financedAmount / totalBase : 1;
+
+  for (const item of items) {
+    const netLine    = item.line_total * capitalRatio;
+    const contribution = getProductInstallmentContribution(netLine, item.rate, installments_count);
+    item.installment_contribution = contribution;
+    totalInstallment += contribution;
+  }
+
+  const result = {
     type,
     payment_frequency,
     installments_count,
     total_amount:       Math.round(totalBase * 100) / 100,
     installment_amount: totalInstallment,
-    total_to_return:    totalInstallment * installments_count,
+    total_to_return:    Math.round((totalInstallment * installments_count + downPayment) * 100) / 100,
     items,
     note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
   };
+
+  if (downPayment > 0) {
+    result.down_payment    = downPayment;
+    result.financed_amount = Math.round(financedAmount * 100) / 100;
+  }
+
+  return result;
 };
 
 const approve = async (id, adminId, newInstallmentsCount) => {
@@ -203,7 +243,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       await queries.generateInstallments(client, id, installmentAmount, dueDates, credit.payment_frequency);
     });
 
-    return queries.findById(id);
+    return sanitizeCredit(await queries.findById(id));
   }
 
   // ── SALE: tasa por producto ───────────────────────────────────
@@ -259,6 +299,23 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     // Generar cuotas sobre el capital neto (precio − enganche)
     await queries.generateInstallments(client, id, totalInstallment, dueDates, credit.payment_frequency);
 
+    // Auto-pagar cuotas adelantadas exigidas al momento de la venta
+    if (credit.prepaid_installments > 0) {
+      const n = credit.prepaid_installments;
+      const prepaidTotal = await queries.markPrepaidInstallments(client, id, n);
+
+      await queries.createDownPayment(client, {
+        creditId:          id,
+        amount:            prepaidTotal,
+        paymentMethod:     credit.prepaid_installments_method,
+        transferReference: credit.prepaid_installments_transfer_reference || null,
+        approvedBy:        adminId,
+        paymentType:       'PREPAID_INSTALLMENT',
+      });
+
+      await shiftInstallmentDates(client, id, credit.payment_frequency, dueDates[0]);
+    }
+
     // Descontar stock de cada producto
     for (const pr of productRateMap) {
       await queries.decrementProductStock(
@@ -286,7 +343,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   });
 
   // Leemos DESPUÉS del COMMIT para reflejar el estado actualizado
-  return queries.findById(id);
+  return sanitizeCredit(await queries.findById(id));
 };
 
 const reject = async (id, rejectionReason, adminId) => {

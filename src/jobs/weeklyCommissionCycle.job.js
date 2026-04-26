@@ -14,8 +14,8 @@ const closeWeeklyCycle = async () => {
     const r = await pool.query(
       `SELECT
          u.full_name,
-         COALESCE(SUM(cm.amount), 0)::numeric AS pending_total,
-         COUNT(cm.id) AS pending_count
+         COALESCE(SUM(cm.amount), 0)::float8 AS pending_total,
+         COUNT(cm.id)::int AS pending_count
        FROM commissions cm
        JOIN users u ON u.id = cm.user_id
        WHERE cm.status = 'PENDING'

@@ -47,12 +47,12 @@ const findById = async (id) => {
 // Suma de pre-cargas PENDING para una cuota (monto comprometido pendiente de aprobación)
 const getPendingCommittedAmount = async (installmentId) => {
   const r = await pool.query(
-    `SELECT COALESCE(SUM(amount_received), 0) AS total
+    `SELECT COALESCE(SUM(amount_received), 0)::float8 AS total
      FROM payments
      WHERE installment_id = $1 AND status = 'PENDING'`,
     [installmentId]
   );
-  return parseFloat(r.rows[0].total);
+  return r.rows[0].total;
 };
 
 const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes }) => {
@@ -121,12 +121,12 @@ const reject = async (id, rejectionReason, adminId) => {
 // Saldo pendiente total de todas las cuotas no pagadas del crédito
 const getTotalPendingBalance = async (creditId) => {
   const r = await pool.query(
-    `SELECT COALESCE(SUM(amount_due - amount_paid), 0) AS total
+    `SELECT COALESCE(SUM(amount_due - amount_paid), 0)::float8 AS total
      FROM installments
      WHERE credit_id = $1 AND status NOT IN ('PAID')`,
     [creditId]
   );
-  return parseFloat(r.rows[0].total);
+  return r.rows[0].total;
 };
 
 // Cuotas pendientes/vencidas/parciales ordenadas desde un número de cuota dado
@@ -148,14 +148,15 @@ const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumbe
 // desde HOY + 1 período. Independientemente de cuántas cuotas se adelantaron,
 // la siguiente cuota siempre vence el próximo período desde la fecha de aprobación.
 // Guarda original_due_date antes de modificar (solo si aún no fue guardada).
-const shiftInstallmentDates = async (client, creditId, paymentFrequency) => {
+const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDueDate) => {
   let interval;
   if (paymentFrequency === 'WEEKLY')        interval = '1 week';
   else if (paymentFrequency === 'BIWEEKLY') interval = '2 weeks';
   else                                       interval = '1 month';
 
-  // CTE numerada: asigna rn=1 a la próxima cuota pendiente, rn=2 a la siguiente, etc.
-  // La nueva fecha = CURRENT_DATE + rn * intervalo
+  // Las cuotas restantes toman las fechas de las cuotas adelantadas:
+  // rn=1 → baseDueDate + 0 (toma la fecha de la primera cuota adelantada)
+  // rn=2 → baseDueDate + 1 intervalo, etc.
   await client.query(
     `WITH ordered AS (
        SELECT id, ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
@@ -164,11 +165,11 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency) => {
      )
      UPDATE installments i
      SET original_due_date = COALESCE(i.original_due_date, i.due_date),
-         due_date           = (CURRENT_DATE + (ordered.rn * $2::interval))::date,
+         due_date           = ($3::date + ((ordered.rn - 1) * $2::interval))::date,
          updated_at         = NOW()
      FROM ordered
      WHERE i.id = ordered.id`,
-    [creditId, interval]
+    [creditId, interval, baseDueDate]
   );
 };
 

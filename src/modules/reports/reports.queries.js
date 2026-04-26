@@ -222,7 +222,7 @@ const getProductsReport = async (stockThreshold = 5) => {
        p.id,
        p.name,
        p.current_price::float8                                        AS current_price,
-       p.available_stock,
+       p.available_stock::int,
        p.status,
        p.available_stock <= $1                                         AS low_stock,
        COUNT(DISTINCT cp.id)::int                                      AS times_sold,

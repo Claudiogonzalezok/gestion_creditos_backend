@@ -26,7 +26,7 @@ const getAccountSummary = async (customerId) => {
   const upcoming = await pool.query(
     `SELECT
        i.id, i.installment_number, i.due_date,
-       i.amount_due, i.amount_paid, i.penalty_amount, i.status,
+       i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
        c.id AS credit_id, c.type AS credit_type
      FROM installments i
      JOIN credits c ON c.id = i.credit_id

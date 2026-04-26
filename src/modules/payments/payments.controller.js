@@ -24,7 +24,7 @@ const create = async (req, res) => {
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
-    if (err.status === 422) return res.status(422).json({ ok: false, message: err.message });
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);
   }
 };

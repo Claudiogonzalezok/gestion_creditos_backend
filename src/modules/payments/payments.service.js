@@ -17,7 +17,7 @@ const getById = async (id) => {
 const create = async (data, requestingUser) => {
   // Verificar que la cuota exista y tenga saldo pendiente
   const instCheck = await pool.query(
-    `SELECT id, status, amount_due, amount_paid, credit_id FROM installments WHERE id = $1`,
+    `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id FROM installments WHERE id = $1`,
     [data.installment_id]
   );
   if (!instCheck.rows.length) throw { status: 404, message: 'Cuota no encontrada.' };
@@ -25,8 +25,8 @@ const create = async (data, requestingUser) => {
   if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
 
   // Calcular saldo disponible en la cuota descontando pre-cargas PENDING ya registradas
-  const amountDue     = parseFloat(inst.amount_due);
-  const amountPaid    = parseFloat(inst.amount_paid);
+  const amountDue     = inst.amount_due;
+  const amountPaid    = inst.amount_paid;
   const pendingAmount = await queries.getPendingCommittedAmount(data.installment_id);
   const available     = amountDue - amountPaid - pendingAmount;
 
@@ -127,7 +127,8 @@ const approve = async (id, adminId) => {
       await queries.shiftInstallmentDates(
         client,
         payment.credit_id,
-        payment.payment_frequency
+        payment.payment_frequency,
+        payment.due_date
       );
     }
 
