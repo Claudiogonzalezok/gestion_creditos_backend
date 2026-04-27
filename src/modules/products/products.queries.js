@@ -2,7 +2,7 @@ const pool = require('../../config/db');
 
 const findAll = async ({ status, search, categoryId } = {}) => {
   let q = `
-    SELECT p.id, p.name, p.description, p.current_price::float8,
+    SELECT p.id, p.description, p.current_price::float8,
            p.available_stock::int, p.status, p.created_at,
            pc.id AS category_id, pc.name AS category_name
     FROM products p
@@ -16,20 +16,20 @@ const findAll = async ({ status, search, categoryId } = {}) => {
   }
   if (search) {
     params.push(`%${search}%`);
-    q += ` AND p.name ILIKE $${params.length}`;
+    q += ` AND p.description ILIKE $${params.length}`;
   }
   if (categoryId) {
     params.push(categoryId);
     q += ` AND p.category_id = $${params.length}`;
   }
-  q += ` ORDER BY p.name ASC`;
+  q += ` ORDER BY p.description ASC`;
   const result = await pool.query(q, params);
   return result.rows;
 };
 
 const findById = async (id) => {
   const result = await pool.query(
-    `SELECT p.id, p.name, p.description, p.current_price::float8,
+    `SELECT p.id, p.description, p.current_price::float8,
             p.available_stock::int, p.status, p.created_at, p.updated_at,
             pc.id AS category_id, pc.name AS category_name
      FROM products p
@@ -48,9 +48,9 @@ const findActiveCategoryById = async (id) => {
   return r.rows[0] || null;
 };
 
-const findByName = async (name) => {
+const findByDescription = async (description) => {
   const result = await pool.query(
-    `SELECT id FROM products WHERE LOWER(name) = LOWER($1)`, [name]
+    `SELECT id FROM products WHERE LOWER(description) = LOWER($1)`, [description]
   );
   return result.rows[0] || null;
 };
@@ -66,27 +66,26 @@ const hasActiveCredits = async (id) => {
   return result.rows.length > 0;
 };
 
-const create = async ({ name, description, current_price, available_stock, category_id }) => {
+const create = async ({ description, current_price, available_stock, category_id }) => {
   const result = await pool.query(
-    `INSERT INTO products (name, description, current_price, available_stock, category_id)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, name, description, current_price::float8, available_stock::int, category_id, status, created_at`,
-    [name, description || null, current_price, available_stock ?? 0, category_id || null]
+    `INSERT INTO products (description, current_price, available_stock, category_id)
+     VALUES ($1, $2, $3, $4)
+     RETURNING id, description, current_price::float8, available_stock::int, category_id, status, created_at`,
+    [description, current_price, available_stock ?? 0, category_id || null]
   );
   return result.rows[0];
 };
 
-const update = async (id, { name, description, current_price, category_id }) => {
+const update = async (id, { description, current_price, category_id }) => {
   const result = await pool.query(
     `UPDATE products
-     SET name          = COALESCE($1, name),
-         description   = COALESCE($2, description),
-         current_price = COALESCE($3, current_price),
-         category_id   = COALESCE($4, category_id),
+     SET description   = COALESCE($1, description),
+         current_price = COALESCE($2, current_price),
+         category_id   = COALESCE($3, category_id),
          updated_at    = NOW()
-     WHERE id = $5
-     RETURNING id, name, description, current_price::float8, available_stock::int, category_id, status, updated_at`,
-    [name, description, current_price, category_id, id]
+     WHERE id = $4
+     RETURNING id, description, current_price::float8, available_stock::int, category_id, status, updated_at`,
+    [description, current_price, category_id, id]
   );
   return result.rows[0] || null;
 };
@@ -114,7 +113,7 @@ const adjustStock = async (id, quantity, movement, reason, userId) => {
      SET available_stock = available_stock ${operator} $1,
          updated_at      = NOW()
      WHERE id = $2
-     RETURNING id, name, available_stock::int`,
+     RETURNING id, description, available_stock::int`,
     [quantity, id]
   );
 
@@ -143,6 +142,6 @@ const activate = async (id) => {
 };
 
 module.exports = {
-  findAll, findById, findByName, findActiveCategoryById, hasActiveCredits,
+  findAll, findById, findByDescription, findActiveCategoryById, hasActiveCredits,
   create, update, adjustStock, deactivate, activate,
 };

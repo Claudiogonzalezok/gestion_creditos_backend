@@ -64,14 +64,14 @@ const create = async (data, requestingUser) => {
 
       for (const item of data.products) {
         const pRes = await client.query(
-          `SELECT id, name, current_price::float8, available_stock::int, status FROM products WHERE id = $1`,
+          `SELECT id, description, current_price::float8, available_stock::int, status FROM products WHERE id = $1`,
           [item.product_id]
         );
         const p = pRes.rows[0];
         if (!p) throw { status: 404, message: `Producto ${item.product_id} no encontrado.` };
-        if (p.status !== 'ACTIVE') throw { status: 409, message: `El producto "${p.name}" no está disponible.` };
+        if (p.status !== 'ACTIVE') throw { status: 409, message: `El producto "${p.description}" no está disponible.` };
         if (p.available_stock < item.quantity)
-          throw { status: 409, message: `Stock insuficiente para "${p.name}". Disponible: ${p.available_stock}.` };
+          throw { status: 409, message: `Stock insuficiente para "${p.description}". Disponible: ${p.available_stock}.` };
 
         // Verificar que exista tasa configurada para esta combinación
         const rateRecord = await prQueries.findActiveRate(
@@ -80,7 +80,7 @@ const create = async (data, requestingUser) => {
         if (!rateRecord)
           throw {
             status: 409,
-            message: `No existe tasa configurada para "${p.name}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
+            message: `No existe tasa configurada para "${p.description}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
           };
 
         computed += p.current_price * item.quantity;
@@ -164,25 +164,25 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
 
   for (const item of products) {
     const prodRes = await pool.query(
-      `SELECT id, name, current_price::float8, status FROM products WHERE id = $1`, [item.product_id]
+      `SELECT id, description, current_price::float8, status FROM products WHERE id = $1`, [item.product_id]
     );
     const p = prodRes.rows[0];
     if (!p) throw { status: 404, message: `Producto ${item.product_id} no encontrado.` };
     if (p.status !== 'ACTIVE')
-      throw { status: 409, message: `El producto "${p.name}" no está disponible.` };
+      throw { status: 409, message: `El producto "${p.description}" no está disponible.` };
 
     const rateRecord = await prQueries.findActiveRate(p.id, payment_frequency, installments_count);
     if (!rateRecord)
       throw {
         status: 404,
-        message: `No existe tasa configurada para "${p.name}" con ${installments_count} cuotas ${payment_frequency}.`,
+        message: `No existe tasa configurada para "${p.description}" con ${installments_count} cuotas ${payment_frequency}.`,
       };
 
     const lineTotal = p.current_price * item.quantity;
     const coef      = parseFloat(rateRecord.rate);
 
     totalBase += lineTotal;
-    items.push({ product_id: p.id, product_name: p.name, quantity: item.quantity, unit_price: p.current_price, line_total: lineTotal, rate: coef });
+    items.push({ product_id: p.id, product_name: p.description, quantity: item.quantity, unit_price: p.current_price, line_total: lineTotal, rate: coef });
   }
 
   const downPayment    = parseFloat(down_payment || 0);
@@ -261,14 +261,14 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     if (p.available_stock < p.quantity)
       throw {
         status: 409,
-        message: `Stock insuficiente para "${p.name}". Disponible: ${p.available_stock}. Solicitadas: ${p.quantity}.`,
+        message: `Stock insuficiente para "${p.description}". Disponible: ${p.available_stock}. Solicitadas: ${p.quantity}.`,
       };
 
     const rateRecord = await prQueries.findActiveRate(p.product_id, credit.payment_frequency, installmentsCount);
     if (!rateRecord)
       throw {
         status: 409,
-        message: `No existe tasa configurada para "${p.name}" con ${installmentsCount} cuotas ${credit.payment_frequency}.`,
+        message: `No existe tasa configurada para "${p.description}" con ${installmentsCount} cuotas ${credit.payment_frequency}.`,
       };
 
     const lineTotal      = parseFloat(p.historical_price) * p.quantity;
@@ -280,7 +280,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       creditProductId: p.id,
       productId:       p.product_id,
       rate:            rateRecord.rate,
-      name:            p.name,
+      name:            p.description,
       quantity:        p.quantity,
     });
   }

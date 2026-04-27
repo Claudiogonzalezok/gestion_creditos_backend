@@ -44,7 +44,7 @@ const findById = async (id) => {
   if (credit.type === 'SALE') {
     const products = await pool.query(
       `SELECT cp.id, cp.quantity::int, cp.historical_price::float8, cp.historical_rate::float8,
-              p.id AS product_id, p.name AS product_name
+              p.id AS product_id, p.description AS product_name
        FROM credit_products cp
        JOIN products p ON p.id = cp.product_id
        WHERE cp.credit_id = $1`, [id]
@@ -65,7 +65,7 @@ const findById = async (id) => {
 const findCreditProducts = async (creditId) => {
   const r = await pool.query(
     `SELECT cp.id, cp.product_id, cp.quantity::int, cp.historical_price::float8, cp.historical_rate::float8,
-            p.available_stock::int, p.name
+            p.available_stock::int, p.description
      FROM credit_products cp
      JOIN products p ON p.id = cp.product_id
      WHERE cp.credit_id = $1`,

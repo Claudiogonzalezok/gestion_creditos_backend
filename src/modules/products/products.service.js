@@ -16,24 +16,24 @@ const validateCategory = async (category_id) => {
   if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
 };
 
-const create = async ({ name, description, current_price, available_stock, category_id }) => {
-  if (await queries.findByName(name))
-    throw { status: 409, message: 'Ya existe un producto registrado con ese nombre.' };
+const create = async ({ description, current_price, available_stock, category_id }) => {
+  if (await queries.findByDescription(description))
+    throw { status: 409, message: 'Ya existe un producto registrado con esa descripción.' };
   await validateCategory(category_id);
-  return queries.create({ name, description, current_price, available_stock, category_id });
+  return queries.create({ description, current_price, available_stock, category_id });
 };
 
-const update = async (id, { name, description, current_price, category_id }) => {
+const update = async (id, { description, current_price, category_id }) => {
   const existing = await queries.findById(id);
   if (!existing) throw { status: 404, message: 'Producto no encontrado.' };
 
-  if (name && name.toLowerCase() !== existing.name.toLowerCase()) {
-    if (await queries.findByName(name))
-      throw { status: 409, message: 'Ya existe un producto registrado con ese nombre.' };
+  if (description && description.toLowerCase() !== existing.description.toLowerCase()) {
+    if (await queries.findByDescription(description))
+      throw { status: 409, message: 'Ya existe un producto registrado con esa descripción.' };
   }
 
   await validateCategory(category_id);
-  return queries.update(id, { name, description, current_price, category_id });
+  return queries.update(id, { description, current_price, category_id });
 };
 
 const adjustStock = async (id, quantity, movement, reason, userId) => {

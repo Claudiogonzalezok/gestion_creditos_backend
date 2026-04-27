@@ -26,8 +26,8 @@ const getById = async (req, res) => {
 // POST /api/products
 const create = async (req, res) => {
   try {
-    const { name, description, current_price, available_stock, category_id } = req.body;
-    const product = await service.create({ name, description, current_price, available_stock, category_id });
+    const { description, current_price, available_stock, category_id } = req.body;
+    const product = await service.create({ description, current_price, available_stock, category_id });
     return response.created(res, product, 'Producto registrado correctamente.');
   } catch (err) {
     if (err.status === 409) return response.conflict(res, err.message);
@@ -39,8 +39,8 @@ const create = async (req, res) => {
 // PUT /api/products/:id
 const update = async (req, res) => {
   try {
-    const { name, description, current_price, category_id } = req.body;
-    const product = await service.update(req.params.id, { name, description, current_price, category_id });
+    const { description, current_price, category_id } = req.body;
+    const product = await service.update(req.params.id, { description, current_price, category_id });
     return response.success(res, product, 'Producto actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

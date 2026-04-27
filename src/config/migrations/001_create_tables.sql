@@ -71,8 +71,7 @@ CREATE TABLE public.product_categories (
 -- ── 4. products ──────────────────────────────────────────────
 CREATE TABLE public.products (
     id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-    name            VARCHAR(150)    NOT NULL UNIQUE,
-    description     TEXT            NULL,
+    description     TEXT            NOT NULL UNIQUE,
     current_price   NUMERIC(12,2)   NOT NULL
                         CONSTRAINT products_current_price_check CHECK (current_price > 0),
     available_stock INTEGER         NOT NULL DEFAULT 0

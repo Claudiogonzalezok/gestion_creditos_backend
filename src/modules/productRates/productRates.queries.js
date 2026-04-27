@@ -1,7 +1,7 @@
 const pool = require('../../config/db');
 
 const COLS = `
-    pr.id, pr.product_id, p.name AS product_name,
+    pr.id, pr.product_id, p.description AS product_name,
     pr.payment_frequency, pr.installments_count::int,
     pr.rate::float8, pr.active, pr.created_at, pr.updated_at`;
 
@@ -16,7 +16,7 @@ const findAll = async (productId) => {
     params.push(productId);
     q += ` AND pr.product_id = $${params.length}`;
   }
-  q += ` ORDER BY p.name, pr.payment_frequency, pr.installments_count`;
+  q += ` ORDER BY p.description, pr.payment_frequency, pr.installments_count`;
   return (await pool.query(q, params)).rows;
 };
 

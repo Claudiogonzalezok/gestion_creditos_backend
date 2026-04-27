@@ -196,9 +196,7 @@ const customers = {
 // ── PRODUCTS ──────────────────────────────────────────────────
 const products = {
   create: [
-    isString('name', 'El nombre del producto', { min: 2, max: 150 }),
-    body('description').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 1000 }).withMessage('La descripción no puede superar los 1000 caracteres.'),
+    isString('description', 'La descripción del producto', { min: 2, max: 500 }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
     body('available_stock')
       .isInt({ min: 0, max: 999999 })
@@ -207,9 +205,7 @@ const products = {
   ],
   update: [
     isUUIDParam('id', 'El ID de producto'),
-    isString('name', 'El nombre del producto', { min: 2, max: 150, required: false }),
-    body('description').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 1000 }).withMessage('La descripción no puede superar los 1000 caracteres.'),
+    isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
     isUUID('category_id', 'El ID de categoría', false),
   ],

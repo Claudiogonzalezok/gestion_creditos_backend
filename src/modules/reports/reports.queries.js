@@ -220,7 +220,7 @@ const getProductsReport = async (stockThreshold = 5) => {
   const r = await pool.query(
     `SELECT
        p.id,
-       p.name,
+       p.description,
        p.current_price::float8                                        AS current_price,
        p.available_stock::int,
        p.status,
@@ -235,7 +235,7 @@ const getProductsReport = async (stockThreshold = 5) => {
      LEFT JOIN credit_products cp ON cp.product_id = p.id
      LEFT JOIN credits c          ON c.id = cp.credit_id AND c.status IN ('ACTIVE','SETTLED')
      LEFT JOIN product_rates pr   ON pr.product_id = p.id
-     GROUP BY p.id, p.name, p.current_price, p.available_stock, p.status
+     GROUP BY p.id, p.description, p.current_price, p.available_stock, p.status
      ORDER BY times_sold DESC`,
     [stockThreshold]
   );
