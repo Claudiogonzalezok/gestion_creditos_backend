@@ -1,1 +1,0 @@
--- Contenido consolidado en 001_create_tables.sql
