@@ -1,0 +1,3 @@
+-- Contenido consolidado en 001_create_tables.sql
+-- Las asignaciones de categorías a productos existentes se hacen
+-- manualmente o desde el panel de administración.

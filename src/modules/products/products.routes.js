@@ -10,7 +10,10 @@ router.use(authenticate);
 // Lectura — Admin y Vendedor
 router.get('/',
   authorize('ADMIN','SELLER','SELLER_COLLECTOR'),
-  [ query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.') ],
+  [
+    query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.'),
+    query('category_id').optional().isUUID().withMessage('category_id debe ser un UUID válido.'),
+  ],
   validate,
   controller.getAll
 );

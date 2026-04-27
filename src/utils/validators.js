@@ -203,6 +203,7 @@ const products = {
     body('available_stock')
       .isInt({ min: 0, max: 999999 })
       .withMessage('El stock debe ser un número entero entre 0 y 999.999.'),
+    isUUID('category_id', 'El ID de categoría', false),
   ],
   update: [
     isUUIDParam('id', 'El ID de producto'),
@@ -210,6 +211,7 @@ const products = {
     body('description').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 1000 }).withMessage('La descripción no puede superar los 1000 caracteres.'),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
+    isUUID('category_id', 'El ID de categoría', false),
   ],
   adjustStock: [
     isUUIDParam('id', 'El ID de producto'),
@@ -502,6 +504,14 @@ const expenseCategories = {
   id: [ isUUIDParam('id', 'El ID de categoría') ],
 };
 
+// ── PRODUCT CATEGORIES ────────────────────────────────────────
+const productCategories = {
+  create: [
+    isString('name', 'El nombre de la categoría', { min: 2, max: 100 }),
+  ],
+  id: [ isUUIDParam('id', 'El ID de categoría') ],
+};
+
 // ── COMMISSIONS ───────────────────────────────────────────────
 const commissions = {
   liquidate: [
@@ -543,5 +553,6 @@ module.exports = {
   commissions,
   expenses,
   expenseCategories,
+  productCategories,
   auth,
 };
