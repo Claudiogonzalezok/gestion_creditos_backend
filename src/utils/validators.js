@@ -485,11 +485,21 @@ const expenses = {
   create: [
     isPositiveNumber('amount', 'El monto', { min: 0.01, max: 99999999 }),
     isString('description', 'La descripción', { min: 2, max: 500 }),
+    isDate('expense_date', 'La fecha del gasto'),
     isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
+    isUUID('category_id', 'El ID de categoría', false),
     body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 100 }).withMessage('La referencia no puede superar los 100 caracteres.'),
   ],
   id: [ isUUIDParam('id', 'El ID de gasto') ],
+};
+
+// ── EXPENSE CATEGORIES ────────────────────────────────────────
+const expenseCategories = {
+  create: [
+    isString('name', 'El nombre de la categoría', { min: 2, max: 100 }),
+  ],
+  id: [ isUUIDParam('id', 'El ID de categoría') ],
 };
 
 // ── COMMISSIONS ───────────────────────────────────────────────
@@ -532,5 +542,6 @@ module.exports = {
   collections,
   commissions,
   expenses,
+  expenseCategories,
   auth,
 };

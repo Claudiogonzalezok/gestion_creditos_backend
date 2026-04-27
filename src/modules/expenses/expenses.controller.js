@@ -3,8 +3,8 @@ const response = require('../../utils/response');
 
 const getAll = async (req, res) => {
   try {
-    const { date_from, date_to, page, limit } = req.query;
-    return response.success(res, await service.getAll({ dateFrom: date_from, dateTo: date_to, page, limit }));
+    const { date_from, date_to, category_id, page, limit } = req.query;
+    return response.success(res, await service.getAll({ dateFrom: date_from, dateTo: date_to, categoryId: category_id, page, limit }));
   } catch (err) { return response.serverError(res, err); }
 };
 
@@ -21,7 +21,10 @@ const create = async (req, res) => {
   try {
     const result = await service.create(req.body, req.user);
     return response.created(res, result, 'Gasto registrado correctamente.');
-  } catch (err) { return response.serverError(res, err); }
+  } catch (err) {
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
 const remove = async (req, res) => {

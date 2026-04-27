@@ -1,7 +1,7 @@
 const queries = require('./expenses.queries');
 
-const getAll = async ({ dateFrom, dateTo, page, limit } = {}) => {
-  return queries.findAll({ dateFrom, dateTo, page, limit });
+const getAll = async ({ dateFrom, dateTo, categoryId, page, limit } = {}) => {
+  return queries.findAll({ dateFrom, dateTo, categoryId, page, limit });
 };
 
 const getById = async (id) => {
@@ -11,11 +11,17 @@ const getById = async (id) => {
 };
 
 const create = async (data, requestingUser) => {
+  if (data.category_id) {
+    const category = await queries.findActiveCategoryById(data.category_id);
+    if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
+  }
   return queries.create({
     amount:            parseFloat(data.amount),
     description:       data.description,
+    expenseDate:       data.expense_date,
     paymentMethod:     data.payment_method,
     transferReference: data.transfer_reference || null,
+    categoryId:        data.category_id || null,
     createdBy:         requestingUser.id,
   });
 };
