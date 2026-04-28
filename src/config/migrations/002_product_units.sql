@@ -11,6 +11,18 @@
 BEGIN;
 
 -- ── 1. Eliminar datos incompatibles (solo SALE) ───────────────
+-- Detalles de planillas que referencian cuotas de créditos SALE
+DELETE FROM collection_sheet_details
+WHERE installment_id IN (
+  SELECT i.id FROM installments i
+  JOIN credits c ON c.id = i.credit_id
+  WHERE c.type = 'SALE'
+);
+
+-- Planillas de cobro que quedaron sin detalles (opcional, limpieza)
+DELETE FROM collection_sheets
+WHERE id NOT IN (SELECT DISTINCT sheet_id FROM collection_sheet_details);
+
 -- Pagos vinculados a cuotas de créditos SALE
 DELETE FROM payments
 WHERE installment_id IN (
