@@ -42,16 +42,17 @@ const findById = async (id) => {
   const credit = r.rows[0];
 
   if (credit.type === 'SALE') {
-    // Una fila por unidad: incluye datos del producto y de la unidad
     const units = await pool.query(
       `SELECT cp.id, cp.historical_price::float8, cp.historical_rate::float8,
-              pu.id AS unit_id, pu.unit_code, pu.status AS unit_status,
-              p.id  AS product_id, p.description AS product_name
+              pu.id   AS unit_id,   pu.unit_code, pu.status AS unit_status,
+              pv.id   AS variant_id, pv.color, pv.size, pv.capacity,
+              p.id    AS product_id, p.description AS product_name
        FROM credit_products cp
-       JOIN product_units pu ON pu.id = cp.product_unit_id
-       JOIN products p       ON p.id  = pu.product_id
+       JOIN product_units    pu ON pu.id  = cp.product_unit_id
+       JOIN product_variants pv ON pv.id  = pu.variant_id
+       JOIN products         p  ON p.id   = pv.product_id
        WHERE cp.credit_id = $1
-       ORDER BY p.description, pu.unit_code`,
+       ORDER BY p.description, pv.color NULLS FIRST, pu.unit_code`,
       [id]
     );
     credit.units = units.rows;
@@ -67,21 +68,18 @@ const findById = async (id) => {
   return credit;
 };
 
-// Devuelve las unidades de un crédito SALE con info de producto y tasa
+// Devuelve las unidades de un crédito SALE con product_id para agrupar tasas
 const findCreditUnits = async (creditId) => {
   const r = await pool.query(
     `SELECT cp.id AS credit_product_id,
             cp.historical_price::float8,
-            pu.id AS unit_id, pu.product_id, pu.status AS unit_status,
-            p.description, p.available_count
+            pu.id AS unit_id, pu.status AS unit_status,
+            pv.id AS variant_id, pv.product_id,
+            p.description
      FROM credit_products cp
-     JOIN product_units pu ON pu.id = cp.product_unit_id
-     JOIN products p       ON p.id  = pu.product_id
-     LEFT JOIN LATERAL (
-       SELECT COUNT(*)::int AS available_count
-       FROM product_units pu2
-       WHERE pu2.product_id = p.id AND pu2.status = 'AVAILABLE'
-     ) ac ON TRUE
+     JOIN product_units    pu ON pu.id  = cp.product_unit_id
+     JOIN product_variants pv ON pv.id  = pu.variant_id
+     JOIN products         p  ON p.id   = pv.product_id
      WHERE cp.credit_id = $1`,
     [creditId]
   );
@@ -114,7 +112,6 @@ const create = async (client, {
   return r.rows[0];
 };
 
-// Inserta una fila en credit_products por cada unidad
 const createCreditUnit = async (client, creditId, unitId, historicalPrice) => {
   await client.query(
     `INSERT INTO credit_products (credit_id, product_unit_id, historical_price)
@@ -123,7 +120,6 @@ const createCreditUnit = async (client, creditId, unitId, historicalPrice) => {
   );
 };
 
-// Congela el coeficiente de interés por unidad al aprobar
 const saveHistoricalRate = async (client, creditProductId, rate) => {
   await client.query(
     `UPDATE credit_products SET historical_rate = $1 WHERE id = $2`,
@@ -170,7 +166,6 @@ const reject = async (id, rejectionReason, adminId) => {
   );
 };
 
-// Devuelve los unit_ids asociados a un crédito SALE (para liberar al rechazar)
 const findCreditUnitIds = async (creditId) => {
   const r = await pool.query(
     `SELECT pu.id AS unit_id

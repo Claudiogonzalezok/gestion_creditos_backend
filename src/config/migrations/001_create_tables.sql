@@ -68,42 +68,73 @@ CREATE TABLE public.product_categories (
     created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- ── 4. products ──────────────────────────────────────────────
+-- ── 4. product_brands ────────────────────────────────────────
+CREATE TABLE public.product_brands (
+    id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       VARCHAR(100) NOT NULL UNIQUE,
+    active     BOOLEAN      NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+
+-- ── 5. products ──────────────────────────────────────────────
 -- El stock disponible se obtiene como COUNT de product_units con status AVAILABLE.
+-- El precio vive en product_variants, no en products.
 CREATE TABLE public.products (
-    id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-    description     TEXT            NOT NULL UNIQUE,
-    current_price   NUMERIC(12,2)   NOT NULL
-                        CONSTRAINT products_current_price_check CHECK (current_price > 0),
-    category_id     UUID            NULL REFERENCES product_categories(id),
-    status          VARCHAR(20)     NOT NULL DEFAULT 'ACTIVE'
-                        CONSTRAINT products_status_check CHECK (status IN ('ACTIVE','INACTIVE')),
-    created_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+    id          UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    title       VARCHAR(150)    NOT NULL UNIQUE,
+    description TEXT            NULL,
+    model       VARCHAR(100)    NULL,
+    brand_id    UUID            NULL REFERENCES product_brands(id) ON UPDATE CASCADE,
+    category_id UUID            NULL REFERENCES product_categories(id) ON UPDATE CASCADE,
+    status      VARCHAR(20)     NOT NULL DEFAULT 'ACTIVE'
+                    CONSTRAINT products_status_check CHECK (status IN ('ACTIVE','INACTIVE')),
+    created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_products_status   ON products(status);
 CREATE INDEX idx_products_category ON products(category_id);
+CREATE INDEX idx_products_brand    ON products(brand_id);
 
--- ── 5. product_units ─────────────────────────────────────────
+-- ── 6. product_variants ──────────────────────────────────────
+-- Cada variante es una combinación de atributos con su propio precio.
+-- Un producto debe tener al menos una variante para poder venderse.
+CREATE TABLE public.product_variants (
+    id            UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id    UUID            NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
+    color         VARCHAR(50)     NULL,
+    size          VARCHAR(50)     NULL,
+    capacity      VARCHAR(50)     NULL,
+    current_price NUMERIC(12,2)   NOT NULL
+                      CONSTRAINT product_variants_current_price_check CHECK (current_price > 0),
+    status        VARCHAR(15)     NOT NULL DEFAULT 'ACTIVE'
+                      CONSTRAINT product_variants_status_check CHECK (status IN ('ACTIVE','INACTIVE')),
+    created_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ     NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_product_variants_product ON product_variants(product_id);
+CREATE INDEX idx_product_variants_status  ON product_variants(status);
+
+-- ── 7. product_units ─────────────────────────────────────────
 -- Cada fila representa una unidad física individual con código único.
+-- Referencia a la variante (que a su vez referencia el producto).
 -- status: AVAILABLE → libre; RESERVED → en crédito pendiente de aprobación;
 --         SOLD → en crédito activo/liquidado; INACTIVE → dada de baja.
 CREATE TABLE public.product_units (
-    id          UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-    product_id  UUID            NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
-    unit_code   VARCHAR(100)    NOT NULL,
-    status      VARCHAR(15)     NOT NULL DEFAULT 'AVAILABLE'
-                    CONSTRAINT product_units_status_check
-                    CHECK (status IN ('AVAILABLE','RESERVED','SOLD','INACTIVE')),
-    notes       TEXT            NULL,
-    created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    id         UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    variant_id UUID            NOT NULL REFERENCES product_variants(id) ON UPDATE CASCADE,
+    unit_code  VARCHAR(100)    NOT NULL,
+    status     VARCHAR(15)     NOT NULL DEFAULT 'AVAILABLE'
+                   CONSTRAINT product_units_status_check
+                   CHECK (status IN ('AVAILABLE','RESERVED','SOLD','INACTIVE')),
+    notes      TEXT            NULL,
+    created_at TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     CONSTRAINT product_units_unit_code_unique UNIQUE (unit_code)
 );
-CREATE INDEX idx_product_units_product ON product_units(product_id);
+CREATE INDEX idx_product_units_variant ON product_units(variant_id);
 CREATE INDEX idx_product_units_status  ON product_units(status);
 
--- ── 6. stock_movements ───────────────────────────────────────
+-- ── 8. stock_movements ───────────────────────────────────────
 -- Registra altas (IN) y bajas (OUT) manuales de unidades.
 -- product_unit_id apunta a la unidad específica cuando aplica.
 CREATE TABLE public.stock_movements (
@@ -120,10 +151,8 @@ CREATE INDEX idx_stock_movements_product ON stock_movements(product_id);
 CREATE INDEX idx_stock_movements_unit    ON stock_movements(product_unit_id);
 CREATE INDEX idx_stock_movements_date    ON stock_movements(created_at);
 
--- ── 6. interest_rates ────────────────────────────────────────
+-- ── 9. interest_rates ────────────────────────────────────────
 -- Exclusivo para créditos tipo LOAN (préstamos en efectivo).
--- rate = coeficiente - 1 (ej: coef 1.32 → rate 0.32)
--- findActiveRate(): WHERE $amount >= min_amount AND ($amount <= max_amount OR max_amount IS NULL)
 CREATE TABLE public.interest_rates (
     id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     installments_count  SMALLINT        NOT NULL
@@ -145,10 +174,9 @@ CREATE INDEX idx_interest_rates_freq   ON interest_rates(payment_frequency);
 CREATE INDEX idx_interest_rates_active ON interest_rates(active);
 CREATE INDEX idx_interest_rates_amount ON interest_rates(min_amount, max_amount);
 
--- ── 7. product_rates ─────────────────────────────────────────
+-- ── 10. product_rates ─────────────────────────────────────────
 -- Exclusivo para créditos tipo SALE (ventas de productos).
--- Cada producto tiene su propia matriz de coeficientes por frecuencia y cuotas.
--- historical_rate se congela en credit_products al aprobar el crédito.
+-- Aplica al producto padre, compartido por todas sus variantes.
 CREATE TABLE public.product_rates (
     id                 UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     product_id         UUID            NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
@@ -169,7 +197,7 @@ CREATE TABLE public.product_rates (
 CREATE INDEX idx_product_rates_product ON product_rates(product_id);
 CREATE INDEX idx_product_rates_active  ON product_rates(active);
 
--- ── 8. credits ───────────────────────────────────────────────
+-- ── 11. credits ───────────────────────────────────────────────
 CREATE TABLE public.credits (
     id                                UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     customer_id                       UUID            NOT NULL REFERENCES customers(id) ON UPDATE CASCADE,
@@ -219,7 +247,7 @@ CREATE INDEX idx_credits_type       ON credits(type);
 CREATE INDEX idx_credits_frequency  ON credits(payment_frequency);
 CREATE INDEX idx_credits_approved   ON credits(approved_at);
 
--- ── 9. credit_products ───────────────────────────────────────
+-- ── 12. credit_products ───────────────────────────────────────
 -- Una fila por unidad física vendida. historical_rate se congela al aprobar.
 CREATE TABLE public.credit_products (
     id               UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -232,9 +260,7 @@ CREATE TABLE public.credit_products (
 CREATE INDEX idx_credit_products_credit ON credit_products(credit_id);
 CREATE INDEX idx_credit_products_unit   ON credit_products(product_unit_id);
 
--- ── 10. installments ─────────────────────────────────────────
--- original_due_date se registra la primera vez que la fecha de vencimiento
--- es corrida por un pago adelantado; permite auditar el cronograma original.
+-- ── 13. installments ─────────────────────────────────────────
 CREATE TABLE public.installments (
     id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     credit_id           UUID            NOT NULL REFERENCES credits(id) ON UPDATE CASCADE,
@@ -263,7 +289,7 @@ CREATE INDEX idx_installments_credit   ON installments(credit_id);
 CREATE INDEX idx_installments_status   ON installments(status);
 CREATE INDEX idx_installments_due_date ON installments(due_date);
 
--- ── 11. payments ─────────────────────────────────────────────
+-- ── 14. payments ─────────────────────────────────────────────
 CREATE TABLE public.payments (
     id                  UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     installment_id      UUID            NOT NULL REFERENCES installments(id) ON UPDATE CASCADE,
@@ -288,10 +314,7 @@ CREATE INDEX idx_payments_collector   ON payments(collector_id);
 CREATE INDEX idx_payments_status      ON payments(status);
 CREATE INDEX idx_payments_created     ON payments(created_at);
 
--- ── 12. credit_down_payments ─────────────────────────────────
--- Registra enganches y adelantos de cuotas aprobados al momento de la venta.
--- Independiente de payments (no están ligados a ninguna cuota específica).
--- payment_type: DOWN_PAYMENT = enganche, PREPAID_INSTALLMENT = cuotas adelantadas
+-- ── 15. credit_down_payments ─────────────────────────────────
 CREATE TABLE public.credit_down_payments (
     id                 UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     credit_id          UUID            NOT NULL REFERENCES credits(id) ON UPDATE CASCADE,
@@ -310,7 +333,7 @@ CREATE TABLE public.credit_down_payments (
 CREATE INDEX idx_credit_down_payments_credit ON credit_down_payments(credit_id);
 CREATE INDEX idx_credit_down_payments_date   ON credit_down_payments(created_at);
 
--- ── 13. cash_registers ───────────────────────────────────────
+-- ── 16. cash_registers ───────────────────────────────────────
 CREATE TABLE public.cash_registers (
     id                UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     register_date     DATE            NOT NULL UNIQUE,
@@ -329,7 +352,7 @@ CREATE TABLE public.cash_registers (
 );
 CREATE INDEX idx_cash_registers_date ON cash_registers(register_date);
 
--- ── 14. collection_sheets ────────────────────────────────────
+-- ── 17. collection_sheets ────────────────────────────────────
 CREATE TABLE public.collection_sheets (
     id           UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     sheet_date   DATE            NOT NULL,
@@ -345,7 +368,7 @@ CREATE TABLE public.collection_sheets (
 CREATE INDEX idx_collection_sheets_date      ON collection_sheets(sheet_date);
 CREATE INDEX idx_collection_sheets_collector ON collection_sheets(collector_id);
 
--- ── 15. collection_sheet_details ─────────────────────────────
+-- ── 18. collection_sheet_details ─────────────────────────────
 CREATE TABLE public.collection_sheet_details (
     id             UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     sheet_id       UUID            NOT NULL REFERENCES collection_sheets(id) ON UPDATE CASCADE,
@@ -358,7 +381,7 @@ CREATE TABLE public.collection_sheet_details (
 CREATE INDEX idx_csd_sheet       ON collection_sheet_details(sheet_id);
 CREATE INDEX idx_csd_installment ON collection_sheet_details(installment_id);
 
--- ── 16. token_blacklist ──────────────────────────────────────
+-- ── 19. token_blacklist ──────────────────────────────────────
 CREATE TABLE public.token_blacklist (
     id          UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     token_jti   VARCHAR(255)    NOT NULL UNIQUE,
@@ -375,7 +398,7 @@ CREATE TABLE public.token_blacklist (
 CREATE INDEX idx_token_blacklist_jti     ON token_blacklist(token_jti);
 CREATE INDEX idx_token_blacklist_expires ON token_blacklist(expires_at);
 
--- ── 17. salaries ─────────────────────────────────────────────
+-- ── 20. salaries ─────────────────────────────────────────────
 CREATE TABLE public.salaries (
     id            UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id       UUID            NOT NULL REFERENCES users(id) ON UPDATE CASCADE,
@@ -387,7 +410,7 @@ CREATE TABLE public.salaries (
 CREATE INDEX idx_salaries_user   ON salaries(user_id);
 CREATE INDEX idx_salaries_active ON salaries(active);
 
--- ── 18. commissions ──────────────────────────────────────────
+-- ── 21. commissions ──────────────────────────────────────────
 CREATE TABLE public.commissions (
     id         UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id    UUID            NOT NULL REFERENCES users(id) ON UPDATE CASCADE,
@@ -406,7 +429,7 @@ CREATE INDEX idx_commissions_credit ON commissions(credit_id);
 CREATE INDEX idx_commissions_status ON commissions(status);
 CREATE INDEX idx_commissions_week   ON commissions(week_start, week_end);
 
--- ── 19. commission_liquidations ──────────────────────────────
+-- ── 22. commission_liquidations ──────────────────────────────
 CREATE TABLE public.commission_liquidations (
     id                 UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id            UUID            NOT NULL REFERENCES users(id) ON UPDATE CASCADE,
@@ -429,7 +452,7 @@ CREATE TABLE public.commission_liquidations (
 CREATE INDEX idx_comm_liq_user ON commission_liquidations(user_id);
 CREATE INDEX idx_comm_liq_week ON commission_liquidations(week_start);
 
--- ── 20. expense_categories ───────────────────────────────────
+-- ── 23. expense_categories ───────────────────────────────────
 CREATE TABLE public.expense_categories (
     id         UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     name       VARCHAR(100) NOT NULL UNIQUE,
@@ -437,7 +460,7 @@ CREATE TABLE public.expense_categories (
     created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- ── 21. expenses ─────────────────────────────────────────────
+-- ── 24. expenses ─────────────────────────────────────────────
 CREATE TABLE public.expenses (
     id                 UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     amount             NUMERIC(12,2)   NOT NULL
@@ -457,7 +480,7 @@ CREATE INDEX idx_expenses_created_at ON expenses(created_at);
 CREATE INDEX idx_expenses_created_by ON expenses(created_by);
 CREATE INDEX idx_expenses_category   ON expenses(category_id);
 
--- ── 22. system_config ────────────────────────────────────────
+-- ── 25. system_config ────────────────────────────────────────
 CREATE TABLE public.system_config (
     key         VARCHAR(100)    PRIMARY KEY,
     value       VARCHAR(255)    NOT NULL,
@@ -470,7 +493,6 @@ CREATE TABLE public.system_config (
 --  DATOS INICIALES
 -- ============================================================
 
--- ── Categorías de gastos ──────────────────────────────────────
 INSERT INTO public.expense_categories (name) VALUES
     ('Alquiler'),
     ('Servicios'),
@@ -478,7 +500,6 @@ INSERT INTO public.expense_categories (name) VALUES
     ('Insumos'),
     ('Otros');
 
--- ── Categorías de productos ───────────────────────────────────
 INSERT INTO public.product_categories (name) VALUES
     ('Electrónica'),
     ('Electrodomésticos'),

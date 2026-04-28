@@ -196,14 +196,18 @@ const customers = {
 // ── PRODUCTS ──────────────────────────────────────────────────
 const products = {
   create: [
-    isString('description', 'La descripción del producto', { min: 2, max: 500 }),
-    isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
+    isString('title', 'El título del producto', { min: 2, max: 150 }),
+    isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
+    isString('model', 'El modelo', { min: 1, max: 100, required: false }),
+    isUUID('brand_id', 'El ID de marca', false),
     isUUID('category_id', 'El ID de categoría', false),
   ],
   update: [
     isUUIDParam('id', 'El ID de producto'),
+    isString('title', 'El título del producto', { min: 2, max: 150, required: false }),
     isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
-    isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
+    isString('model', 'El modelo', { min: 1, max: 100, required: false }),
+    isUUID('brand_id', 'El ID de marca', false),
     isUUID('category_id', 'El ID de categoría', false),
   ],
   id: [ isUUIDParam('id', 'El ID de producto') ],
@@ -278,8 +282,8 @@ const credits = {
       }),
     body('products').optional().isArray({ min: 1 })
       .withMessage('Los productos deben ser un arreglo con al menos un ítem.'),
-    body('products.*.product_id').optional()
-      .isUUID().withMessage('Cada product_id debe ser un UUID válido.'),
+    body('products.*.variant_id').optional()
+      .isUUID().withMessage('Cada variant_id debe ser un UUID válido.'),
     body('products.*.quantity').optional()
       .isInt({ min: 1, max: 9999 }).withMessage('La cantidad debe ser entre 1 y 9999.'),
     body('down_payment').optional({ nullable: true })
@@ -293,7 +297,7 @@ const credits = {
       if (body.type === 'LOAN' && !body.total_amount)
         throw new Error('El monto total es obligatorio para préstamos.');
       if (body.type === 'SALE' && (!body.products || !body.products.length))
-        throw new Error('Para ventas se deben indicar los productos (la tasa se obtiene por producto).');
+        throw new Error('Para ventas se deben indicar las variantes con cantidad (products[{variant_id, quantity}]).');
       return true;
     }),
     body('installments_count')
@@ -433,6 +437,25 @@ const collections = {
   id: [ isUUIDParam('id', 'El ID de planilla') ],
 };
 
+// ── PRODUCT VARIANTS ─────────────────────────────────────────
+const productVariants = {
+  create: [
+    isUUID('product_id', 'El ID de producto'),
+    isString('color',    'El color',    { min: 1, max: 50,  required: false }),
+    isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
+    isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
+    isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
+  ],
+  update: [
+    isUUIDParam('id', 'El ID de variante'),
+    isString('color',    'El color',    { min: 1, max: 50,  required: false }),
+    isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
+    isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
+    isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
+  ],
+  id: [ isUUIDParam('id', 'El ID de variante') ],
+};
+
 // ── PRODUCT RATES ────────────────────────────────────────────
 const productRates = {
   create: [
@@ -524,6 +547,7 @@ module.exports = {
   users,
   customers,
   products,
+  productVariants,
   credits,
   payments,
   interestRates,

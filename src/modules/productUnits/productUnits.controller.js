@@ -3,8 +3,8 @@ const response = require('../../utils/response');
 
 const getAll = async (req, res) => {
   try {
-    const { product_id, status, search } = req.query;
-    return response.success(res, await service.getAll({ productId: product_id, status, search }));
+    const { variant_id, product_id, status, search } = req.query;
+    return response.success(res, await service.getAll({ variantId: variant_id, productId: product_id, status, search }));
   } catch (err) { return response.serverError(res, err); }
 };
 
@@ -19,8 +19,8 @@ const getById = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { product_id, unit_code, notes } = req.body;
-    const unit = await service.create({ productId: product_id, unitCode: unit_code, notes }, req.user.id);
+    const { variant_id, unit_code, notes } = req.body;
+    const unit = await service.create({ variantId: variant_id, unitCode: unit_code, notes }, req.user.id);
     return response.created(res, unit, 'Unidad registrada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
@@ -31,8 +31,8 @@ const create = async (req, res) => {
 
 const createBulk = async (req, res) => {
   try {
-    const { product_id, units } = req.body;
-    const result = await service.createBulk(product_id, units, req.user.id);
+    const { variant_id, units } = req.body;
+    const result = await service.createBulk(variant_id, units, req.user.id);
     return response.created(res, result, `${result.created} unidad(es) registrada(s) correctamente.`);
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

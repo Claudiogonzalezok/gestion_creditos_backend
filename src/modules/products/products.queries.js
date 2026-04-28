@@ -1,43 +1,99 @@
 const pool = require('../../config/db');
 
-// available_count = unidades con status AVAILABLE para ese producto
 const findAll = async ({ status, search, categoryId } = {}) => {
   let q = `
-    SELECT p.id, p.description, p.current_price::float8,
-           p.status, p.created_at,
-           pc.id AS category_id, pc.name AS category_name,
-           COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int AS available_count,
-           COUNT(pu.id) FILTER (WHERE pu.status = 'RESERVED')::int AS reserved_count,
-           COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int     AS sold_count
+    SELECT p.id, p.title, p.description, p.model, p.status, p.created_at,
+           pc.id   AS category_id,  pc.name AS category_name,
+           pb.id   AS brand_id,     pb.name AS brand_name,
+           COALESCE(stock.available_count, 0) AS available_count,
+           COALESCE(stock.reserved_count,  0) AS reserved_count,
+           COALESCE(stock.sold_count,       0) AS sold_count,
+           COALESCE(vars.v, '[]'::json)        AS variants
     FROM products p
     LEFT JOIN product_categories pc ON pc.id = p.category_id
-    LEFT JOIN product_units pu      ON pu.product_id = p.id
+    LEFT JOIN product_brands     pb ON pb.id = p.brand_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int AS available_count,
+        COUNT(pu.id) FILTER (WHERE pu.status = 'RESERVED')::int  AS reserved_count,
+        COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int      AS sold_count
+      FROM product_variants pv2
+      JOIN product_units pu ON pu.variant_id = pv2.id
+      WHERE pv2.product_id = p.id
+    ) stock ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT json_agg(
+        jsonb_build_object(
+          'id',            pv.id,
+          'color',         pv.color,
+          'size',          pv.size,
+          'capacity',      pv.capacity,
+          'current_price', pv.current_price::float8,
+          'status',        pv.status
+        ) ORDER BY pv.color ASC NULLS FIRST
+      ) AS v
+      FROM product_variants pv
+      WHERE pv.product_id = p.id
+    ) vars ON TRUE
     WHERE 1=1`;
   const params = [];
 
-  if (status)     { params.push(status);       q += ` AND p.status = $${params.length}`; }
+  if (status)     { params.push(status);        q += ` AND p.status = $${params.length}`; }
   if (search)     { params.push(`%${search}%`); q += ` AND p.description ILIKE $${params.length}`; }
-  if (categoryId) { params.push(categoryId);   q += ` AND p.category_id = $${params.length}`; }
-  q += ` GROUP BY p.id, pc.id ORDER BY p.description ASC`;
+  if (categoryId) { params.push(categoryId);    q += ` AND p.category_id = $${params.length}`; }
+  q += ` ORDER BY p.description ASC`;
   return (await pool.query(q, params)).rows;
 };
 
 const findById = async (id) => {
-  const result = await pool.query(
-    `SELECT p.id, p.description, p.current_price::float8,
-            p.status, p.created_at, p.updated_at,
-            pc.id AS category_id, pc.name AS category_name,
-            COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int AS available_count,
-            COUNT(pu.id) FILTER (WHERE pu.status = 'RESERVED')::int  AS reserved_count,
-            COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int      AS sold_count
+  const r = await pool.query(
+    `SELECT p.id, p.title, p.description, p.model, p.status, p.created_at, p.updated_at,
+            pc.id AS category_id,  pc.name AS category_name,
+            pb.id AS brand_id,     pb.name AS brand_name,
+            COALESCE(stock.available_count, 0) AS available_count,
+            COALESCE(stock.reserved_count,  0) AS reserved_count,
+            COALESCE(stock.sold_count,       0) AS sold_count,
+            COALESCE(vars.v, '[]'::json)        AS variants
      FROM products p
      LEFT JOIN product_categories pc ON pc.id = p.category_id
-     LEFT JOIN product_units pu      ON pu.product_id = p.id
-     WHERE p.id = $1
-     GROUP BY p.id, pc.id`,
+     LEFT JOIN product_brands     pb ON pb.id = p.brand_id
+     LEFT JOIN LATERAL (
+       SELECT
+         COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int AS available_count,
+         COUNT(pu.id) FILTER (WHERE pu.status = 'RESERVED')::int  AS reserved_count,
+         COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int      AS sold_count
+       FROM product_variants pv2
+       JOIN product_units pu ON pu.variant_id = pv2.id
+       WHERE pv2.product_id = p.id
+     ) stock ON TRUE
+     LEFT JOIN LATERAL (
+       SELECT json_agg(
+         jsonb_build_object(
+           'id',             pv.id,
+           'color',          pv.color,
+           'size',           pv.size,
+           'capacity',       pv.capacity,
+           'current_price',  pv.current_price::float8,
+           'status',         pv.status,
+           'available_count', COALESCE(pv_stock.available_count, 0),
+           'reserved_count',  COALESCE(pv_stock.reserved_count,  0),
+           'sold_count',      COALESCE(pv_stock.sold_count,       0)
+         ) ORDER BY pv.color ASC NULLS FIRST
+       ) AS v
+       FROM product_variants pv
+       LEFT JOIN LATERAL (
+         SELECT
+           COUNT(*) FILTER (WHERE status = 'AVAILABLE')::int AS available_count,
+           COUNT(*) FILTER (WHERE status = 'RESERVED')::int  AS reserved_count,
+           COUNT(*) FILTER (WHERE status = 'SOLD')::int      AS sold_count
+         FROM product_units WHERE variant_id = pv.id
+       ) pv_stock ON TRUE
+       WHERE pv.product_id = p.id
+     ) vars ON TRUE
+     WHERE p.id = $1`,
     [id]
   );
-  return result.rows[0] || null;
+  return r.rows[0] || null;
 };
 
 const findActiveCategoryById = async (id) => {
@@ -47,46 +103,58 @@ const findActiveCategoryById = async (id) => {
   return r.rows[0] || null;
 };
 
-const findByDescription = async (description) => {
-  const result = await pool.query(
-    `SELECT id FROM products WHERE LOWER(description) = LOWER($1)`, [description]
+const findActiveBrandById = async (id) => {
+  const r = await pool.query(
+    `SELECT id FROM product_brands WHERE id = $1 AND active = TRUE`, [id]
   );
-  return result.rows[0] || null;
+  return r.rows[0] || null;
 };
 
-// Un producto tiene créditos activos si alguna de sus unidades está SOLD o RESERVED
+const findByTitle = async (title) => {
+  const r = await pool.query(
+    `SELECT id FROM products WHERE LOWER(title) = LOWER($1)`, [title]
+  );
+  return r.rows[0] || null;
+};
+
 const hasActiveCredits = async (id) => {
-  const result = await pool.query(
-    `SELECT id FROM product_units
-     WHERE product_id = $1 AND status IN ('RESERVED','SOLD')
+  const r = await pool.query(
+    `SELECT pu.id FROM product_units pu
+     JOIN product_variants pv ON pv.id = pu.variant_id
+     WHERE pv.product_id = $1 AND pu.status IN ('RESERVED','SOLD')
      LIMIT 1`,
     [id]
   );
-  return result.rows.length > 0;
+  return r.rows.length > 0;
 };
 
-const create = async ({ description, current_price, category_id }) => {
-  const result = await pool.query(
-    `INSERT INTO products (description, current_price, category_id)
-     VALUES ($1, $2, $3)
-     RETURNING id, description, current_price::float8, category_id, status, created_at`,
-    [description, current_price, category_id || null]
+const create = async ({ title, description, model, brand_id, category_id }) => {
+  const r = await pool.query(
+    `INSERT INTO products (title, description, model, brand_id, category_id)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, title, description, model, brand_id, category_id, status, created_at`,
+    [title, description || null, model || null, brand_id || null, category_id || null]
   );
-  return { ...result.rows[0], available_count: 0, reserved_count: 0, sold_count: 0 };
+  return {
+    ...r.rows[0],
+    available_count: 0, reserved_count: 0, sold_count: 0, variants: [],
+  };
 };
 
-const update = async (id, { description, current_price, category_id }) => {
-  const result = await pool.query(
+const update = async (id, { title, description, model, brand_id, category_id }) => {
+  const r = await pool.query(
     `UPDATE products
-     SET description   = COALESCE($1, description),
-         current_price = COALESCE($2, current_price),
-         category_id   = COALESCE($3, category_id),
-         updated_at    = NOW()
-     WHERE id = $4
-     RETURNING id, description, current_price::float8, category_id, status, updated_at`,
-    [description, current_price, category_id, id]
+     SET title       = COALESCE($1, title),
+         description = COALESCE($2, description),
+         model       = COALESCE($3, model),
+         brand_id    = COALESCE($4, brand_id),
+         category_id = COALESCE($5, category_id),
+         updated_at  = NOW()
+     WHERE id = $6
+     RETURNING id, title, description, model, brand_id, category_id, status, updated_at`,
+    [title || null, description || null, model || null, brand_id || null, category_id || null, id]
   );
-  return result.rows[0] || null;
+  return r.rows[0] || null;
 };
 
 const deactivate = async (id) => {
@@ -102,6 +170,7 @@ const activate = async (id) => {
 };
 
 module.exports = {
-  findAll, findById, findByDescription, findActiveCategoryById, hasActiveCredits,
-  create, update, deactivate, activate,
+  findAll, findById, findByTitle,
+  findActiveCategoryById, findActiveBrandById,
+  hasActiveCredits, create, update, deactivate, activate,
 };

@@ -14,24 +14,32 @@ const validateCategory = async (category_id) => {
   if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
 };
 
-const create = async ({ description, current_price, category_id }) => {
-  if (await queries.findByDescription(description))
-    throw { status: 409, message: 'Ya existe un producto registrado con esa descripción.' };
-  await validateCategory(category_id);
-  return queries.create({ description, current_price, category_id });
+const validateBrand = async (brand_id) => {
+  if (!brand_id) return;
+  const brand = await queries.findActiveBrandById(brand_id);
+  if (!brand) throw { status: 422, message: 'La marca seleccionada no existe o está inactiva.' };
 };
 
-const update = async (id, { description, current_price, category_id }) => {
+const create = async ({ title, description, model, brand_id, category_id }) => {
+  if (await queries.findByTitle(title))
+    throw { status: 409, message: 'Ya existe un producto registrado con ese título.' };
+  await validateCategory(category_id);
+  await validateBrand(brand_id);
+  return queries.create({ title, description, model, brand_id, category_id });
+};
+
+const update = async (id, { title, description, model, brand_id, category_id }) => {
   const existing = await queries.findById(id);
   if (!existing) throw { status: 404, message: 'Producto no encontrado.' };
 
-  if (description && description.toLowerCase() !== existing.description.toLowerCase()) {
-    if (await queries.findByDescription(description))
-      throw { status: 409, message: 'Ya existe un producto registrado con esa descripción.' };
+  if (title && title.toLowerCase() !== existing.title.toLowerCase()) {
+    if (await queries.findByTitle(title))
+      throw { status: 409, message: 'Ya existe un producto registrado con ese título.' };
   }
 
   await validateCategory(category_id);
-  return queries.update(id, { description, current_price, category_id });
+  await validateBrand(brand_id);
+  return queries.update(id, { title, description, model, brand_id, category_id });
 };
 
 const deactivate = async (id) => {

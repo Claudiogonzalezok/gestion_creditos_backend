@@ -221,8 +221,10 @@ const getProductsReport = async (stockThreshold = 5) => {
     `SELECT
        p.id,
        p.description,
-       p.current_price::float8                                          AS current_price,
+       p.title,
        p.status,
+       COALESCE(MIN(pv.current_price), 0)::float8                      AS min_price,
+       COALESCE(MAX(pv.current_price), 0)::float8                      AS max_price,
        COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int        AS available_count,
        COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int             AS total_units_sold,
        COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE') <= $1       AS low_stock,
@@ -232,11 +234,12 @@ const getProductsReport = async (stockThreshold = 5) => {
        COUNT(pr.id) FILTER (WHERE pr.active = TRUE)::int               AS active_rates_count,
        COUNT(pr.id)::int                                                AS total_rates_count
      FROM products p
-     LEFT JOIN product_units pu  ON pu.product_id = p.id
-     LEFT JOIN credit_products cp ON cp.product_unit_id = pu.id
-     LEFT JOIN credits c          ON c.id = cp.credit_id
-     LEFT JOIN product_rates pr   ON pr.product_id = p.id
-     GROUP BY p.id, p.description, p.current_price, p.status
+     LEFT JOIN product_variants pv ON pv.product_id = p.id
+     LEFT JOIN product_units    pu ON pu.variant_id  = pv.id
+     LEFT JOIN credit_products  cp ON cp.product_unit_id = pu.id
+     LEFT JOIN credits          c  ON c.id = cp.credit_id
+     LEFT JOIN product_rates    pr ON pr.product_id = p.id
+     GROUP BY p.id, p.description, p.title, p.status
      ORDER BY times_sold DESC`,
     [stockThreshold]
   );

@@ -80,10 +80,13 @@ const create = async (data, requestingUser) => {
 
     for (const unitId of data.unit_ids) {
       const unitRes = await client.query(
-        `SELECT pu.id, pu.status, pu.product_id,
-                p.current_price::float8, p.description, p.status AS product_status
-         FROM product_units pu
-         JOIN products p ON p.id = pu.product_id
+        `SELECT pu.id, pu.status,
+                pv.id AS variant_id, pv.current_price::float8, pv.product_id,
+                pv.status AS variant_status,
+                p.description, p.status AS product_status
+         FROM product_units    pu
+         JOIN product_variants pv ON pv.id = pu.variant_id
+         JOIN products         p  ON p.id  = pv.product_id
          WHERE pu.id = $1`,
         [unitId]
       );
@@ -92,13 +95,15 @@ const create = async (data, requestingUser) => {
         throw { status: 404, message: `Unidad ${unitId} no encontrada.` };
       if (unit.product_status !== 'ACTIVE')
         throw { status: 409, message: `El producto "${unit.description}" no está activo.` };
+      if (unit.variant_status !== 'ACTIVE')
+        throw { status: 409, message: `La variante del producto "${unit.description}" no está activa.` };
       if (unit.status !== 'AVAILABLE')
         throw {
           status: 409,
           message: `La unidad "${unit.description}" (ID: ${unitId}) no está disponible (estado: ${unit.status}).`,
         };
 
-      // Verificar que exista tasa para este producto
+      // Verificar tasa para el producto padre de esta variante
       const rateRecord = await prQueries.findActiveRate(
         unit.product_id, data.payment_frequency, data.installments_count, client
       );
@@ -135,11 +140,12 @@ const create = async (data, requestingUser) => {
       notes:                                    data.notes,
     });
 
-    // Vincular unidades al crédito y marcarlas RESERVED
+    // Vincular unidades al crédito (precio de la variante) y marcarlas RESERVED
     for (const unitId of data.unit_ids) {
       const priceRes = await client.query(
-        `SELECT p.current_price::float8
-         FROM product_units pu JOIN products p ON p.id = pu.product_id
+        `SELECT pv.current_price::float8
+         FROM product_units pu
+         JOIN product_variants pv ON pv.id = pu.variant_id
          WHERE pu.id = $1`,
         [unitId]
       );
@@ -151,6 +157,7 @@ const create = async (data, requestingUser) => {
   });
 };
 
+// simulate: SALE acepta products[{variant_id, quantity}]
 const simulate = async ({ type, total_amount, installments_count, payment_frequency, products, down_payment }) => {
   // ── LOAN ─────────────────────────────────────────────────────
   if (type === 'LOAN') {
@@ -171,31 +178,48 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
     };
   }
 
-  // ── SALE: recibe products [{product_id, quantity}] igual que antes ──────
-  // La simulación usa product+quantity; la creación real usa unit_ids.
+  // ── SALE: products[{variant_id, quantity}] ───────────────────
   const groups = [];
   let totalBase = 0;
 
   for (const item of products) {
-    const prodRes = await pool.query(
-      `SELECT id, description, current_price::float8, status FROM products WHERE id = $1`,
-      [item.product_id]
+    const varRes = await pool.query(
+      `SELECT pv.id, pv.current_price::float8, pv.status AS variant_status,
+              pv.color, pv.size, pv.capacity,
+              p.id AS product_id, p.description, p.status AS product_status
+       FROM product_variants pv
+       JOIN products p ON p.id = pv.product_id
+       WHERE pv.id = $1`,
+      [item.variant_id]
     );
-    const p = prodRes.rows[0];
-    if (!p) throw { status: 404, message: `Producto ${item.product_id} no encontrado.` };
-    if (p.status !== 'ACTIVE')
-      throw { status: 409, message: `El producto "${p.description}" no está disponible.` };
+    const v = varRes.rows[0];
+    if (!v) throw { status: 404, message: `Variante ${item.variant_id} no encontrada.` };
+    if (v.product_status !== 'ACTIVE')
+      throw { status: 409, message: `El producto "${v.description}" no está disponible.` };
+    if (v.variant_status !== 'ACTIVE')
+      throw { status: 409, message: `La variante de "${v.description}" no está activa.` };
 
-    const rateRecord = await prQueries.findActiveRate(p.id, payment_frequency, installments_count);
+    const rateRecord = await prQueries.findActiveRate(v.product_id, payment_frequency, installments_count);
     if (!rateRecord)
       throw {
         status: 404,
-        message: `No existe tasa configurada para "${p.description}" con ${installments_count} cuotas ${payment_frequency}.`,
+        message: `No existe tasa configurada para "${v.description}" con ${installments_count} cuotas ${payment_frequency}.`,
       };
 
-    const lineTotal = p.current_price * item.quantity;
+    const lineTotal = v.current_price * item.quantity;
     totalBase += lineTotal;
-    groups.push({ product_id: p.id, product_name: p.description, quantity: item.quantity, unit_price: p.current_price, line_total: lineTotal, rate: parseFloat(rateRecord.rate) });
+    groups.push({
+      variant_id:   v.id,
+      product_id:   v.product_id,
+      product_name: v.description,
+      color:        v.color,
+      size:         v.size,
+      capacity:     v.capacity,
+      quantity:     item.quantity,
+      unit_price:   v.current_price,
+      line_total:   lineTotal,
+      rate:         parseFloat(rateRecord.rate),
+    });
   }
 
   const downPayment    = parseFloat(down_payment || 0);
@@ -204,7 +228,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
   if (downPayment >= totalBase)
     throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
 
-  const capitalRatio = downPayment > 0 ? financedAmount / totalBase : 1;
+  const capitalRatio   = downPayment > 0 ? financedAmount / totalBase : 1;
   let totalInstallment = 0;
 
   for (const g of groups) {
@@ -259,7 +283,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     return sanitizeCredit(await queries.findById(id));
   }
 
-  // ── SALE: aprobación por unidades ────────────────────────────
+  // ── SALE ─────────────────────────────────────────────────────
   const creditUnits = await queries.findCreditUnits(id);
   if (!creditUnits.length)
     throw { status: 409, message: 'El crédito no tiene unidades asociadas.' };
@@ -268,7 +292,6 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   const totalBase    = parseFloat(credit.total_amount);
   const capitalRatio = downPayment > 0 ? (totalBase - downPayment) / totalBase : 1;
 
-  // Validar que todas las unidades siguen RESERVED para este crédito
   for (const u of creditUnits) {
     if (u.unit_status !== 'RESERVED')
       throw {
@@ -277,7 +300,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       };
   }
 
-  // Agrupar unidades por producto para calcular la cuota con el redondeo correcto
+  // Agrupar por product_id para buscar la tasa (la tasa es por producto, no por variante)
   const productGroups = new Map();
   for (const u of creditUnits) {
     if (!productGroups.has(u.product_id)) {
@@ -288,10 +311,10 @@ const approve = async (id, adminId, newInstallmentsCount) => {
           message: `No existe tasa configurada para "${u.description}" con ${installmentsCount} cuotas ${credit.payment_frequency}.`,
         };
       productGroups.set(u.product_id, {
-        rate:              parseFloat(rateRecord.rate),
-        description:       u.description,
-        lineTotal:         0,
-        creditProductIds:  [],
+        rate:             parseFloat(rateRecord.rate),
+        description:      u.description,
+        lineTotal:        0,
+        creditProductIds: [],
       });
     }
     const g = productGroups.get(u.product_id);
@@ -310,7 +333,6 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId, null, installmentsCount);
 
-    // Congelar tasa por unidad (mismo rate para todas las del mismo producto)
     for (const [, g] of productGroups) {
       for (const cpId of g.creditProductIds) {
         await queries.saveHistoricalRate(client, cpId, g.rate);
@@ -319,7 +341,6 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
     await queries.generateInstallments(client, id, totalInstallment, dueDates, credit.payment_frequency);
 
-    // Marcar cuotas adelantadas y registrar el pago
     if (credit.prepaid_installments > 0) {
       const n = credit.prepaid_installments;
       const prepaidTotal = await queries.markPrepaidInstallments(client, id, n);
@@ -334,11 +355,9 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       await shiftInstallmentDates(client, id, credit.payment_frequency, dueDates[0]);
     }
 
-    // Marcar unidades como SOLD
     const unitIds = creditUnits.map((u) => u.unit_id);
     await puQueries.updateStatusBulk(client, unitIds, 'SOLD');
 
-    // Registrar enganche
     if (downPayment > 0) {
       await queries.createDownPayment(client, {
         creditId:          id,
@@ -349,7 +368,6 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       });
     }
 
-    // Comisión sobre total bruto
     if (credit.created_by) {
       const commissionAmount = totalBase * commissionRate;
       await queries.createCommission(client, credit.created_by, id, commissionAmount, week_start, week_end);
@@ -366,12 +384,9 @@ const reject = async (id, rejectionReason, adminId) => {
     throw { status: 409, message: 'Solo se pueden rechazar créditos en estado PENDIENTE DE APROBACIÓN.' };
 
   await withTransaction(async (client) => {
-    // Liberar unidades RESERVED si es SALE
     if (credit.type === 'SALE') {
       const unitIds = await queries.findCreditUnitIds(id);
-      if (unitIds.length) {
-        await puQueries.updateStatusBulk(client, unitIds, 'AVAILABLE');
-      }
+      if (unitIds.length) await puQueries.updateStatusBulk(client, unitIds, 'AVAILABLE');
     }
     await client.query(
       `UPDATE credits

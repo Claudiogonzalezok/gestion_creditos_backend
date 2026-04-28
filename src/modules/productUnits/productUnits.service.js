@@ -10,35 +10,44 @@ const getById = async (id) => {
   return unit;
 };
 
-// Alta de una sola unidad
-const create = async ({ productId, unitCode, notes }, userId) => {
-  const productCheck = await pool.query(
-    `SELECT id, status FROM products WHERE id = $1`, [productId]
+const create = async ({ variantId, unitCode, notes }, userId) => {
+  const variantCheck = await pool.query(
+    `SELECT pv.id, pv.status, p.status AS product_status
+     FROM product_variants pv
+     JOIN products p ON p.id = pv.product_id
+     WHERE pv.id = $1`,
+    [variantId]
   );
-  if (!productCheck.rows.length)
-    throw { status: 404, message: 'Producto no encontrado.' };
-  if (productCheck.rows[0].status !== 'ACTIVE')
-    throw { status: 409, message: 'No se puede agregar unidades a un producto inactivo.' };
+  if (!variantCheck.rows.length)
+    throw { status: 404, message: 'Variante no encontrada.' };
+  if (variantCheck.rows[0].status !== 'ACTIVE')
+    throw { status: 409, message: 'No se pueden agregar unidades a una variante inactiva.' };
+  if (variantCheck.rows[0].product_status !== 'ACTIVE')
+    throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
 
   if (await queries.findByUnitCode(unitCode))
     throw { status: 409, message: `Ya existe una unidad con el código "${unitCode}".` };
 
   return withTransaction(async (client) => {
-    const unit = await queries.create(client, { productId, unitCode, notes, userId });
-    const full = await queries.findById(unit.id);
-    return full;
+    const unit = await queries.create(client, { variantId, unitCode, notes, userId });
+    return queries.findById(unit.id);
   });
 };
 
-// Alta masiva: array de { unitCode, notes }
-const createBulk = async (productId, units, userId) => {
-  const productCheck = await pool.query(
-    `SELECT id, status FROM products WHERE id = $1`, [productId]
+const createBulk = async (variantId, units, userId) => {
+  const variantCheck = await pool.query(
+    `SELECT pv.id, pv.status, p.status AS product_status
+     FROM product_variants pv
+     JOIN products p ON p.id = pv.product_id
+     WHERE pv.id = $1`,
+    [variantId]
   );
-  if (!productCheck.rows.length)
-    throw { status: 404, message: 'Producto no encontrado.' };
-  if (productCheck.rows[0].status !== 'ACTIVE')
-    throw { status: 409, message: 'No se puede agregar unidades a un producto inactivo.' };
+  if (!variantCheck.rows.length)
+    throw { status: 404, message: 'Variante no encontrada.' };
+  if (variantCheck.rows[0].status !== 'ACTIVE')
+    throw { status: 409, message: 'No se pueden agregar unidades a una variante inactiva.' };
+  if (variantCheck.rows[0].product_status !== 'ACTIVE')
+    throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
 
   return withTransaction(async (client) => {
     const created = [];
@@ -47,7 +56,7 @@ const createBulk = async (productId, units, userId) => {
       if (existing)
         throw { status: 409, message: `Ya existe una unidad con el código "${u.unit_code}".` };
       const unit = await queries.create(client, {
-        productId, unitCode: u.unit_code, notes: u.notes, userId,
+        variantId, unitCode: u.unit_code, notes: u.notes, userId,
       });
       created.push(unit);
     }
@@ -55,7 +64,6 @@ const createBulk = async (productId, units, userId) => {
   });
 };
 
-// Actualizar código o notas (solo si está AVAILABLE o INACTIVE)
 const update = async (id, { unitCode, notes }) => {
   const unit = await queries.findById(id);
   if (!unit) throw { status: 404, message: 'Unidad no encontrada.' };
@@ -70,7 +78,6 @@ const update = async (id, { unitCode, notes }) => {
   return queries.update(id, { unitCode, notes });
 };
 
-// Dar de baja una unidad (solo si está AVAILABLE)
 const deactivate = async (id, userId) => {
   const unit = await queries.findById(id);
   if (!unit) throw { status: 404, message: 'Unidad no encontrada.' };
@@ -94,7 +101,6 @@ const deactivate = async (id, userId) => {
   });
 };
 
-// Reactivar una unidad dada de baja
 const activate = async (id) => {
   const unit = await queries.findById(id);
   if (!unit) throw { status: 404, message: 'Unidad no encontrada.' };
