@@ -175,7 +175,7 @@ cp .env.example .env
 createdb -U postgres gestion_creditos
 
 # 5. Ejecutar migraciones (detecta y aplica solo las nuevas)
-npm run migration:run
+ npm run db:setup
 
 # 6. Cargar semillas
 npm run seed
