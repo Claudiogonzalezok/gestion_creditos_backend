@@ -498,20 +498,46 @@ INSERT INTO public.expense_categories (name) VALUES
     ('Servicios'),
     ('Sueldos externos'),
     ('Insumos'),
-    ('Otros');
+    ('Otros')
+ON CONFLICT (name) DO NOTHING;
 
 INSERT INTO public.product_categories (name) VALUES
+    -- Tecnología
+    ('Celulares y Telefonía'),
+    ('Computación e Informática'),
     ('Electrónica'),
     ('Electrodomésticos'),
-    ('Celulares y Accesorios'),
-    ('Informática'),
-    ('Muebles y Hogar'),
-    ('Colchones y Sommiers'),
-    ('Herramientas'),
-    ('Climatización'),
     ('Audio y Video'),
+    ('Climatización'),
+    ('Gaming y Videojuegos'),
+    ('Fotografía y Video'),
+    -- Hogar
+    ('Muebles y Decoración'),
+    ('Colchones y Sommiers'),
+    ('Cocina y Gastronomía'),
+    ('Jardín y Exterior'),
+    ('Iluminación'),
+    ('Construcción y Materiales'),
+    -- Ropa y Accesorios
     ('Ropa y Calzado'),
-    ('Deportes y Bicicletas');
+    ('Joyería y Relojes'),
+    ('Bolsos y Carteras'),
+    -- Deportes y Recreación
+    ('Deportes y Fitness'),
+    ('Bicicletas y Movilidad'),
+    ('Juguetes y Juegos'),
+    -- Bienestar y Salud
+    ('Belleza y Cuidado Personal'),
+    ('Salud y Farmacia'),
+    ('Bebés y Niños'),
+    -- Otros
+    ('Mascotas'),
+    ('Automotor y Motos'),
+    ('Herramientas'),
+    ('Instrumentos Musicales'),
+    ('Libros y Útiles'),
+    ('Otros')
+ON CONFLICT (name) DO NOTHING;
 
 -- ============================================================
 --  Ejecutar después: npm run seed
