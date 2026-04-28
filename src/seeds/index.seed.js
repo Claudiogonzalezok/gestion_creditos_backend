@@ -4,11 +4,13 @@ const pool = require('../config/db');
 const seed01 = require('./01_admin.seed');
 const seed02 = require('./02_system_config.seed');
 const seed03 = require('./03_interest_rates.seed');
+const seed04 = require('./04_bulk_data.seed');
 
 const seeds = [
   { name: 'Admin inicial',          fn: seed01 },
   { name: 'Parámetros del sistema', fn: seed02 },
   { name: 'Tasas de interés',       fn: seed03 },
+  { name: 'Datos bulk E2E',         fn: seed04 },
 ];
 
 const run = async () => {
