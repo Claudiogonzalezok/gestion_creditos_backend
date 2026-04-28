@@ -1,0 +1,29 @@
+
+Modificación al módulo de productos — Atributos extendidos y variantes de precio
+Necesito extender el modelo de productos para soportar más detalle descriptivo y variantes de precio según características físicas del producto. Antes de tocar cualquier archivo, analizá el impacto completo y presentame un diseño para confirmar.
+Estado actual del modelo:
+La tabla products tiene: id, description, current_price, category_id, status, created_at, updated_at. El stock no vive en products sino que se computa como COUNT de product_units con status = 'AVAILABLE'. La tabla product_units referencia product_id y representa cada unidad física con su propio unit_code y status. La tabla credit_products referencia product_unit_id (no al producto directamente). La tabla product_rates referencia product_id.
+Requerimiento de negocio:
+Un mismo producto puede tener distintos precios según sus características (por ejemplo: un ventilador puede costar distinto si es blanco, negro o de madera). Por lo tanto current_price no puede seguir viviendo en products.
+Cambios esperados:
+
+Agregar a products: los campos title (nombre comercial corto), brand (marca) y model (modelo). Analizar.
+Crear una tabla de variantes con al menos: product_id, color (u otros atributos visuales), current_price, y status. Cada variante es una combinación de atributos con su propio precio. Un producto debe tener al menos una variante.
+product_units actualmente referencia product_id. Evaluar si debe pasar a referenciar la variante en cambio, dado que cada unidad física corresponde a un color/variante específico.
+product_rates actualmente referencia product_id. Evaluar si las tasas aplican al producto padre o a la variante, y qué cambios requiere.
+credit_products guarda historical_price por unidad. Evaluar si necesita también guardar referencia a la variante para auditoría.
+Los seeds de productos existentes deben poder migrarse: cada producto actual se convierte en producto + una variante por defecto.
+
+Decisiones que necesito que analices y propongas:
+
+Nombre y estructura SQL de la tabla de variantes (campos, constraints, índices)
+Si product_units.product_id pasa a ser variant_id o referencia a la nueva tabla
+Si product_rates referencia product_id o variant_id
+Si credit_products necesita registrar la variante además del product_unit_id
+Qué campos del GET /api/products y GET /api/products/:id cambian en la respuesta
+Qué cambia en POST /api/credits (creación de SALE) donde hoy se pasan unit_ids
+Qué cambia en POST /api/credits/simulate donde hoy se pasan products[].product_id
+Qué cambia en src/modules/products/products.queries.js (el findAll y findById ya hacen JOIN con product_units para contar stock)
+Script de migración SQL para transformar datos existentes
+
+Presentame primero el diseño completo: SQL de las tablas nuevas/modificadas, decisiones tomadas con justificación, y listado de archivos que van a cambiar. Esperá mi confirmación antes de escribir código.
