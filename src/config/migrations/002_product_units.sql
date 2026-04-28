@@ -2,28 +2,21 @@
 --  MIGRACIÓN 002 — Unidades individuales de producto
 --  Ejecutar sobre la base de datos local existente.
 --
---  ATENCIÓN: limpia créditos SALE y sus datos relacionados
---  porque el modelo de credit_products cambió en forma incompatible
---  (product_id+quantity → product_unit_id). Los créditos LOAN
---  y el resto de los datos NO se tocan.
+--  LIMPIA: todos los datos de planillas de cobro y créditos SALE
+--  (en ambos casos son datos de prueba en dev).
+--  Los créditos LOAN y el resto de los datos NO se tocan.
 -- ============================================================
+
+-- Descartar cualquier transacción colgada de un intento anterior
+ROLLBACK;
 
 BEGIN;
 
--- ── 1. Eliminar datos incompatibles (solo SALE) ───────────────
--- Detalles de planillas que referencian cuotas de créditos SALE
-DELETE FROM collection_sheet_details
-WHERE installment_id IN (
-  SELECT i.id FROM installments i
-  JOIN credits c ON c.id = i.credit_id
-  WHERE c.type = 'SALE'
-);
+-- ── 1. Planillas de cobro (todas, en dev son datos de prueba) ─
+DELETE FROM collection_sheet_details;
+DELETE FROM collection_sheets;
 
--- Planillas de cobro que quedaron sin detalles (opcional, limpieza)
-DELETE FROM collection_sheets
-WHERE id NOT IN (SELECT DISTINCT sheet_id FROM collection_sheet_details);
-
--- Pagos vinculados a cuotas de créditos SALE
+-- ── 2. Datos de créditos SALE ─────────────────────────────────
 DELETE FROM payments
 WHERE installment_id IN (
   SELECT i.id FROM installments i
@@ -31,33 +24,27 @@ WHERE installment_id IN (
   WHERE c.type = 'SALE'
 );
 
--- Cuotas de créditos SALE
 DELETE FROM installments
 WHERE credit_id IN (SELECT id FROM credits WHERE type = 'SALE');
 
--- Comisiones de créditos SALE
 DELETE FROM commissions
 WHERE credit_id IN (SELECT id FROM credits WHERE type = 'SALE');
 
--- Enganches de créditos SALE
 DELETE FROM credit_down_payments
 WHERE credit_id IN (SELECT id FROM credits WHERE type = 'SALE');
 
--- Ítems de créditos (la tabla completa, ya que cambia su estructura)
 DELETE FROM credit_products;
 
--- Créditos SALE
 DELETE FROM credits WHERE type = 'SALE';
 
--- ── 2. Limpiar stock_movements (referencia available_stock_after) ──
--- Solo los eliminamos si los hay; en dev es seguro truncar
-TRUNCATE TABLE stock_movements;
+-- ── 3. Vaciar stock_movements (compatible con nuevo esquema) ───
+DELETE FROM stock_movements;
 
--- ── 3. Alterar products: quitar available_stock ───────────────
+-- ── 4. Alterar products: quitar available_stock ───────────────
 ALTER TABLE public.products
   DROP COLUMN IF EXISTS available_stock;
 
--- ── 4. Crear tabla product_units ─────────────────────────────
+-- ── 5. Crear tabla product_units ──────────────────────────────
 CREATE TABLE IF NOT EXISTS public.product_units (
     id          UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     product_id  UUID            NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
@@ -74,32 +61,27 @@ CREATE TABLE IF NOT EXISTS public.product_units (
 CREATE INDEX IF NOT EXISTS idx_product_units_product ON product_units(product_id);
 CREATE INDEX IF NOT EXISTS idx_product_units_status  ON product_units(status);
 
--- ── 5. Alterar credit_products: nuevo modelo por unidad ──────
--- Quitar índices viejos
+-- ── 6. Alterar credit_products: nuevo modelo por unidad ───────
 DROP INDEX IF EXISTS idx_credit_products_product;
 
--- Quitar columnas del modelo viejo
 ALTER TABLE public.credit_products
   DROP COLUMN IF EXISTS product_id,
   DROP COLUMN IF EXISTS quantity;
 
--- Agregar columna nueva (nullable primero para no romper si hay filas vacías)
 ALTER TABLE public.credit_products
   ADD COLUMN IF NOT EXISTS product_unit_id UUID
     REFERENCES product_units(id) ON UPDATE CASCADE;
 
--- Ahora que la tabla está vacía podemos poner NOT NULL
+-- La tabla quedó vacía: podemos poner NOT NULL sin problema
 ALTER TABLE public.credit_products
   ALTER COLUMN product_unit_id SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_credit_products_unit ON credit_products(product_unit_id);
 
--- ── 6. Alterar stock_movements: nuevo esquema ─────────────────
--- Quitar columna vieja
+-- ── 7. Alterar stock_movements: nuevo esquema ─────────────────
 ALTER TABLE public.stock_movements
   DROP COLUMN IF EXISTS available_stock_after;
 
--- Agregar referencia a unidad individual (opcional, para bajas puntuales)
 ALTER TABLE public.stock_movements
   ADD COLUMN IF NOT EXISTS product_unit_id UUID
     REFERENCES product_units(id) ON UPDATE CASCADE;
