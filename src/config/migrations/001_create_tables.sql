@@ -69,13 +69,12 @@ CREATE TABLE public.product_categories (
 );
 
 -- ── 4. products ──────────────────────────────────────────────
+-- El stock disponible se obtiene como COUNT de product_units con status AVAILABLE.
 CREATE TABLE public.products (
     id              UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     description     TEXT            NOT NULL UNIQUE,
     current_price   NUMERIC(12,2)   NOT NULL
                         CONSTRAINT products_current_price_check CHECK (current_price > 0),
-    available_stock INTEGER         NOT NULL DEFAULT 0
-                        CONSTRAINT products_available_stock_check CHECK (available_stock >= 0),
     category_id     UUID            NULL REFERENCES product_categories(id),
     status          VARCHAR(20)     NOT NULL DEFAULT 'ACTIVE'
                         CONSTRAINT products_status_check CHECK (status IN ('ACTIVE','INACTIVE')),
@@ -85,18 +84,40 @@ CREATE TABLE public.products (
 CREATE INDEX idx_products_status   ON products(status);
 CREATE INDEX idx_products_category ON products(category_id);
 
--- ── 5. stock_movements ───────────────────────────────────────
+-- ── 5. product_units ─────────────────────────────────────────
+-- Cada fila representa una unidad física individual con código único.
+-- status: AVAILABLE → libre; RESERVED → en crédito pendiente de aprobación;
+--         SOLD → en crédito activo/liquidado; INACTIVE → dada de baja.
+CREATE TABLE public.product_units (
+    id          UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id  UUID            NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
+    unit_code   VARCHAR(100)    NOT NULL,
+    status      VARCHAR(15)     NOT NULL DEFAULT 'AVAILABLE'
+                    CONSTRAINT product_units_status_check
+                    CHECK (status IN ('AVAILABLE','RESERVED','SOLD','INACTIVE')),
+    notes       TEXT            NULL,
+    created_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
+    CONSTRAINT product_units_unit_code_unique UNIQUE (unit_code)
+);
+CREATE INDEX idx_product_units_product ON product_units(product_id);
+CREATE INDEX idx_product_units_status  ON product_units(status);
+
+-- ── 6. stock_movements ───────────────────────────────────────
+-- Registra altas (IN) y bajas (OUT) manuales de unidades.
+-- product_unit_id apunta a la unidad específica cuando aplica.
 CREATE TABLE public.stock_movements (
-    id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    product_id            UUID        NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
-    movement              VARCHAR(3)  NOT NULL CHECK (movement IN ('IN','OUT')),
-    quantity              INTEGER     NOT NULL CHECK (quantity > 0),
-    reason                TEXT        NULL,
-    available_stock_after INTEGER     NOT NULL,
-    user_id               UUID        NULL REFERENCES users(id) ON UPDATE CASCADE,
-    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id      UUID        NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
+    product_unit_id UUID        NULL REFERENCES product_units(id) ON UPDATE CASCADE,
+    movement        VARCHAR(3)  NOT NULL CHECK (movement IN ('IN','OUT')),
+    quantity        INTEGER     NOT NULL CHECK (quantity > 0),
+    reason          TEXT        NULL,
+    user_id         UUID        NULL REFERENCES users(id) ON UPDATE CASCADE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_stock_movements_product ON stock_movements(product_id);
+CREATE INDEX idx_stock_movements_unit    ON stock_movements(product_unit_id);
 CREATE INDEX idx_stock_movements_date    ON stock_movements(created_at);
 
 -- ── 6. interest_rates ────────────────────────────────────────
@@ -199,19 +220,17 @@ CREATE INDEX idx_credits_frequency  ON credits(payment_frequency);
 CREATE INDEX idx_credits_approved   ON credits(approved_at);
 
 -- ── 9. credit_products ───────────────────────────────────────
--- historical_rate se congela al momento de aprobar el crédito.
+-- Una fila por unidad física vendida. historical_rate se congela al aprobar.
 CREATE TABLE public.credit_products (
     id               UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
     credit_id        UUID            NOT NULL REFERENCES credits(id) ON UPDATE CASCADE,
-    product_id       UUID            NOT NULL REFERENCES products(id) ON UPDATE CASCADE,
-    quantity         SMALLINT        NOT NULL
-                         CONSTRAINT credit_products_quantity_check CHECK (quantity > 0),
+    product_unit_id  UUID            NOT NULL REFERENCES product_units(id) ON UPDATE CASCADE,
     historical_price NUMERIC(12,2)   NOT NULL
                          CONSTRAINT credit_products_historical_price_check CHECK (historical_price > 0),
     historical_rate  NUMERIC(6,4)    NULL
 );
-CREATE INDEX idx_credit_products_credit  ON credit_products(credit_id);
-CREATE INDEX idx_credit_products_product ON credit_products(product_id);
+CREATE INDEX idx_credit_products_credit ON credit_products(credit_id);
+CREATE INDEX idx_credit_products_unit   ON credit_products(product_unit_id);
 
 -- ── 10. installments ─────────────────────────────────────────
 -- original_due_date se registra la primera vez que la fecha de vencimiento

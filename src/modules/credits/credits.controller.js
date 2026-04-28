@@ -19,11 +19,13 @@ const getById = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { customer_id, type, total_amount, installments_count, payment_frequency, products, notes,
+    const { customer_id, type, total_amount, installments_count, payment_frequency,
+            unit_ids, notes,
             down_payment, down_payment_method, down_payment_transfer_reference,
             prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference } = req.body;
     const credit = await service.create({
-      customer_id, type, total_amount, installments_count, payment_frequency, products, notes,
+      customer_id, type, total_amount, installments_count, payment_frequency,
+      unit_ids, notes,
       down_payment, down_payment_method, down_payment_transfer_reference,
       prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
     }, req.user);

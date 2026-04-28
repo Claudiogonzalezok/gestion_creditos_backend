@@ -22,7 +22,7 @@ router.get('/:id',
   controller.getById
 );
 
-// Alta, edición y stock — solo Admin
+// Alta y edición — solo Admin
 router.post('/',
   authorize('ADMIN'), v.products.create, validate,
   controller.create
@@ -30,10 +30,6 @@ router.post('/',
 router.put('/:id',
   authorize('ADMIN'), v.products.update, validate,
   controller.update
-);
-router.patch('/:id/stock',
-  authorize('ADMIN'), v.products.adjustStock, validate,
-  controller.adjustStock
 );
 router.patch('/:id/deactivate',
   authorize('ADMIN'), v.products.id, validate,

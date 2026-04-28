@@ -1,40 +1,40 @@
 const pool = require('../../config/db');
 
+// available_count = unidades con status AVAILABLE para ese producto
 const findAll = async ({ status, search, categoryId } = {}) => {
   let q = `
     SELECT p.id, p.description, p.current_price::float8,
-           p.available_stock::int, p.status, p.created_at,
-           pc.id AS category_id, pc.name AS category_name
+           p.status, p.created_at,
+           pc.id AS category_id, pc.name AS category_name,
+           COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int AS available_count,
+           COUNT(pu.id) FILTER (WHERE pu.status = 'RESERVED')::int AS reserved_count,
+           COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int     AS sold_count
     FROM products p
     LEFT JOIN product_categories pc ON pc.id = p.category_id
+    LEFT JOIN product_units pu      ON pu.product_id = p.id
     WHERE 1=1`;
   const params = [];
 
-  if (status) {
-    params.push(status);
-    q += ` AND p.status = $${params.length}`;
-  }
-  if (search) {
-    params.push(`%${search}%`);
-    q += ` AND p.description ILIKE $${params.length}`;
-  }
-  if (categoryId) {
-    params.push(categoryId);
-    q += ` AND p.category_id = $${params.length}`;
-  }
-  q += ` ORDER BY p.description ASC`;
-  const result = await pool.query(q, params);
-  return result.rows;
+  if (status)     { params.push(status);       q += ` AND p.status = $${params.length}`; }
+  if (search)     { params.push(`%${search}%`); q += ` AND p.description ILIKE $${params.length}`; }
+  if (categoryId) { params.push(categoryId);   q += ` AND p.category_id = $${params.length}`; }
+  q += ` GROUP BY p.id, pc.id ORDER BY p.description ASC`;
+  return (await pool.query(q, params)).rows;
 };
 
 const findById = async (id) => {
   const result = await pool.query(
     `SELECT p.id, p.description, p.current_price::float8,
-            p.available_stock::int, p.status, p.created_at, p.updated_at,
-            pc.id AS category_id, pc.name AS category_name
+            p.status, p.created_at, p.updated_at,
+            pc.id AS category_id, pc.name AS category_name,
+            COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int AS available_count,
+            COUNT(pu.id) FILTER (WHERE pu.status = 'RESERVED')::int  AS reserved_count,
+            COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int      AS sold_count
      FROM products p
      LEFT JOIN product_categories pc ON pc.id = p.category_id
-     WHERE p.id = $1`,
+     LEFT JOIN product_units pu      ON pu.product_id = p.id
+     WHERE p.id = $1
+     GROUP BY p.id, pc.id`,
     [id]
   );
   return result.rows[0] || null;
@@ -42,8 +42,7 @@ const findById = async (id) => {
 
 const findActiveCategoryById = async (id) => {
   const r = await pool.query(
-    `SELECT id FROM product_categories WHERE id = $1 AND active = TRUE`,
-    [id]
+    `SELECT id FROM product_categories WHERE id = $1 AND active = TRUE`, [id]
   );
   return r.rows[0] || null;
 };
@@ -55,25 +54,25 @@ const findByDescription = async (description) => {
   return result.rows[0] || null;
 };
 
+// Un producto tiene créditos activos si alguna de sus unidades está SOLD o RESERVED
 const hasActiveCredits = async (id) => {
   const result = await pool.query(
-    `SELECT cp.id FROM credit_products cp
-     JOIN credits c ON c.id = cp.credit_id
-     WHERE cp.product_id = $1 AND c.status = 'ACTIVE'
+    `SELECT id FROM product_units
+     WHERE product_id = $1 AND status IN ('RESERVED','SOLD')
      LIMIT 1`,
     [id]
   );
   return result.rows.length > 0;
 };
 
-const create = async ({ description, current_price, available_stock, category_id }) => {
+const create = async ({ description, current_price, category_id }) => {
   const result = await pool.query(
-    `INSERT INTO products (description, current_price, available_stock, category_id)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, description, current_price::float8, available_stock::int, category_id, status, created_at`,
-    [description, current_price, available_stock ?? 0, category_id || null]
+    `INSERT INTO products (description, current_price, category_id)
+     VALUES ($1, $2, $3)
+     RETURNING id, description, current_price::float8, category_id, status, created_at`,
+    [description, current_price, category_id || null]
   );
-  return result.rows[0];
+  return { ...result.rows[0], available_count: 0, reserved_count: 0, sold_count: 0 };
 };
 
 const update = async (id, { description, current_price, category_id }) => {
@@ -84,49 +83,10 @@ const update = async (id, { description, current_price, category_id }) => {
          category_id   = COALESCE($3, category_id),
          updated_at    = NOW()
      WHERE id = $4
-     RETURNING id, description, current_price::float8, available_stock::int, category_id, status, updated_at`,
+     RETURNING id, description, current_price::float8, category_id, status, updated_at`,
     [description, current_price, category_id, id]
   );
   return result.rows[0] || null;
-};
-
-/**
- * Ajusta el stock del producto y registra el movimiento en stock_movements (CU04).
- * Requiere tabla:
- *   CREATE TABLE stock_movements (
- *     id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
- *     product_id           UUID NOT NULL REFERENCES products(id),
- *     movement             VARCHAR(3) NOT NULL CHECK (movement IN ('IN','OUT')),
- *     quantity             INTEGER NOT NULL,
- *     reason               VARCHAR(255),
- *     available_stock_after INTEGER NOT NULL,
- *     user_id              UUID REFERENCES users(id),
- *     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
- *   );
- */
-const adjustStock = async (id, quantity, movement, reason, userId) => {
-  const operator = movement === 'IN' ? '+' : '-';
-
-  // Actualizar stock y obtener el nuevo valor en una sola consulta
-  const updated = await pool.query(
-    `UPDATE products
-     SET available_stock = available_stock ${operator} $1,
-         updated_at      = NOW()
-     WHERE id = $2
-     RETURNING id, description, available_stock::int`,
-    [quantity, id]
-  );
-
-  const product = updated.rows[0];
-
-  await pool.query(
-    `INSERT INTO stock_movements
-       (product_id, movement, quantity, reason, available_stock_after, user_id)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [id, movement, quantity, reason || null, product.available_stock, userId || null]
-  );
-
-  return product;
 };
 
 const deactivate = async (id) => {
@@ -143,5 +103,5 @@ const activate = async (id) => {
 
 module.exports = {
   findAll, findById, findByDescription, findActiveCategoryById, hasActiveCredits,
-  create, update, adjustStock, deactivate, activate,
+  create, update, deactivate, activate,
 };

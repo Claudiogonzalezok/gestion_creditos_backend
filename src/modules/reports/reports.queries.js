@@ -221,21 +221,22 @@ const getProductsReport = async (stockThreshold = 5) => {
     `SELECT
        p.id,
        p.description,
-       p.current_price::float8                                        AS current_price,
-       p.available_stock::int,
+       p.current_price::float8                                          AS current_price,
        p.status,
-       p.available_stock <= $1                                         AS low_stock,
-       COUNT(DISTINCT cp.id)::int                                      AS times_sold,
-       COALESCE(SUM(cp.quantity), 0)::int                             AS total_units_sold,
-       COALESCE(SUM(cp.quantity * cp.historical_price), 0)::float8    AS total_revenue,
-       COALESCE(ROUND(AVG(cp.historical_price), 2), 0)::float8        AS avg_selling_price,
-       COUNT(pr.id) FILTER (WHERE pr.active = TRUE)::int              AS active_rates_count,
-       COUNT(pr.id)::int                                               AS total_rates_count
+       COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int        AS available_count,
+       COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int             AS total_units_sold,
+       COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE') <= $1       AS low_stock,
+       COUNT(DISTINCT cp.id) FILTER (WHERE c.status IN ('ACTIVE','SETTLED'))::int AS times_sold,
+       COALESCE(SUM(cp.historical_price) FILTER (WHERE c.status IN ('ACTIVE','SETTLED')), 0)::float8 AS total_revenue,
+       COALESCE(ROUND(AVG(cp.historical_price) FILTER (WHERE c.status IN ('ACTIVE','SETTLED')), 2), 0)::float8 AS avg_selling_price,
+       COUNT(pr.id) FILTER (WHERE pr.active = TRUE)::int               AS active_rates_count,
+       COUNT(pr.id)::int                                                AS total_rates_count
      FROM products p
-     LEFT JOIN credit_products cp ON cp.product_id = p.id
-     LEFT JOIN credits c          ON c.id = cp.credit_id AND c.status IN ('ACTIVE','SETTLED')
+     LEFT JOIN product_units pu  ON pu.product_id = p.id
+     LEFT JOIN credit_products cp ON cp.product_unit_id = pu.id
+     LEFT JOIN credits c          ON c.id = cp.credit_id
      LEFT JOIN product_rates pr   ON pr.product_id = p.id
-     GROUP BY p.id, p.description, p.current_price, p.available_stock, p.status
+     GROUP BY p.id, p.description, p.current_price, p.status
      ORDER BY times_sold DESC`,
     [stockThreshold]
   );

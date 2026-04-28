@@ -198,9 +198,6 @@ const products = {
   create: [
     isString('description', 'La descripción del producto', { min: 2, max: 500 }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
-    body('available_stock')
-      .isInt({ min: 0, max: 999999 })
-      .withMessage('El stock debe ser un número entero entre 0 y 999.999.'),
     isUUID('category_id', 'El ID de categoría', false),
   ],
   update: [
@@ -208,16 +205,6 @@ const products = {
     isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
     isUUID('category_id', 'El ID de categoría', false),
-  ],
-  adjustStock: [
-    isUUIDParam('id', 'El ID de producto'),
-    isEnum('movement', 'El tipo de movimiento', ['IN','OUT']),
-    body('quantity')
-      .isInt({ min: 1, max: 99999 })
-      .withMessage('La cantidad debe ser un número entero entre 1 y 99.999.'),
-    body('reason').trim()
-      .notEmpty().withMessage('El motivo del ajuste es obligatorio.')
-      .isLength({ max: 255 }).withMessage('El motivo no puede superar los 255 caracteres.'),
   ],
   id: [ isUUIDParam('id', 'El ID de producto') ],
 };
@@ -241,13 +228,11 @@ const credits = {
       .isInt({ min: 1, max: 120 })
       .withMessage('La cantidad de cuotas debe ser un número entre 1 y 120.'),
     isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
-    body('products')
+    body('unit_ids')
       .if(body('type').equals('SALE'))
-      .isArray({ min: 1 }).withMessage('Las ventas deben incluir al menos un producto.'),
-    body('products.*.product_id').optional()
-      .isUUID().withMessage('Cada product_id debe ser un UUID válido.'),
-    body('products.*.quantity').optional()
-      .isInt({ min: 1, max: 9999 }).withMessage('La cantidad de cada producto debe ser entre 1 y 9999.'),
+      .isArray({ min: 1 }).withMessage('Las ventas deben incluir al menos una unidad de producto.'),
+    body('unit_ids.*').optional()
+      .isUUID().withMessage('Cada unit_id debe ser un UUID válido.'),
     // Enganche (solo aplica a SALE)
     body('down_payment').optional({ nullable: true })
       .custom(val => {
@@ -552,3 +537,5 @@ module.exports = {
   productCategories,
   auth,
 };
+
+// productUnits se valida directamente en su propio router.

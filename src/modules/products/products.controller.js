@@ -1,33 +1,26 @@
 const service  = require('./products.service');
 const response = require('../../utils/response');
 
-// GET /api/products
 const getAll = async (req, res) => {
   try {
     const { status, search, category_id } = req.query;
-    const products = await service.getAll({ status, search, categoryId: category_id });
-    return response.success(res, products);
-  } catch (err) {
-    return response.serverError(res, err);
-  }
+    return response.success(res, await service.getAll({ status, search, categoryId: category_id }));
+  } catch (err) { return response.serverError(res, err); }
 };
 
-// GET /api/products/:id
 const getById = async (req, res) => {
   try {
-    const product = await service.getById(req.params.id);
-    return response.success(res, product);
+    return response.success(res, await service.getById(req.params.id));
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     return response.serverError(res, err);
   }
 };
 
-// POST /api/products
 const create = async (req, res) => {
   try {
-    const { description, current_price, available_stock, category_id } = req.body;
-    const product = await service.create({ description, current_price, available_stock, category_id });
+    const { description, current_price, category_id } = req.body;
+    const product = await service.create({ description, current_price, category_id });
     return response.created(res, product, 'Producto registrado correctamente.');
   } catch (err) {
     if (err.status === 409) return response.conflict(res, err.message);
@@ -36,7 +29,6 @@ const create = async (req, res) => {
   }
 };
 
-// PUT /api/products/:id
 const update = async (req, res) => {
   try {
     const { description, current_price, category_id } = req.body;
@@ -50,21 +42,6 @@ const update = async (req, res) => {
   }
 };
 
-// PATCH /api/products/:id/stock
-const adjustStock = async (req, res) => {
-  try {
-    const { quantity, movement, reason } = req.body;
-    const product = await service.adjustStock(req.params.id, quantity, movement, reason, req.user.id);
-    const label = movement === 'IN' ? 'Entrada de stock' : 'Salida de stock';
-    return response.success(res, product, `${label} registrada correctamente.`);
-  } catch (err) {
-    if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
-    return response.serverError(res, err);
-  }
-};
-
-// PATCH /api/products/:id/deactivate
 const deactivate = async (req, res) => {
   try {
     await service.deactivate(req.params.id);
@@ -76,7 +53,6 @@ const deactivate = async (req, res) => {
   }
 };
 
-// PATCH /api/products/:id/activate
 const activate = async (req, res) => {
   try {
     await service.activate(req.params.id);
@@ -88,4 +64,4 @@ const activate = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, adjustStock, deactivate, activate };
+module.exports = { getAll, getById, create, update, deactivate, activate };

@@ -42,14 +42,19 @@ const findById = async (id) => {
   const credit = r.rows[0];
 
   if (credit.type === 'SALE') {
-    const products = await pool.query(
-      `SELECT cp.id, cp.quantity::int, cp.historical_price::float8, cp.historical_rate::float8,
-              p.id AS product_id, p.description AS product_name
+    // Una fila por unidad: incluye datos del producto y de la unidad
+    const units = await pool.query(
+      `SELECT cp.id, cp.historical_price::float8, cp.historical_rate::float8,
+              pu.id AS unit_id, pu.unit_code, pu.status AS unit_status,
+              p.id  AS product_id, p.description AS product_name
        FROM credit_products cp
-       JOIN products p ON p.id = cp.product_id
-       WHERE cp.credit_id = $1`, [id]
+       JOIN product_units pu ON pu.id = cp.product_unit_id
+       JOIN products p       ON p.id  = pu.product_id
+       WHERE cp.credit_id = $1
+       ORDER BY p.description, pu.unit_code`,
+      [id]
     );
-    credit.products = products.rows;
+    credit.units = units.rows;
   }
 
   const inst = await pool.query(
@@ -62,12 +67,21 @@ const findById = async (id) => {
   return credit;
 };
 
-const findCreditProducts = async (creditId) => {
+// Devuelve las unidades de un crédito SALE con info de producto y tasa
+const findCreditUnits = async (creditId) => {
   const r = await pool.query(
-    `SELECT cp.id, cp.product_id, cp.quantity::int, cp.historical_price::float8, cp.historical_rate::float8,
-            p.available_stock::int, p.description
+    `SELECT cp.id AS credit_product_id,
+            cp.historical_price::float8,
+            pu.id AS unit_id, pu.product_id, pu.status AS unit_status,
+            p.description, p.available_count
      FROM credit_products cp
-     JOIN products p ON p.id = cp.product_id
+     JOIN product_units pu ON pu.id = cp.product_unit_id
+     JOIN products p       ON p.id  = pu.product_id
+     LEFT JOIN LATERAL (
+       SELECT COUNT(*)::int AS available_count
+       FROM product_units pu2
+       WHERE pu2.product_id = p.id AND pu2.status = 'AVAILABLE'
+     ) ac ON TRUE
      WHERE cp.credit_id = $1`,
     [creditId]
   );
@@ -100,20 +114,23 @@ const create = async (client, {
   return r.rows[0];
 };
 
-const createCreditProducts = async (client, creditId, products) => {
-  for (const p of products) {
-    await client.query(
-      `INSERT INTO credit_products (credit_id, product_id, quantity, historical_price)
-       VALUES ($1, $2, $3, $4)`,
-      [creditId, p.product_id, p.quantity, p.historical_price]
-    );
-  }
+// Inserta una fila en credit_products por cada unidad
+const createCreditUnit = async (client, creditId, unitId, historicalPrice) => {
+  await client.query(
+    `INSERT INTO credit_products (credit_id, product_unit_id, historical_price)
+     VALUES ($1, $2, $3)`,
+    [creditId, unitId, historicalPrice]
+  );
 };
 
-/**
- * interestRate: coeficiente para créditos LOAN; NULL para créditos SALE
- * (los SALE guardan historical_rate por producto en credit_products).
- */
+// Congela el coeficiente de interés por unidad al aprobar
+const saveHistoricalRate = async (client, creditProductId, rate) => {
+  await client.query(
+    `UPDATE credit_products SET historical_rate = $1 WHERE id = $2`,
+    [rate, creditProductId]
+  );
+};
+
 const approve = async (client, id, adminId, interestRate, installmentsCount) => {
   await client.query(
     `UPDATE credits
@@ -135,29 +152,6 @@ const generateInstallments = async (client, creditId, installmentAmount, dueDate
   }
 };
 
-const decrementProductStock = async (client, productId, quantity, reason, adminId) => {
-  const updated = await client.query(
-    `UPDATE products SET available_stock = available_stock - $1, updated_at = NOW()
-     WHERE id = $2 RETURNING available_stock`,
-    [quantity, productId]
-  );
-  await client.query(
-    `INSERT INTO stock_movements (product_id, movement, quantity, reason, available_stock_after, user_id)
-     VALUES ($1, 'OUT', $2, $3, $4, $5)`,
-    [productId, quantity, reason, updated.rows[0].available_stock, adminId]
-  );
-};
-
-/**
- * Congela el coeficiente de interés vigente en el ítem de crédito al aprobar.
- */
-const saveHistoricalRate = async (client, creditProductId, rate) => {
-  await client.query(
-    `UPDATE credit_products SET historical_rate = $1 WHERE id = $2`,
-    [rate, creditProductId]
-  );
-};
-
 const createCommission = async (client, userId, creditId, amount, weekStart, weekEnd) => {
   await client.query(
     `INSERT INTO commissions (user_id, credit_id, amount, status, week_start, week_end)
@@ -174,6 +168,18 @@ const reject = async (id, rejectionReason, adminId) => {
      WHERE id = $3`,
     [rejectionReason, adminId, id]
   );
+};
+
+// Devuelve los unit_ids asociados a un crédito SALE (para liberar al rechazar)
+const findCreditUnitIds = async (creditId) => {
+  const r = await pool.query(
+    `SELECT pu.id AS unit_id
+     FROM credit_products cp
+     JOIN product_units pu ON pu.id = cp.product_unit_id
+     WHERE cp.credit_id = $1`,
+    [creditId]
+  );
+  return r.rows.map((row) => row.unit_id);
 };
 
 const getPendingInstallments = async (creditId) => {
@@ -196,7 +202,6 @@ const settleAllInstallments = async (client, creditId) => {
   );
 };
 
-// Liquidación por cobro normal (última cuota pagada)
 const settleCredit = async (client, creditId) => {
   await client.query(
     `UPDATE credits
@@ -217,10 +222,6 @@ const expireOldCredits = async (days) => {
   return r.rowCount;
 };
 
-/**
- * Registra el enganche abonado al momento de aprobar un crédito SALE.
- * No está ligado a ninguna cuota; impacta directamente en caja.
- */
 const createDownPayment = async (client, { creditId, amount, paymentMethod, transferReference, approvedBy, paymentType = 'DOWN_PAYMENT' }) => {
   await client.query(
     `INSERT INTO credit_down_payments
@@ -242,9 +243,9 @@ const markPrepaidInstallments = async (client, creditId, count) => {
 };
 
 module.exports = {
-  findAll, findById, findCreditProducts,
-  create, createCreditProducts, saveHistoricalRate,
-  approve, generateInstallments, decrementProductStock, createCommission,
+  findAll, findById, findCreditUnits, findCreditUnitIds,
+  create, createCreditUnit, saveHistoricalRate,
+  approve, generateInstallments, createCommission,
   createDownPayment, markPrepaidInstallments,
   reject, getPendingInstallments, settleAllInstallments, settleCredit,
   expireOldCredits,
