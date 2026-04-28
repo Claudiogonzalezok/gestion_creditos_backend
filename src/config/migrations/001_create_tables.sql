@@ -539,6 +539,51 @@ INSERT INTO public.product_categories (name) VALUES
     ('Otros')
 ON CONFLICT (name) DO NOTHING;
 
+INSERT INTO public.product_brands (name) VALUES
+    -- Celulares y tecnología
+    ('Samsung'),
+    ('Apple'),
+    ('Motorola'),
+    ('Xiaomi'),
+    ('LG'),
+    ('Sony'),
+    ('Huawei'),
+    ('TCL'),
+    ('Hisense'),
+    ('Philips'),
+    -- Computación
+    ('Lenovo'),
+    ('HP'),
+    ('Asus'),
+    ('Acer'),
+    ('Dell'),
+    -- Electrodomésticos y climatización
+    ('Whirlpool'),
+    ('Electrolux'),
+    ('BGH'),
+    ('Carrier'),
+    ('Gree'),
+    ('Midea'),
+    ('Drean'),
+    ('Patrick'),
+    ('Ariston'),
+    ('Newpol'),
+    -- Herramientas
+    ('Bosch'),
+    ('Black & Decker'),
+    ('Stanley'),
+    ('Makita'),
+    ('DeWalt'),
+    -- Deportes y ropa
+    ('Nike'),
+    ('Adidas'),
+    ('Puma'),
+    ('Topper'),
+    ('Fila'),
+    -- Otros
+    ('Genérico')
+ON CONFLICT (name) DO NOTHING;
+
 -- ============================================================
 --  Ejecutar después: npm run seed
 -- ============================================================

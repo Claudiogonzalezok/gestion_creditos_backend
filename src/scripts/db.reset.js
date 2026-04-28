@@ -8,12 +8,13 @@ const MIGRATIONS_DIR = path.join(__dirname, '../config/migrations');
 
 const run = async () => {
   console.log('');
-  console.log('╔══════════════════════════════════════════════╗');
-  console.log('║  🗄️   MIGRACIÓN — Sistema Gestión Créditos    ║');
-  console.log('╚══════════════════════════════════════════════╝');
+  console.log('╔══════════════════════════════════════════════════════╗');
+  console.log('║  🔴  RESET — Sistema Gestión Créditos                 ║');
+  console.log('║      ⚠️  ESTO ELIMINA TODOS LOS DATOS EXISTENTES      ║');
+  console.log('╚══════════════════════════════════════════════════════╝');
   console.log('');
 
-  // ── Paso 1: crear la base si no existe (sin tocar datos existentes) ───────
+  // ── Paso 1: conectar a "postgres" para poder operar sobre la base target ──
   const adminPool = new Pool({
     host:     process.env.DB_HOST     || 'localhost',
     port:     parseInt(process.env.DB_PORT || '5432'),
@@ -27,23 +28,35 @@ const run = async () => {
       `SELECT 1 FROM pg_database WHERE datname = $1`, [DB_NAME]
     );
 
-    if (rows.length === 0) {
-      console.log(`  ▶️   Creando base de datos "${DB_NAME}"...`);
-      await adminPool.query(`CREATE DATABASE "${DB_NAME}"`);
-      console.log(`  ✅  Base de datos "${DB_NAME}" creada correctamente.`);
-      console.log('');
-    } else {
-      console.log(`  ✔️   Base de datos "${DB_NAME}" encontrada.`);
+    if (rows.length > 0) {
+      console.log(`  ⚠️   La base de datos "${DB_NAME}" existe y será eliminada.`);
+      console.log(`  🔌  Cerrando conexiones activas...`);
+
+      // Terminar todas las conexiones abiertas antes de dropear
+      await adminPool.query(`
+        SELECT pg_terminate_backend(pid)
+        FROM   pg_stat_activity
+        WHERE  datname = $1
+          AND  pid <> pg_backend_pid()
+      `, [DB_NAME]);
+
+      await adminPool.query(`DROP DATABASE "${DB_NAME}"`);
+      console.log(`  🗑️   Base de datos eliminada.`);
       console.log('');
     }
+
+    console.log(`  ▶️   Creando base de datos "${DB_NAME}"...`);
+    await adminPool.query(`CREATE DATABASE "${DB_NAME}"`);
+    console.log(`  ✅  Base de datos "${DB_NAME}" creada correctamente.`);
+    console.log('');
   } catch (err) {
-    console.error('  ❌  Error al verificar la base de datos:', err.message);
+    console.error('  ❌  Error al preparar la base de datos:', err.message);
     process.exit(1);
   } finally {
     await adminPool.end();
   }
 
-  // ── Paso 2: conectar a la base y aplicar solo las migraciones pendientes ──
+  // ── Paso 2: conectar a la nueva base y ejecutar migraciones ───────────────
   const pool = new Pool({
     host:     process.env.DB_HOST     || 'localhost',
     port:     parseInt(process.env.DB_PORT || '5432'),
@@ -69,18 +82,9 @@ const run = async () => {
     )
   `);
 
-  const applied = new Set(
-    (await pool.query('SELECT filename FROM _migrations')).rows.map(r => r.filename)
-  );
-
   let ran = 0;
 
   for (const file of files) {
-    if (applied.has(file)) {
-      console.log(`  ⏭️   ${file} — ya aplicada, omitida.`);
-      continue;
-    }
-
     console.log(`  ▶️   Ejecutando: ${file}`);
     const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
 
@@ -103,13 +107,7 @@ const run = async () => {
   }
 
   console.log('');
-  if (ran === 0) {
-    console.log('  ✔️   La base de datos ya está actualizada. No hay migraciones nuevas.');
-  } else {
-    console.log(`  🎉  ${ran} migración(es) aplicada(s).`);
-    console.log('');
-    console.log('  Próximo paso: npm run seed');
-  }
+  console.log(`  🎉  Reset completado. ${ran} migración(es) aplicada(s).`);
   console.log('');
 
   await pool.end();

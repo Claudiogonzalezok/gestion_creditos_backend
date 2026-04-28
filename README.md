@@ -57,7 +57,8 @@ src/
 │   ├── systemConfig/
 │   └── portal/
 ├── scripts/
-│   └── migration.run.js                 # Ejecutor con tabla de control _migrations
+│   ├── migration.run.js                 # Setup seguro: crea BD si no existe + migraciones pendientes
+│   └── db.reset.js                      # Reset destructivo: borra, recrea y migra desde cero
 ├── seeds/
 │   ├── 01_admin.seed.js
 │   ├── 02_system_config.seed.js
@@ -171,16 +172,10 @@ npm install
 # 3. Configurar variables de entorno
 cp .env.example .env
 
-# 4. Crear la base de datos
-createdb -U postgres gestion_creditos
+# 4. Crear la base de datos, aplicar migraciones y cargar datos iniciales
+npm run db:setup
 
-# 5. Ejecutar migraciones (detecta y aplica solo las nuevas)
- npm run db:setup
-
-# 6. Cargar semillas
-npm run seed
-
-# 7. Iniciar
+# 5. Iniciar
 npm run dev
 ```
 
@@ -210,19 +205,20 @@ BCRYPT_SALT_ROUNDS=10
 
 ### Scripts npm
 
-```json
-"start":           "node src/app.js",
-"dev":             "nodemon src/app.js",
-"dev:test":        "nodemon --env-file=.env.test src/app.js",
-"seed":            "node src/seeds/index.seed.js",
-"seed:test":       "node -r dotenv/config src/seeds/index.seed.js dotenv_config_path=.env.test",
-"migration:run":   "node src/scripts/migration.run.js",
-"migration:test":  "node -r dotenv/config src/scripts/migration.run.js dotenv_config_path=.env.test"
-```
+| Comando | Descripción |
+|---|---|
+| `npm run db:setup` | Primer setup: crea la BD si no existe + migraciones + seed |
+| `npm run db:reset` | ⚠️ Reset total: borra todo, recrea, migra y seedea |
+| `npm run migration:run` | Solo aplica migraciones nuevas (no destructivo) |
+| `npm run seed` | Solo ejecuta el seed (raramente necesario por separado) |
+| `npm run dev` | Servidor en modo desarrollo con hot reload |
+| `npm start` | Servidor en modo producción |
 
 ### Migration runner
 
-`migration.run.js` mantiene una tabla `_migrations` en la BD y aplica solo los archivos `.sql` nuevos en orden alfabético. Idempotente: correrlo dos veces no rompe nada.
+`migration.run.js` conecta primero a la base `postgres` del sistema para crear la BD si no existe, luego aplica solo los archivos `.sql` nuevos en orden alfabético usando la tabla `_migrations` como control. Es idempotente: correrlo dos veces no rompe nada.
+
+`db.reset.js` hace lo mismo pero primero cierra todas las conexiones activas y elimina la base antes de recrearla. Usar solo en desarrollo.
 
 ### Credenciales iniciales
 
