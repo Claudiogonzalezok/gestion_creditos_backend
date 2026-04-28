@@ -1,4 +1,4 @@
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 /**
  * Resumen de cuenta del cliente:
@@ -11,15 +11,17 @@ const getAccountSummary = async (customerId) => {
   const totals = await pool.query(
     `SELECT
        COALESCE(SUM(CASE WHEN i.status IN ('PENDING','OVERDUE','PARTIAL')
-                    THEN i.amount_due - i.amount_paid ELSE 0 END), 0)::float8 AS total_owed,
-       COUNT(*) FILTER (WHERE i.status = 'PAID')::int                         AS paid_count,
-       COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))::int          AS pending_count,
-       COUNT(*) FILTER (WHERE i.status = 'OVERDUE')::int                      AS overdue_count
+                    THEN i.amount_due - i.amount_paid ELSE 0 END), 0) AS total_owed,
+       COUNT(*) FILTER (WHERE i.status = 'PAID')                       AS paid_count,
+       COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))        AS pending_count,
+       COUNT(*) FILTER (WHERE i.status = 'OVERDUE')                    AS overdue_count,
+       COALESCE(SUM(i.amount_paid) FILTER (WHERE i.status = 'PAID'), 0) AS total_paid_amount,
+       COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0) AS pending_penalty_amount
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
      WHERE c.customer_id = $1
        AND c.status IN ('ACTIVE','SETTLED')`,
-    [customerId]
+    [customerId],
   );
 
   // Próximos vencimientos (30 días), solo cuotas pendientes
@@ -35,7 +37,7 @@ const getAccountSummary = async (customerId) => {
        AND i.status IN ('PENDING','OVERDUE','PARTIAL')
        AND i.due_date <= CURRENT_DATE + INTERVAL '30 days'
      ORDER BY i.due_date ASC`,
-    [customerId]
+    [customerId],
   );
 
   return { totals: totals.rows[0], upcoming: upcoming.rows };
@@ -52,16 +54,18 @@ const findCredits = async (customerId) => {
        COUNT(i.id)::int                                              AS total_installments,
        COUNT(i.id) FILTER (WHERE i.status = 'PAID')::int            AS paid_installments,
        MIN(i.due_date) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
-                                                                     AS next_due_date,
+                                                            AS next_due_date,
        MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))::float8
-                                                                     AS next_due_amount
+                                                            AS next_due_amount,
+       COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0) AS pending_penalty,
+       BOOL_OR(i.status = 'OVERDUE')                        AS has_overdue
      FROM credits c
      LEFT JOIN installments i ON i.credit_id = c.id
      WHERE c.customer_id = $1
        AND c.status IN ('ACTIVE','SETTLED')
      GROUP BY c.id
      ORDER BY c.created_at DESC`,
-    [customerId]
+    [customerId],
   );
   return r.rows;
 };
@@ -79,7 +83,7 @@ const findCreditById = async (creditId, customerId) => {
      WHERE c.id = $1
        AND c.customer_id = $2
        AND c.status IN ('ACTIVE','SETTLED')`,
-    [creditId, customerId]
+    [creditId, customerId],
   );
   if (!credit.rows[0]) return null;
 
@@ -90,7 +94,7 @@ const findCreditById = async (creditId, customerId) => {
      FROM installments
      WHERE credit_id = $1
      ORDER BY installment_number ASC`,
-    [creditId]
+    [creditId],
   );
 
   return { ...credit.rows[0], installments: installments.rows };

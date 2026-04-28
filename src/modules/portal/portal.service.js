@@ -19,11 +19,13 @@ const getAccountSummary = async (customerId) => {
   else                          statusIndicator = 'RED';
 
   return {
-    total_owed:       totalOwed,
-    paid_count:       paidCount,
-    pending_count:    pendingCount,
-    overdue_count:    overdueCount,
-    status_indicator: statusIndicator,
+    total_owed:            totalOwed,
+    paid_count:            paidCount,
+    pending_count:         pendingCount,
+    overdue_count:         overdueCount,
+    status_indicator:      statusIndicator,
+    total_paid_amount:     parseFloat(totals.total_paid_amount),
+    pending_penalty_amount: parseFloat(totals.pending_penalty_amount),
     upcoming_installments: upcoming,
   };
 };
@@ -33,6 +35,15 @@ const getAccountSummary = async (customerId) => {
  */
 const getCredits = async (customerId) => {
   return queries.findCredits(customerId);
+  const rows = await queries.findCredits(customerId);
+  return rows.map(r => ({
+    ...r,
+    total_amount:       parseFloat(r.total_amount),
+    total_installments: parseInt(r.total_installments),
+    paid_installments:  parseInt(r.paid_installments),
+    pending_penalty:    parseFloat(r.pending_penalty),
+    has_overdue:        r.has_overdue === true,
+  }));
 };
 
 /**
