@@ -83,7 +83,7 @@ const create = async (data, requestingUser) => {
         `SELECT pu.id, pu.status,
                 pv.id AS variant_id, pv.current_price::float8, pv.product_id,
                 pv.status AS variant_status,
-                p.description, p.status AS product_status
+                p.title, p.status AS product_status
          FROM product_units    pu
          JOIN product_variants pv ON pv.id = pu.variant_id
          JOIN products         p  ON p.id  = pv.product_id
@@ -94,13 +94,13 @@ const create = async (data, requestingUser) => {
       if (!unit)
         throw { status: 404, message: `Unidad ${unitId} no encontrada.` };
       if (unit.product_status !== 'ACTIVE')
-        throw { status: 409, message: `El producto "${unit.description}" no está activo.` };
+        throw { status: 409, message: `El producto "${unit.title}" no está activo.` };
       if (unit.variant_status !== 'ACTIVE')
-        throw { status: 409, message: `La variante del producto "${unit.description}" no está activa.` };
+        throw { status: 409, message: `La variante del producto "${unit.title}" no está activa.` };
       if (unit.status !== 'AVAILABLE')
         throw {
           status: 409,
-          message: `La unidad "${unit.description}" (ID: ${unitId}) no está disponible (estado: ${unit.status}).`,
+          message: `La unidad "${unit.title}" (ID: ${unitId}) no está disponible (estado: ${unit.status}).`,
         };
 
       // Verificar tasa para el producto padre de esta variante
@@ -110,7 +110,7 @@ const create = async (data, requestingUser) => {
       if (!rateRecord)
         throw {
           status: 409,
-          message: `No existe tasa configurada para "${unit.description}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
+          message: `No existe tasa configurada para "${unit.title}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
         };
 
       totalAmount += unit.current_price;
@@ -186,7 +186,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
     const varRes = await pool.query(
       `SELECT pv.id, pv.current_price::float8, pv.status AS variant_status,
               pv.color, pv.size, pv.capacity,
-              p.id AS product_id, p.description, p.status AS product_status
+              p.id AS product_id, p.title, p.status AS product_status
        FROM product_variants pv
        JOIN products p ON p.id = pv.product_id
        WHERE pv.id = $1`,
@@ -195,15 +195,15 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
     const v = varRes.rows[0];
     if (!v) throw { status: 404, message: `Variante ${item.variant_id} no encontrada.` };
     if (v.product_status !== 'ACTIVE')
-      throw { status: 409, message: `El producto "${v.description}" no está disponible.` };
+      throw { status: 409, message: `El producto "${v.title}" no está disponible.` };
     if (v.variant_status !== 'ACTIVE')
-      throw { status: 409, message: `La variante de "${v.description}" no está activa.` };
+      throw { status: 409, message: `La variante de "${v.title}" no está activa.` };
 
     const rateRecord = await prQueries.findActiveRate(v.product_id, payment_frequency, installments_count);
     if (!rateRecord)
       throw {
         status: 404,
-        message: `No existe tasa configurada para "${v.description}" con ${installments_count} cuotas ${payment_frequency}.`,
+        message: `No existe tasa configurada para "${v.title}" con ${installments_count} cuotas ${payment_frequency}.`,
       };
 
     const lineTotal = v.current_price * item.quantity;
@@ -211,7 +211,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
     groups.push({
       variant_id:   v.id,
       product_id:   v.product_id,
-      product_name: v.description,
+      product_name: v.title,
       color:        v.color,
       size:         v.size,
       capacity:     v.capacity,
@@ -296,7 +296,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     if (u.unit_status !== 'RESERVED')
       throw {
         status: 409,
-        message: `La unidad del producto "${u.description}" ya no está disponible (estado: ${u.unit_status}).`,
+        message: `La unidad del producto "${u.title}" ya no está disponible (estado: ${u.unit_status}).`,
       };
   }
 
@@ -308,11 +308,11 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       if (!rateRecord)
         throw {
           status: 409,
-          message: `No existe tasa configurada para "${u.description}" con ${installmentsCount} cuotas ${credit.payment_frequency}.`,
+          message: `No existe tasa configurada para "${u.title}" con ${installmentsCount} cuotas ${credit.payment_frequency}.`,
         };
       productGroups.set(u.product_id, {
         rate:             parseFloat(rateRecord.rate),
-        description:      u.description,
+        description:      u.title,
         lineTotal:        0,
         creditProductIds: [],
       });

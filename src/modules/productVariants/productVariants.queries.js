@@ -4,8 +4,8 @@ const findAll = async ({ productId, status } = {}) => {
   let q = `
     SELECT pv.id, pv.color, pv.size, pv.capacity, pv.current_price::float8,
            pv.status, pv.created_at, pv.updated_at,
-           p.id AS product_id, p.description AS product_name,
-           p.title, p.model, p.status AS product_status,
+           p.id AS product_id, p.title AS product_name,
+           p.description, p.model, p.status AS product_status,
            pb.id AS brand_id, pb.name AS brand_name
     FROM product_variants pv
     JOIN products p          ON p.id  = pv.product_id
@@ -14,7 +14,7 @@ const findAll = async ({ productId, status } = {}) => {
   const params = [];
   if (productId) { params.push(productId); q += ` AND pv.product_id = $${params.length}`; }
   if (status)    { params.push(status);    q += ` AND pv.status = $${params.length}`; }
-  q += ` ORDER BY p.description ASC, pv.color ASC NULLS FIRST`;
+  q += ` ORDER BY p.title ASC, pv.color ASC NULLS FIRST`;
   return (await pool.query(q, params)).rows;
 };
 
@@ -22,8 +22,8 @@ const findById = async (id) => {
   const r = await pool.query(
     `SELECT pv.id, pv.color, pv.size, pv.capacity, pv.current_price::float8,
             pv.status, pv.created_at, pv.updated_at,
-            p.id AS product_id, p.description AS product_name,
-            p.title, p.model, p.status AS product_status,
+            p.id AS product_id, p.title AS product_name,
+            p.description, p.model, p.status AS product_status,
             pb.id AS brand_id, pb.name AS brand_name,
             COALESCE(stock.available_count, 0) AS available_count,
             COALESCE(stock.reserved_count, 0)  AS reserved_count,

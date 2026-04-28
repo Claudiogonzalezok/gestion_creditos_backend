@@ -46,13 +46,13 @@ const findById = async (id) => {
       `SELECT cp.id, cp.historical_price::float8, cp.historical_rate::float8,
               pu.id   AS unit_id,   pu.unit_code, pu.status AS unit_status,
               pv.id   AS variant_id, pv.color, pv.size, pv.capacity,
-              p.id    AS product_id, p.description AS product_name
+              p.id    AS product_id, p.title AS product_name
        FROM credit_products cp
        JOIN product_units    pu ON pu.id  = cp.product_unit_id
        JOIN product_variants pv ON pv.id  = pu.variant_id
        JOIN products         p  ON p.id   = pv.product_id
        WHERE cp.credit_id = $1
-       ORDER BY p.description, pv.color NULLS FIRST, pu.unit_code`,
+       ORDER BY p.title, pv.color NULLS FIRST, pu.unit_code`,
       [id]
     );
     credit.units = units.rows;
@@ -75,7 +75,7 @@ const findCreditUnits = async (creditId) => {
             cp.historical_price::float8,
             pu.id AS unit_id, pu.status AS unit_status,
             pv.id AS variant_id, pv.product_id,
-            p.description
+            p.title
      FROM credit_products cp
      JOIN product_units    pu ON pu.id  = cp.product_unit_id
      JOIN product_variants pv ON pv.id  = pu.variant_id

@@ -39,9 +39,9 @@ const findAll = async ({ status, search, categoryId } = {}) => {
   const params = [];
 
   if (status)     { params.push(status);        q += ` AND p.status = $${params.length}`; }
-  if (search)     { params.push(`%${search}%`); q += ` AND p.description ILIKE $${params.length}`; }
+  if (search)     { params.push(`%${search}%`); q += ` AND (p.title ILIKE $${params.length} OR p.description ILIKE $${params.length})`; }
   if (categoryId) { params.push(categoryId);    q += ` AND p.category_id = $${params.length}`; }
-  q += ` ORDER BY p.description ASC`;
+  q += ` ORDER BY p.title ASC`;
   return (await pool.query(q, params)).rows;
 };
 

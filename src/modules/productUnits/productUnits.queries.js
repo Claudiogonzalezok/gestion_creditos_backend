@@ -5,7 +5,7 @@ const findAll = async ({ variantId, productId, status, search } = {}) => {
     SELECT pu.id, pu.unit_code, pu.status, pu.notes, pu.created_at, pu.updated_at,
            pv.id    AS variant_id,  pv.color, pv.size, pv.capacity,
            pv.current_price::float8,
-           p.id     AS product_id,  p.description AS product_name
+           p.id     AS product_id,  p.title AS product_name
     FROM product_units pu
     JOIN product_variants pv ON pv.id = pu.variant_id
     JOIN products p          ON p.id  = pv.product_id
@@ -15,7 +15,7 @@ const findAll = async ({ variantId, productId, status, search } = {}) => {
   if (productId) { params.push(productId);      q += ` AND pv.product_id = $${params.length}`; }
   if (status)    { params.push(status);         q += ` AND pu.status = $${params.length}`; }
   if (search)    { params.push(`%${search}%`);  q += ` AND pu.unit_code ILIKE $${params.length}`; }
-  q += ` ORDER BY p.description ASC, pu.unit_code ASC`;
+  q += ` ORDER BY p.title ASC, pu.unit_code ASC`;
   return (await pool.query(q, params)).rows;
 };
 
@@ -24,7 +24,7 @@ const findById = async (id) => {
     `SELECT pu.id, pu.unit_code, pu.status, pu.notes, pu.created_at, pu.updated_at,
             pv.id    AS variant_id,  pv.color, pv.size, pv.capacity,
             pv.current_price::float8,
-            p.id     AS product_id,  p.description AS product_name
+            p.id     AS product_id,  p.title AS product_name
      FROM product_units pu
      JOIN product_variants pv ON pv.id = pu.variant_id
      JOIN products p          ON p.id  = pv.product_id
