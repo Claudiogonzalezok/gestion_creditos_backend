@@ -27,6 +27,17 @@ const create = async (req, res) => {
   }
 };
 
+const update = async (req, res) => {
+  try {
+    const brand = await service.update(req.params.id, req.body.name);
+    return response.success(res, brand, 'Marca actualizada correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const deactivate = async (req, res) => {
   try {
     await service.deactivate(req.params.id);
@@ -49,4 +60,4 @@ const activate = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, deactivate, activate };
+module.exports = { getAll, getById, create, update, deactivate, activate };

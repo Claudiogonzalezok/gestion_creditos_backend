@@ -30,6 +30,15 @@ const create = async (name) => {
   return r.rows[0];
 };
 
+const update = async (id, name) => {
+  const r = await pool.query(
+    `UPDATE product_brands SET name = $1 WHERE id = $2
+     RETURNING id, name, active, created_at`,
+    [name, id]
+  );
+  return r.rows[0] || null;
+};
+
 const deactivate = async (id) => {
   await pool.query(
     `UPDATE product_brands SET active = FALSE WHERE id = $1`, [id]
@@ -42,4 +51,11 @@ const activate = async (id) => {
   );
 };
 
-module.exports = { findAll, findById, findByName, create, deactivate, activate };
+const hasActiveProducts = async (id) => {
+  const r = await pool.query(
+    `SELECT id FROM products WHERE brand_id = $1 AND status = 'ACTIVE' LIMIT 1`, [id]
+  );
+  return r.rows.length > 0;
+};
+
+module.exports = { findAll, findById, findByName, create, update, deactivate, activate, hasActiveProducts };

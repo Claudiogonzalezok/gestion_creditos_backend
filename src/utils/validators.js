@@ -197,7 +197,7 @@ const customers = {
 const products = {
   create: [
     isString('title', 'El título del producto', { min: 2, max: 150 }),
-    isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
+    isString('description', 'La descripción del producto', { min: 1, max: 500, required: false }),
     isString('model', 'El modelo', { min: 1, max: 100, required: false }),
     isUUID('brand_id', 'El ID de marca', false),
     isUUID('category_id', 'El ID de categoría', false),
@@ -205,7 +205,7 @@ const products = {
   update: [
     isUUIDParam('id', 'El ID de producto'),
     isString('title', 'El título del producto', { min: 2, max: 150, required: false }),
-    isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
+    isString('description', 'La descripción del producto', { min: 1, max: 500, required: false }),
     isString('model', 'El modelo', { min: 1, max: 100, required: false }),
     isUUID('brand_id', 'El ID de marca', false),
     isUUID('category_id', 'El ID de categoría', false),
@@ -445,6 +445,12 @@ const productVariants = {
     isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
     isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
+    body().custom((_, { req }) => {
+      const { color, size, capacity } = req.body;
+      if (!color && !size && !capacity)
+        throw new Error('La variante debe tener al menos un atributo: color, talle o capacidad.');
+      return true;
+    }),
   ],
   update: [
     isUUIDParam('id', 'El ID de variante'),
@@ -452,6 +458,12 @@ const productVariants = {
     isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
     isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
+    body().custom((_, { req }) => {
+      const { color, size, capacity, current_price } = req.body;
+      if (color === undefined && size === undefined && capacity === undefined && current_price === undefined)
+        throw new Error('Debe enviar al menos un campo para actualizar: color, talle, capacidad o precio.');
+      return true;
+    }),
   ],
   id: [ isUUIDParam('id', 'El ID de variante') ],
 };

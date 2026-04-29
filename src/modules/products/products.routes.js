@@ -13,6 +13,8 @@ router.get('/',
   [
     query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.'),
     query('category_id').optional().isUUID().withMessage('category_id debe ser un UUID válido.'),
+    query('search').optional().trim().isLength({ max: 100 })
+      .withMessage('El criterio de búsqueda no puede superar los 100 caracteres.'),
   ],
   validate,
   controller.getAll

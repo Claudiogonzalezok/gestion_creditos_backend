@@ -49,6 +49,12 @@ const createBulk = async (variantId, units, userId) => {
   if (variantCheck.rows[0].product_status !== 'ACTIVE')
     throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
 
+  // Verificar duplicados internos en el batch antes de ir a la DB
+  const codes = units.map(u => u.unit_code);
+  const uniqueCodes = new Set(codes);
+  if (uniqueCodes.size !== codes.length)
+    throw { status: 409, message: 'El listado contiene códigos de unidad duplicados.' };
+
   return withTransaction(async (client) => {
     const created = [];
     for (const u of units) {

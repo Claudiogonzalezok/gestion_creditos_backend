@@ -126,8 +126,23 @@ const findActiveProductById = async (id) => {
   return r.rows[0] || null;
 };
 
+// Busca variante con misma combinación de atributos para el mismo producto.
+// excludeId permite ignorar la propia variante al actualizar.
+const findDuplicate = async (productId, color, size, capacity, excludeId = null) => {
+  const params = [productId, color || null, size || null, capacity || null];
+  let q = `
+    SELECT id FROM product_variants
+    WHERE product_id = $1
+      AND (color    IS NOT DISTINCT FROM $2)
+      AND (size     IS NOT DISTINCT FROM $3)
+      AND (capacity IS NOT DISTINCT FROM $4)`;
+  if (excludeId) { params.push(excludeId); q += ` AND id <> $5`; }
+  const r = await pool.query(q, params);
+  return r.rows[0] || null;
+};
+
 module.exports = {
   findAll, findById, findByProductId,
   create, update, deactivate, activate,
-  hasActiveUnits, findActiveProductById,
+  hasActiveUnits, findActiveProductById, findDuplicate,
 };

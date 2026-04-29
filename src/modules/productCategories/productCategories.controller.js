@@ -18,12 +18,24 @@ const create = async (req, res) => {
   }
 };
 
+const update = async (req, res) => {
+  try {
+    const result = await service.update(req.params.id, req.body.name);
+    return response.success(res, result, 'Categoría actualizada correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const activate = async (req, res) => {
   try {
     await service.activate(req.params.id);
     return response.success(res, null, 'Categoría activada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }
 };
@@ -34,8 +46,9 @@ const deactivate = async (req, res) => {
     return response.success(res, null, 'Categoría desactivada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }
 };
 
-module.exports = { getAll, create, activate, deactivate };
+module.exports = { getAll, create, update, activate, deactivate };
