@@ -115,8 +115,8 @@ const isDate = (field, label, required = true) => {
   let rule = body(field);
   if (!required) rule = rule.optional({ nullable: true, checkFalsy: true });
   return rule
-    .isISO8601().withMessage(`${label} debe ser una fecha válida en formato YYYY-MM-DD.`)
-    .toDate();
+    .isISO8601({ strict: true }).withMessage(`${label} debe ser una fecha válida en formato YYYY-MM-DD.`)
+    .trim();
 };
 
 // ── Booleano ──────────────────────────────────────────────────
