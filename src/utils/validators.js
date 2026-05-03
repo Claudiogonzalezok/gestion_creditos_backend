@@ -414,8 +414,6 @@ const penalties = {
         if (isNaN(n) || n < 0.01) throw new Error('El monto de mora debe ser mayor a 0.');
         return true;
       }),
-    body('reason').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 255 }).withMessage('El motivo no puede superar los 255 caracteres.'),
   ],
   earlyPay: [
     isUUIDParam('id', 'El ID de cuota'),
@@ -538,18 +536,6 @@ const commissions = {
   ],
 };
 
-// ── AUTH ──────────────────────────────────────────────────────
-const auth = {
-  login: [
-    body('dni').trim()
-      .notEmpty().withMessage('El DNI es obligatorio.')
-      .isLength({ min: 7, max: 20 }).withMessage('El DNI debe tener entre 7 y 20 caracteres.'),
-    body('password')
-      .notEmpty().withMessage('La contraseña es obligatoria.')
-      .isLength({ max: 100 }).withMessage('La contraseña no puede superar los 100 caracteres.'),
-  ],
-};
-
 module.exports = {
   // Bloques atómicos reutilizables
   isString, isDni, isEmail, isPhone, isUUID, isUUIDParam,
@@ -571,7 +557,6 @@ module.exports = {
   expenses,
   expenseCategories,
   productCategories,
-  auth,
 };
 
 // productUnits se valida directamente en su propio router.

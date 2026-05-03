@@ -1,3 +1,4 @@
+const pool     = require('../../config/db');
 const service  = require('./auth.service');
 const response = require('../../utils/response');
 const jwtUtil  = require('../../utils/jwt');
@@ -51,8 +52,22 @@ const logoutPortal = async (req, res) => {
 };
 
 // GET /api/auth/me — Devuelve el usuario autenticado actual
-const me = (req, res) => {
-  return response.success(res, req.user);
+const me = async (req, res) => {
+  try {
+    const { id, full_name, role, status, is_temp_password } = req.user;
+    const data = { id, full_name, role, status, is_temp_password };
+
+    if (role === 'ADMIN') {
+      const r = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM credits WHERE status = 'PENDING_APPROVAL'`
+      );
+      data.pending_approvals_count = r.rows[0].count;
+    }
+
+    return response.success(res, data);
+  } catch (err) {
+    return response.serverError(res, err);
+  }
 };
 
 module.exports = { loginInternal, loginPortal, logout, logoutPortal, me };

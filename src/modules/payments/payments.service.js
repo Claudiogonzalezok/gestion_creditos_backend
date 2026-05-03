@@ -81,11 +81,12 @@ const approve = async (id, adminId) => {
       amountPaid
     );
 
-    let remaining = amountReceived - (amountDue - amountPaid);
+    const round = (n) => Math.round(n * 100) / 100;
+    let remaining = round(amountReceived - (amountDue - amountPaid));
     let paidCount = 0; // cuotas adelantadas (aparte de la cuota principal)
 
     // Si sobra saldo, aplicar a cuotas siguientes (adelanto)
-    if (remaining > 0.001 && newInstStatus === 'PAID') {
+    if (remaining > 0 && newInstStatus === 'PAID') {
       const nextInstallments = await queries.getPendingInstallmentsFrom(
         client,
         payment.credit_id,
@@ -93,9 +94,9 @@ const approve = async (id, adminId) => {
       );
 
       for (const inst of nextInstallments) {
-        if (remaining <= 0.001) break;
+        if (remaining <= 0) break;
 
-        const instBalance = parseFloat(inst.amount_due) - parseFloat(inst.amount_paid);
+        const instBalance = round(parseFloat(inst.amount_due) - parseFloat(inst.amount_paid));
         if (remaining >= instBalance) {
           // Cubre esta cuota completa → marcar como PAID con nota de adelanto
           await queries.markInstallmentAsPrepaid(
@@ -105,7 +106,7 @@ const approve = async (id, adminId) => {
             'Pago adelantado',
             payment.payment_method
           );
-          remaining -= instBalance;
+          remaining = round(remaining - instBalance);
           paidCount++;
         } else {
           // Cubre solo parcialmente → actualizar amount_paid

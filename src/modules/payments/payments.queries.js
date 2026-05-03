@@ -121,12 +121,20 @@ const reject = async (id, rejectionReason, adminId) => {
 // Saldo pendiente total de todas las cuotas no pagadas del crédito
 const getTotalPendingBalance = async (creditId) => {
   const r = await pool.query(
-    `SELECT COALESCE(SUM(amount_due - amount_paid), 0)::float8 AS total
-     FROM installments
-     WHERE credit_id = $1 AND status NOT IN ('PAID')`,
+    `SELECT (
+       COALESCE(SUM(i.amount_due - i.amount_paid), 0)
+       - COALESCE((
+           SELECT SUM(p.amount_received)
+           FROM payments p
+           JOIN installments i2 ON i2.id = p.installment_id
+           WHERE i2.credit_id = $1 AND p.status = 'PENDING'
+         ), 0)
+     )::float8 AS total
+     FROM installments i
+     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID')`,
     [creditId]
   );
-  return r.rows[0].total;
+  return Math.max(r.rows[0].total, 0);
 };
 
 // Cuotas pendientes/vencidas/parciales ordenadas desde un número de cuota dado
@@ -165,7 +173,7 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
      )
      UPDATE installments i
      SET original_due_date = COALESCE(i.original_due_date, i.due_date),
-         due_date           = ($3::date + ((ordered.rn - 1) * $2::interval))::date,
+         due_date           = (GREATEST($3::date, CURRENT_DATE) + ((ordered.rn - 1) * $2::interval))::date,
          updated_at         = NOW()
      FROM ordered
      WHERE i.id = ordered.id`,

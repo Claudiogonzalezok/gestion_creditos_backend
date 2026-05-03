@@ -4,8 +4,7 @@ const irQueries   = require('../interestRates/interestRates.queries');
 const prQueries   = require('../productRates/productRates.queries');
 const puQueries   = require('../productUnits/productUnits.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
-const { shiftInstallmentDates } = require('../payments/payments.queries');
-const { withTransaction }       = require('../../utils/transaction');
+const { withTransaction } = require('../../utils/transaction');
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -352,7 +351,9 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         approvedBy:        adminId,
         paymentType:       'PREPAID_INSTALLMENT',
       });
-      await shiftInstallmentDates(client, id, credit.payment_frequency, dueDates[0]);
+      // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
+      // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
+      // conservan sus fechas originales sin necesidad de reasignación.
     }
 
     const unitIds = creditUnits.map((u) => u.unit_id);
@@ -408,29 +409,33 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
   if (!pendingInstallments.length)
     throw { status: 409, message: 'Este crédito no tiene cuotas pendientes.' };
 
-  const settlementAmount = pendingInstallments.reduce(
-    (sum, inst) => sum + inst.amount_due - inst.amount_paid, 0
-  );
-  const roundedSettlementAmount = Math.round(settlementAmount * 100) / 100;
-  const firstPendingId = pendingInstallments[0].id;
+  const settlementAmount = Math.round(
+    pendingInstallments.reduce((sum, inst) => sum + inst.amount_due - inst.amount_paid, 0) * 100
+  ) / 100;
 
   return withTransaction(async (client) => {
     await queries.settleAllInstallments(client, id);
-    await client.query(
-      `INSERT INTO payments
-         (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-          status, approved_by, approved_at, notes)
-       VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Cancelación anticipada')`,
-      [firstPendingId, adminId, roundedSettlementAmount, paymentMethod, transferReference || null]
-    );
+
+    // Un payment por cuota para mantener trazabilidad completa en reportes y auditoría
+    for (const inst of pendingInstallments) {
+      const instAmount = Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
+      await client.query(
+        `INSERT INTO payments
+           (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+            status, approved_by, approved_at, notes)
+         VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Cancelación anticipada')`,
+        [inst.id, adminId, instAmount, paymentMethod, transferReference || null]
+      );
+    }
+
     await client.query(
       `UPDATE credits
        SET status = 'SETTLED', settled_at = NOW(),
            settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION', updated_at = NOW()
        WHERE id = $2`,
-      [roundedSettlementAmount, id]
+      [settlementAmount, id]
     );
-    return { credit_id: id, settlement_amount: roundedSettlementAmount, payment_method: paymentMethod };
+    return { credit_id: id, settlement_amount: settlementAmount, payment_method: paymentMethod };
   });
 };
 

@@ -602,7 +602,7 @@ for (let i = 0; i < pd.availableUnits; i++) {
       await client.query(
         `INSERT INTO cash_registers
            (register_date, cash_amount, transfer_amount, total_collected,
-            total_egreses, declared_cash, difference, difference_status, observations, closed_by)
+            total_outflows, declared_cash, difference, difference_status, observations, closed_by)
          VALUES ($1,$2,$3,$4,0,$5,$6,$7,$8,$9)`,
         [regDate, cashAmt, transferAmt, total, declared, diff, diffStatus,
          'Cierre diario — datos de prueba', adminId]
