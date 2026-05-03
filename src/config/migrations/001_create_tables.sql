@@ -342,7 +342,7 @@ CREATE TABLE IF NOT EXISTS public.cash_registers (
     transfer_amount   NUMERIC(12,2)   NOT NULL DEFAULT 0,
     declared_cash     NUMERIC(12,2)   NOT NULL DEFAULT 0,
     difference        NUMERIC(12,2)   NOT NULL DEFAULT 0,
-    total_egreses     NUMERIC(12,2)   NOT NULL DEFAULT 0,
+    total_egresos     NUMERIC(12,2)   NOT NULL DEFAULT 0,
     difference_status VARCHAR(15)     NOT NULL DEFAULT 'EXACT'
                           CONSTRAINT cash_registers_difference_status_check
                           CHECK (difference_status IN ('EXACT','SURPLUS','SHORTAGE')),
