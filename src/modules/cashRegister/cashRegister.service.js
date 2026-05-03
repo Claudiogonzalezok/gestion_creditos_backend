@@ -46,7 +46,7 @@ const close = async (data, adminId) => {
   const cashAmount   = totals.cash_amount;
   const transferAmount = totals.transfer_amount;
   const totalCollected = cashAmount + transferAmount;
-  const totalEgreses = totals.total_egresos;
+  const totalEgresos = totals.total_egresos;
   const declaredCash = parseFloat(data.declared_cash);
   const difference   = declaredCash - cashAmount;
 
@@ -64,7 +64,7 @@ const close = async (data, adminId) => {
       cashAmount,
       transferAmount,
       totalCollected,
-      totalEgreses,
+      totalEgresos,
       declaredCash,
       difference,
       differenceStatus,

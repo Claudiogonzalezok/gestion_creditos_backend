@@ -225,7 +225,7 @@ const findById = async (id) => {
 // ── Crear cierre ──────────────────────────────────────────────
 const create = async (client, {
   registerDate, cashAmount, transferAmount, totalCollected,
-  totalEgreses, declaredCash, difference, differenceStatus, observations, closedBy,
+  totalEgresos, declaredCash, difference, differenceStatus, observations, closedBy,
 }) => {
   const r = await client.query(
     `INSERT INTO cash_registers
@@ -239,7 +239,7 @@ const create = async (client, {
                difference_status, observations, created_at`,
     [
       registerDate, cashAmount, transferAmount, totalCollected,
-      totalEgreses, declaredCash, difference, differenceStatus, observations || null, closedBy,
+      totalEgresos, declaredCash, difference, differenceStatus, observations || null, closedBy,
     ]
   );
   return r.rows[0];
