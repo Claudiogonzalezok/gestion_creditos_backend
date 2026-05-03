@@ -165,7 +165,7 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
      )
      UPDATE installments i
      SET original_due_date = COALESCE(i.original_due_date, i.due_date),
-         due_date           = ($3::date + ((ordered.rn - 1) * $2::interval))::date,
+         due_date           = (GREATEST($3::date, CURRENT_DATE) + ((ordered.rn - 1) * $2::interval))::date,
          updated_at         = NOW()
      FROM ordered
      WHERE i.id = ordered.id`,

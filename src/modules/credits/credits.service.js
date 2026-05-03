@@ -4,8 +4,7 @@ const irQueries   = require('../interestRates/interestRates.queries');
 const prQueries   = require('../productRates/productRates.queries');
 const puQueries   = require('../productUnits/productUnits.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
-const { shiftInstallmentDates } = require('../payments/payments.queries');
-const { withTransaction }       = require('../../utils/transaction');
+const { withTransaction } = require('../../utils/transaction');
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -352,7 +351,9 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         approvedBy:        adminId,
         paymentType:       'PREPAID_INSTALLMENT',
       });
-      await shiftInstallmentDates(client, id, credit.payment_frequency, dueDates[0]);
+      // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
+      // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
+      // conservan sus fechas originales sin necesidad de reasignación.
     }
 
     const unitIds = creditUnits.map((u) => u.unit_id);
