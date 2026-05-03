@@ -15,6 +15,11 @@ const pool = new Pool({
   connectionTimeoutMillis: 5000,
 });
 
+// Fijar zona horaria ART en cada conexión para que los ::date casts sean correctos.
+pool.on('connect', (client) => {
+  client.query("SET TIME ZONE 'America/Argentina/Buenos_Aires'");
+});
+
 // Verificar conexión al iniciar
 pool.connect((err, client, release) => {
   if (err) {
