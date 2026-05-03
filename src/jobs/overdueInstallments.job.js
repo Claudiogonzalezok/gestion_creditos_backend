@@ -14,11 +14,11 @@ const markOverdueAndApplyPenalty = async () => {
     const maxRate    = parseFloat(await getValue('penalty_max_rate')  || '0.50');
     const dailyRate  = parseFloat(await getValue('penalty_rate_daily')|| '0.005');
 
-    // 1. Pasar PENDING → OVERDUE cuando la fecha venció + días de gracia
+    // 1. Pasar PENDING/PARTIAL → OVERDUE cuando la fecha venció + días de gracia
     const overdueResult = await client.query(
       `UPDATE installments
        SET status = 'OVERDUE', updated_at = NOW()
-       WHERE status = 'PENDING'
+       WHERE status IN ('PENDING', 'PARTIAL')
          AND due_date < (CURRENT_DATE - $1 * INTERVAL '1 day')
        RETURNING id, amount_due, penalty_amount`,
       [graceDays]
@@ -48,7 +48,7 @@ const markOverdueAndApplyPenalty = async () => {
 
     const count = overdueResult.rows.length;
     if (count > 0)
-      console.log(`[JOB overdueInstallments] ${count} cuota(s) pasaron a OVERDUE.`);
+      console.log(`[JOB overdueInstallments] ${count} cuota(s) pasaron a OVERDUE (PENDING + PARTIAL).`);
     else
       console.log('[JOB overdueInstallments] Sin nuevas cuotas vencidas.');
 
