@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     locked_at        TIMESTAMPTZ     NULL,
     last_login_at    TIMESTAMPTZ     NULL,
     force_relogin_at TIMESTAMPTZ     NULL,
-    address          VARCHAR(50)     NULL,
+    address          VARCHAR(255)    NULL,
     created_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
