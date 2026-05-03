@@ -208,13 +208,13 @@ CREATE TABLE IF NOT EXISTS public.credits (
     total_amount                      NUMERIC(12,2)   NOT NULL
                                           CONSTRAINT credits_total_amount_check CHECK (total_amount > 0),
     down_payment                      NUMERIC(12,2)   NOT NULL DEFAULT 0
-                                          CONSTRAINT credits_down_payment_check CHECK (down_payment >= 0),
+                                          CONSTRAINT credits_down_payment_check CHECK (down_payment IS NULL OR down_payment < total_amount),
     down_payment_method               VARCHAR(15)     NULL
                                           CONSTRAINT credits_down_payment_method_check
                                           CHECK (down_payment_method IN ('CASH','TRANSFER')),
     down_payment_transfer_reference   VARCHAR(100)    NULL,
     prepaid_installments              SMALLINT        NOT NULL DEFAULT 0
-                                          CONSTRAINT credits_prepaid_installments_check CHECK (prepaid_installments >= 0),
+                                          CONSTRAINT credits_prepaid_installments_check CHECK (prepaid_installments IS NULL OR prepaid_installments < installments_count),
     prepaid_installments_method       VARCHAR(15)     NULL
                                           CONSTRAINT credits_prepaid_installments_method_check
                                           CHECK (prepaid_installments_method IN ('CASH','TRANSFER')),
