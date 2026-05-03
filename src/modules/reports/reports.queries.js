@@ -2,6 +2,13 @@ const pool = require('../../config/db');
 
 // ── 1. Reporte de recaudación ─────────────────────────────────
 
+/**
+ * Genera el reporte de recaudación consolidando cuotas cobradas y enganches aprobados.
+ * Solo toma DOWN_PAYMENT para no mezclar otros ingresos internos de créditos.
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<object>} Resumen y detalle diario de recaudación.
+ */
 const getCollectionReport = async (dateFrom, dateTo) => {
   const daily = await pool.query(
     `SELECT
@@ -36,10 +43,11 @@ const getCollectionReport = async (dateFrom, dateTo) => {
          0                                                                              AS installments_count,
          COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
          COUNT(*)                                                                       AS down_payments_count
-       FROM credit_down_payments cdp
-       WHERE cdp.created_at::date BETWEEN $1 AND $2
-       GROUP BY cdp.created_at::date
-     ) sub
+        FROM credit_down_payments cdp
+        WHERE cdp.created_at::date BETWEEN $1 AND $2
+          AND cdp.payment_type = 'DOWN_PAYMENT'
+        GROUP BY cdp.created_at::date
+      ) sub
      GROUP BY day
      ORDER BY day`,
     [dateFrom, dateTo]
@@ -74,9 +82,10 @@ const getCollectionReport = async (dateFrom, dateTo) => {
          0                                                                              AS installments_count,
          COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
          COUNT(*)                                                                       AS down_payments_count
-       FROM credit_down_payments cdp
-       WHERE cdp.created_at::date BETWEEN $1 AND $2
-     ) sub`,
+        FROM credit_down_payments cdp
+        WHERE cdp.created_at::date BETWEEN $1 AND $2
+          AND cdp.payment_type = 'DOWN_PAYMENT'
+      ) sub`,
     [dateFrom, dateTo]
   );
 
@@ -309,6 +318,11 @@ const getUpcomingReport = async (days = 30) => {
 
 // ── 7. Resumen ejecutivo del día ──────────────────────────────
 
+/**
+ * Devuelve un resumen ejecutivo del día para el panel administrativo.
+ * Suma los enganches reales del día junto con la cobranza aprobada.
+ * @returns {Promise<object>} Métricas diarias clave del negocio.
+ */
 const getSummaryReport = async () => {
   const r = await pool.query(
     `WITH
@@ -321,16 +335,14 @@ const getSummaryReport = async () => {
        FROM payments p
        WHERE p.status = 'APPROVED' AND p.approved_at::date = CURRENT_DATE
      ),
-     /* TODO (PROD): reemplazar por la query real cuando se aplique la migración
-        001_create_tables.sql en el servidor de producción (tabla credit_down_payments).
-        Query original:
-          SELECT COALESCE(SUM(amount), 0)::float8 AS total, COUNT(*)::int AS count
-          FROM credit_down_payments
-          WHERE created_at::date = CURRENT_DATE
-     */
-     today_down_payments AS (
-       SELECT 0::float8 AS total, 0::int AS count
-     ),
+      today_down_payments AS (
+        SELECT
+          COALESCE(SUM(amount), 0)::float8 AS total,
+          COUNT(*)::int                    AS count
+        FROM credit_down_payments
+        WHERE created_at::date = CURRENT_DATE
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
      pending_payments AS (
        SELECT COUNT(*)::int AS count FROM payments WHERE status = 'PENDING'
      ),

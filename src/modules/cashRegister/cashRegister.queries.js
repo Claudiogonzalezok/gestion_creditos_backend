@@ -1,6 +1,12 @@
 const pool = require('../../config/db');
 
 // ── Dashboard del día — única query con CTEs ──────────────────
+/**
+ * Obtiene el dashboard diario de caja sumando cobros aprobados y enganches.
+ * Solo incorpora movimientos tipo DOWN_PAYMENT dentro del bloque de ventas.
+ * @param {string} date - Fecha local del día a consultar.
+ * @returns {Promise<object>} Resumen consolidado de caja.
+ */
 const getDashboard = async (date) => {
   const r = await pool.query(
     `WITH
@@ -17,14 +23,15 @@ const getDashboard = async (date) => {
           OR (status = 'PENDING'  AND created_at::date  = $1::date)
      ),
      down_payments_data AS (
-       SELECT
-         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
-         COALESCE(SUM(amount), 0)                                             AS total,
-         COUNT(*)                                                              AS count
-       FROM credit_down_payments
-       WHERE created_at::date = $1::date
-     ),
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+          COALESCE(SUM(amount), 0)                                             AS total,
+          COUNT(*)                                                              AS count
+        FROM credit_down_payments
+        WHERE created_at::date = $1::date
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
      egreses_data AS (
        SELECT COALESCE(SUM(total_paid), 0) AS total
        FROM commission_liquidations
@@ -59,6 +66,12 @@ const getDashboard = async (date) => {
 };
 
 // ── Totales del día para el cierre — una sola query ───────────
+/**
+ * Calcula los totales diarios usados para el cierre de caja.
+ * Mantiene separado el ingreso por enganches respecto de otros movimientos no requeridos.
+ * @param {string} date - Fecha local del cierre.
+ * @returns {Promise<object>} Totales de efectivo, transferencias y egresos.
+ */
 const getDailyTotals = async (date) => {
   const r = await pool.query(
     `WITH
@@ -70,12 +83,13 @@ const getDailyTotals = async (date) => {
        WHERE status = 'APPROVED' AND approved_at::date = $1::date
      ),
      down_payment_totals AS (
-       SELECT
-         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
-       FROM credit_down_payments
-       WHERE created_at::date = $1::date
-     ),
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+        FROM credit_down_payments
+        WHERE created_at::date = $1::date
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
      egreses_totals AS (
        SELECT COALESCE(SUM(total_paid), 0) AS total
        FROM commission_liquidations
@@ -178,15 +192,16 @@ const findById = async (id) => {
     ),
     pool.query(
       `SELECT cdp.id, cdp.amount::float8, cdp.payment_method,
-              cdp.transfer_reference, cdp.created_at,
+              cdp.transfer_reference, cdp.payment_type, cdp.created_at,
               cu.full_name AS customer_name,
               u.full_name  AS approved_by_name
-       FROM credit_down_payments cdp
-       JOIN credits c    ON c.id  = cdp.credit_id
-       JOIN customers cu ON cu.id = c.customer_id
-       JOIN users u      ON u.id  = cdp.approved_by
-       WHERE cdp.created_at::date = $1::date
-       ORDER BY cdp.created_at`,
+        FROM credit_down_payments cdp
+        JOIN credits c    ON c.id  = cdp.credit_id
+        JOIN customers cu ON cu.id = c.customer_id
+        JOIN users u      ON u.id  = cdp.approved_by
+        WHERE cdp.created_at::date = $1::date
+          AND cdp.payment_type = 'DOWN_PAYMENT'
+        ORDER BY cdp.created_at`,
       [register.register_date]
     ),
     pool.query(
