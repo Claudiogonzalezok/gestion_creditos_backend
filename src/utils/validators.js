@@ -251,22 +251,12 @@ const credits = {
       .withMessage('El método de pago del enganche debe ser CASH o TRANSFER.'),
     body('down_payment_transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 100 }).withMessage('La referencia del enganche no puede superar los 100 caracteres.'),
-    // Adelanto de cuotas (solo aplica a SALE)
-    body('prepaid_installments')
-      .if(body('type').equals('LOAN'))
-      .not().exists()
-      .withMessage('El adelanto de cuotas no aplica a préstamos en efectivo.'),
-    body('prepaid_installments')
-      .if(body('type').equals('SALE'))
-      .optional({ nullable: true })
-      .isInt({ min: 1, max: 120 })
-      .withMessage('El adelanto de cuotas debe ser un número entero entre 1 y 120.'),
-    body('prepaid_installments_method')
-      .if((val, { req }) => parseInt(req.body.prepaid_installments) >= 1)
-      .isIn(['CASH','TRANSFER'])
-      .withMessage('El método de pago del adelanto debe ser CASH o TRANSFER.'),
-    body('prepaid_installments_transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 100 }).withMessage('La referencia del adelanto no puede superar los 100 caracteres.'),
+    body('prepaid_installments').not().exists()
+      .withMessage('El adelanto de cuotas ya no se registra al crear el crédito. Debe ingresarse desde Cobros.'),
+    body('prepaid_installments_method').not().exists()
+      .withMessage('El método del adelanto de cuotas ya no se informa al crear el crédito.'),
+    body('prepaid_installments_transfer_reference').not().exists()
+      .withMessage('La referencia del adelanto de cuotas ya no se informa al crear el crédito.'),
     body('notes').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las notas no pueden superar los 500 caracteres.'),
   ],

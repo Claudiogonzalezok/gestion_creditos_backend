@@ -19,6 +19,12 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
   return (await pool.query(q, params)).rows;
 };
 
+/**
+ * Busca un crédito por ID con su detalle completo y cronograma asociado.
+ * Incluye fechas originales de cuotas para auditar corrimientos por pagos adelantados.
+ * @param {string} id - ID del crédito.
+ * @returns {Promise<object|null>} Crédito completo o null si no existe.
+ */
 const findById = async (id) => {
   const r = await pool.query(
     `SELECT c.id, c.type, c.total_amount::float8, c.down_payment::float8,
@@ -59,7 +65,7 @@ const findById = async (id) => {
   }
 
   const inst = await pool.query(
-    `SELECT id, installment_number, due_date,
+    `SELECT id, installment_number, due_date, original_due_date,
             amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments WHERE credit_id = $1 ORDER BY installment_number`,
     [id]
@@ -99,9 +105,11 @@ const create = async (client, {
         prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
         installments_count, payment_frequency, notes)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-     RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
-               prepaid_installments::int, prepaid_installments_method,
-               installments_count::int, payment_frequency, status, created_at`,
+      RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
+                down_payment_transfer_reference,
+                prepaid_installments::int, prepaid_installments_method,
+                prepaid_installments_transfer_reference,
+                installments_count::int, payment_frequency, status, created_at`,
     [
       customer_id, created_by, type, total_amount,
       down_payment || 0, down_payment_method || null, down_payment_transfer_reference || null,
@@ -217,6 +225,12 @@ const expireOldCredits = async (days) => {
   return r.rowCount;
 };
 
+/**
+ * Registra un ingreso aprobado asociado a un crédito de venta.
+ * Se usa para enganches y otros ingresos de la operación que no nacen como pre-carga.
+ * @param {object} client - Cliente de transacción.
+ * @param {object} data - Datos del ingreso aprobado.
+ */
 const createDownPayment = async (client, { creditId, amount, paymentMethod, transferReference, approvedBy, paymentType = 'DOWN_PAYMENT' }) => {
   await client.query(
     `INSERT INTO credit_down_payments
@@ -226,22 +240,11 @@ const createDownPayment = async (client, { creditId, amount, paymentMethod, tran
   );
 };
 
-const markPrepaidInstallments = async (client, creditId, count) => {
-  const r = await client.query(
-    `UPDATE installments
-     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
-     WHERE credit_id = $1 AND installment_number <= $2
-     RETURNING amount_due::float8`,
-    [creditId, count]
-  );
-  return r.rows.reduce((sum, row) => sum + row.amount_due, 0);
-};
-
 module.exports = {
   findAll, findById, findCreditUnits, findCreditUnitIds,
   create, createCreditUnit, saveHistoricalRate,
   approve, generateInstallments, createCommission,
-  createDownPayment, markPrepaidInstallments,
+  createDownPayment,
   reject, getPendingInstallments, settleAllInstallments, settleCredit,
   expireOldCredits,
 };
