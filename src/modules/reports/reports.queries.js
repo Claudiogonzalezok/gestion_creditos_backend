@@ -321,15 +321,10 @@ const getSummaryReport = async () => {
        FROM payments p
        WHERE p.status = 'APPROVED' AND p.approved_at::date = CURRENT_DATE
      ),
-     /* TODO (PROD): reemplazar por la query real cuando se aplique la migración
-        001_create_tables.sql en el servidor de producción (tabla credit_down_payments).
-        Query original:
-          SELECT COALESCE(SUM(amount), 0)::float8 AS total, COUNT(*)::int AS count
-          FROM credit_down_payments
-          WHERE created_at::date = CURRENT_DATE
-     */
      today_down_payments AS (
-       SELECT 0::float8 AS total, 0::int AS count
+       SELECT COALESCE(SUM(amount), 0)::float8 AS total, COUNT(*)::int AS count
+       FROM credit_down_payments
+       WHERE created_at::date = CURRENT_DATE
      ),
      pending_payments AS (
        SELECT COUNT(*)::int AS count FROM payments WHERE status = 'PENDING'
