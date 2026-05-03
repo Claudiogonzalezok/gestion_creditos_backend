@@ -28,13 +28,18 @@ CREATE INDEX IF NOT EXISTS idx_payments_installment_status
 CREATE INDEX IF NOT EXISTS idx_expenses_date_user
   ON expenses(expense_date, created_by);
 
--- ── Corrección de typo: total_egreses → total_egresos (solo aplica a DBs existentes) ───
+-- ── Renombrar columna a inglés (aplica a DBs existentes con cualquiera de los nombres anteriores) ───
 DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name = 'cash_registers' AND column_name = 'total_egreses'
   ) THEN
-    ALTER TABLE cash_registers RENAME COLUMN total_egreses TO total_egresos;
+    ALTER TABLE cash_registers RENAME COLUMN total_egreses TO total_outflows;
+  ELSIF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'cash_registers' AND column_name = 'total_egresos'
+  ) THEN
+    ALTER TABLE cash_registers RENAME COLUMN total_egresos TO total_outflows;
   END IF;
 END$$;

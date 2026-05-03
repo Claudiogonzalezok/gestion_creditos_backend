@@ -43,7 +43,7 @@ const getDashboard = async (date) => {
        (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
        (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
        (p.total_collected + dp.total)::float8               AS total_collected,
-       (e.total + ex.total)::float8                         AS total_egresos,
+       (e.total + ex.total)::float8                         AS total_outflows,
        (p.total_collected + dp.total - e.total - ex.total)::float8 AS net_balance,
        p.approved_count::int                                AS approved_count,
        p.pending_count::int                                 AS pending_count,
@@ -92,7 +92,7 @@ const getDailyTotals = async (date) => {
      SELECT
        (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
        (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
-       (e.total + ex.total)::float8                         AS total_egresos
+       (e.total + ex.total)::float8                         AS total_outflows
      FROM payments_totals p, down_payment_totals dp, egreses_totals e, expenses_totals ex`,
     [date]
   );
@@ -125,7 +125,7 @@ const findAll = async ({ dateFrom, dateTo, differenceStatus } = {}) => {
   let q = `
     SELECT cr.id, cr.register_date,
            cr.total_collected::float8, cr.cash_amount::float8,
-           cr.transfer_amount::float8, cr.total_egresos::float8,
+           cr.transfer_amount::float8, cr.total_outflows::float8,
            cr.declared_cash::float8, cr.difference::float8,
            cr.difference_status, cr.observations, cr.created_at,
            u.full_name AS closed_by_name
@@ -145,7 +145,7 @@ const findById = async (id) => {
   const registerResult = await pool.query(
     `SELECT cr.id, cr.register_date,
             cr.total_collected::float8, cr.cash_amount::float8,
-            cr.transfer_amount::float8, cr.total_egresos::float8,
+            cr.transfer_amount::float8, cr.total_outflows::float8,
             cr.declared_cash::float8, cr.difference::float8,
             cr.difference_status, cr.observations, cr.created_at,
             u.full_name AS closed_by_name
@@ -230,10 +230,10 @@ const create = async (client, {
   const r = await client.query(
     `INSERT INTO cash_registers
        (register_date, cash_amount, transfer_amount, total_collected,
-        total_egresos, declared_cash, difference, difference_status, observations, closed_by)
+        total_outflows, declared_cash, difference, difference_status, observations, closed_by)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id, register_date,
-               total_collected::float8, total_egresos::float8,
+               total_collected::float8, total_outflows::float8,
                cash_amount::float8, transfer_amount::float8,
                declared_cash::float8, difference::float8,
                difference_status, observations, created_at`,

@@ -11,7 +11,7 @@ const getDashboard = async (date) => {
     cash_amount:         data.cash_amount,
     transfer_amount:     data.transfer_amount,
     total_collected:     data.total_collected,
-    total_egresos:       data.total_egresos,
+    total_outflows:       data.total_outflows,
     net_balance:         data.net_balance,
     approved_count:      data.approved_count,
     pending_count:       data.pending_count,
@@ -46,7 +46,7 @@ const close = async (data, adminId) => {
   const cashAmount   = totals.cash_amount;
   const transferAmount = totals.transfer_amount;
   const totalCollected = cashAmount + transferAmount;
-  const totalEgresos = totals.total_egresos;
+  const totalOutflows = totals.total_outflows;
   const declaredCash = parseFloat(data.declared_cash);
   const difference   = declaredCash - cashAmount;
 
@@ -64,7 +64,7 @@ const close = async (data, adminId) => {
       cashAmount,
       transferAmount,
       totalCollected,
-      totalEgresos,
+      totalOutflows,
       declaredCash,
       difference,
       differenceStatus,
