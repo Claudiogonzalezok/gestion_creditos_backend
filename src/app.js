@@ -1,12 +1,30 @@
 require('dotenv').config();
 
-const express   = require('express');
-const cors      = require('cors');
-const helmet    = require('helmet');
-const morgan    = require('morgan');
-const rateLimit = require('express-rate-limit');
+const express    = require('express');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const morgan     = require('morgan');
+const rateLimit  = require('express-rate-limit');
+const swaggerUi  = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
 
 const app = express();
+
+// ── Documentación API ─────────────────────────────────────────
+// CSP permisiva solo para esta ruta (swagger-ui necesita inline scripts/styles)
+app.use('/api/docs',
+  (req, res, next) => {
+    res.setHeader('Content-Security-Policy',
+      "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    );
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: 'API Gestión Créditos',
+    swaggerOptions: { persistAuthorization: true },
+  })
+);
 
 // ── Seguridad y CORS ──────────────────────────────────────────
 app.use(helmet());
