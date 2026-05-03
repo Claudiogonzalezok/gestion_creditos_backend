@@ -2,11 +2,12 @@ const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
 const { localDate } = require('../../utils/date');
 
-const getDashboard = async () => {
+const getDashboard = async (date) => {
   const today = localDate();
-  const data  = await queries.getDashboard(today);
+  const target = date || today;
+  const data  = await queries.getDashboard(target);
   return {
-    date:                today,
+    date:                target,
     cash_amount:         data.cash_amount,
     transfer_amount:     data.transfer_amount,
     total_collected:     data.total_collected,
@@ -21,19 +22,27 @@ const getDashboard = async () => {
 };
 
 const close = async (data, adminId) => {
-  const today = localDate();
+  const today        = localDate();
+  const registerDate = data.register_date || today;
 
-  const existing = await queries.findByDate(today);
+  if (registerDate > today)
+    throw { status: 422, message: 'No se puede cerrar una caja de fecha futura.' };
+
+  const existing = await queries.findByDate(registerDate);
   if (existing)
-    throw { status: 409, message: 'Ya existe un cierre de caja para hoy.' };
+    throw { status: 409, message: `Ya existe un cierre de caja para el ${registerDate}.` };
 
-  if (!data.force) {
+  // El chequeo de pre-cargas pendientes solo aplica al cierre del día actual.
+  // Para cierres retroactivos (fecha pasada) se omite: las pre-cargas de esos días
+  // pudieron haberse resuelto después o estar aún pendientes sin poder bloquearse.
+  const isToday = registerDate === today;
+  if (isToday && !data.force) {
     const pending = await queries.getPendingPaymentsToday(today);
     if (pending.count > 0)
       throw { status: 409, message: `Hay ${pending.count} pre-carga(s) pendiente(s) de aprobación por $${pending.amount}. Aprobá o rechazá antes de cerrar, o enviá force: true para cerrar igual.`, pending_payments: pending };
   }
 
-  const totals       = await queries.getDailyTotals(today);
+  const totals       = await queries.getDailyTotals(registerDate);
   const cashAmount   = totals.cash_amount;
   const transferAmount = totals.transfer_amount;
   const totalCollected = cashAmount + transferAmount;
@@ -45,13 +54,13 @@ const close = async (data, adminId) => {
   if (difference > 0)  differenceStatus = 'SURPLUS';
   if (difference < 0)  differenceStatus = 'SHORTAGE';
 
-  // Transacción: crear cierre y vincular liquidaciones del día
+  // Transacción: crear cierre y vincular liquidaciones de la fecha
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const register = await queries.create(client, {
-      registerDate:     today,
+      registerDate,
       cashAmount,
       transferAmount,
       totalCollected,
@@ -63,7 +72,7 @@ const close = async (data, adminId) => {
       closedBy:         adminId,
     });
 
-    await queries.linkLiquidations(client, register.id, today);
+    await queries.linkLiquidations(client, register.id, registerDate);
 
     await client.query('COMMIT');
     return register;
