@@ -42,7 +42,6 @@ const loginInternal = async (dni, password) => {
     user: {
       id:               user.id,
       full_name:        user.full_name,
-      dni:              user.dni,
       role:             user.role,
       is_temp_password: user.is_temp_password,
     },
@@ -83,9 +82,8 @@ const loginPortal = async (dni, password) => {
   return {
     token,
     customer: {
-      id:                     customer.id,
-      full_name:              customer.full_name,
-      dni:                    customer.dni,
+      id:                      customer.id,
+      full_name:               customer.full_name,
       portal_is_temp_password: customer.portal_is_temp_password,
     },
   };

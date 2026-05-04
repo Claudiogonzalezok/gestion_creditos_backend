@@ -1,11 +1,30 @@
 require('dotenv').config();
 
-const express = require('express');
-const cors    = require('cors');
-const helmet  = require('helmet');
-const morgan  = require('morgan');
+const express    = require('express');
+const cors       = require('cors');
+const helmet     = require('helmet');
+const morgan     = require('morgan');
+const rateLimit  = require('express-rate-limit');
+const swaggerUi  = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
 
 const app = express();
+
+// ── Documentación API ─────────────────────────────────────────
+// CSP permisiva solo para esta ruta (swagger-ui necesita inline scripts/styles)
+app.use('/api/docs',
+  (req, res, next) => {
+    res.setHeader('Content-Security-Policy',
+      "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    );
+    next();
+  },
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: 'API Gestión Créditos',
+    swaggerOptions: { persistAuthorization: true },
+  })
+);
 
 // ── Seguridad y CORS ──────────────────────────────────────────
 app.use(helmet());
@@ -34,6 +53,17 @@ app.get('/api/health', (req, res) => {
     env:     process.env.NODE_ENV,
   });
 });
+
+// ── Rate limiting — endpoints de login ───────────────────────
+const loginLimiter = rateLimit({
+  windowMs:         15 * 60 * 1000, // ventana de 15 minutos
+  max:              20,              // máximo 20 intentos por IP
+  standardHeaders:  true,
+  legacyHeaders:    false,
+  message: { ok: false, message: 'Demasiados intentos de acceso. Intentá nuevamente en 15 minutos.' },
+});
+app.use('/api/auth/login',        loginLimiter);
+app.use('/api/auth/portal/login', loginLimiter);
 
 // ── Rutas ─────────────────────────────────────────────────────
 app.use('/api/auth',         require('./modules/auth/auth.routes'));

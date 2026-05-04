@@ -6,7 +6,6 @@ const generateInternalToken = (user, expiresIn = process.env.JWT_EXPIRY_INTERNAL
   return jwt.sign(
     {
       sub:  user.id,
-      dni:  user.dni,
       role: user.role,
       aud:  'sistema-interno',
     },
@@ -23,7 +22,6 @@ const generatePortalToken = (customer, expiresIn = process.env.JWT_EXPIRY_PORTAL
   return jwt.sign(
     {
       sub:  customer.id,
-      dni:  customer.dni,
       role: 'CLIENT',
       aud:  'portal-cliente',
     },
