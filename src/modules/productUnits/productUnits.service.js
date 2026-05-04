@@ -2,6 +2,22 @@ const pool    = require('../../config/db');
 const queries = require('./productUnits.queries');
 const { withTransaction } = require('../../utils/transaction');
 
+const assertVariantActive = async (variantId) => {
+  const r = await pool.query(
+    `SELECT pv.status, p.status AS product_status
+     FROM product_variants pv
+     JOIN products p ON p.id = pv.product_id
+     WHERE pv.id = $1`,
+    [variantId]
+  );
+  if (!r.rows.length)
+    throw { status: 404, message: 'Variante no encontrada.' };
+  if (r.rows[0].status !== 'ACTIVE')
+    throw { status: 409, message: 'No se pueden agregar unidades a una variante inactiva.' };
+  if (r.rows[0].product_status !== 'ACTIVE')
+    throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
+};
+
 const getAll = async (filters) => queries.findAll(filters);
 
 const getById = async (id) => {
@@ -11,19 +27,7 @@ const getById = async (id) => {
 };
 
 const create = async ({ variantId, unitCode, notes }, userId) => {
-  const variantCheck = await pool.query(
-    `SELECT pv.id, pv.status, p.status AS product_status
-     FROM product_variants pv
-     JOIN products p ON p.id = pv.product_id
-     WHERE pv.id = $1`,
-    [variantId]
-  );
-  if (!variantCheck.rows.length)
-    throw { status: 404, message: 'Variante no encontrada.' };
-  if (variantCheck.rows[0].status !== 'ACTIVE')
-    throw { status: 409, message: 'No se pueden agregar unidades a una variante inactiva.' };
-  if (variantCheck.rows[0].product_status !== 'ACTIVE')
-    throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
+  await assertVariantActive(variantId);
 
   if (await queries.findByUnitCode(unitCode))
     throw { status: 409, message: `Ya existe una unidad con el código "${unitCode}".` };
@@ -35,19 +39,13 @@ const create = async ({ variantId, unitCode, notes }, userId) => {
 };
 
 const createBulk = async (variantId, units, userId) => {
-  const variantCheck = await pool.query(
-    `SELECT pv.id, pv.status, p.status AS product_status
-     FROM product_variants pv
-     JOIN products p ON p.id = pv.product_id
-     WHERE pv.id = $1`,
-    [variantId]
-  );
-  if (!variantCheck.rows.length)
-    throw { status: 404, message: 'Variante no encontrada.' };
-  if (variantCheck.rows[0].status !== 'ACTIVE')
-    throw { status: 409, message: 'No se pueden agregar unidades a una variante inactiva.' };
-  if (variantCheck.rows[0].product_status !== 'ACTIVE')
-    throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
+  await assertVariantActive(variantId);
+
+  // Verificar duplicados internos en el batch antes de ir a la DB
+  const codes = units.map(u => u.unit_code);
+  const uniqueCodes = new Set(codes);
+  if (uniqueCodes.size !== codes.length)
+    throw { status: 409, message: 'El listado contiene códigos de unidad duplicados.' };
 
   return withTransaction(async (client) => {
     const created = [];

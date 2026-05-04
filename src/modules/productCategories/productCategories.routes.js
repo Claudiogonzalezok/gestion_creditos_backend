@@ -17,6 +17,12 @@ router.post('/',
   controller.create
 );
 
+router.put('/:id',
+  authorize('ADMIN'),
+  [...v.productCategories.id, ...v.productCategories.create], validate,
+  controller.update
+);
+
 router.patch('/:id/activate',
   authorize('ADMIN'),
   v.productCategories.id, validate,

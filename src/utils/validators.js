@@ -115,8 +115,8 @@ const isDate = (field, label, required = true) => {
   let rule = body(field);
   if (!required) rule = rule.optional({ nullable: true, checkFalsy: true });
   return rule
-    .isISO8601().withMessage(`${label} debe ser una fecha válida en formato YYYY-MM-DD.`)
-    .toDate();
+    .isISO8601({ strict: true }).withMessage(`${label} debe ser una fecha válida en formato YYYY-MM-DD.`)
+    .trim();
 };
 
 // ── Booleano ──────────────────────────────────────────────────
@@ -197,7 +197,7 @@ const customers = {
 const products = {
   create: [
     isString('title', 'El título del producto', { min: 2, max: 150 }),
-    isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
+    isString('description', 'La descripción del producto', { min: 1, max: 500, required: false }),
     isString('model', 'El modelo', { min: 1, max: 100, required: false }),
     isUUID('brand_id', 'El ID de marca', false),
     isUUID('category_id', 'El ID de categoría', false),
@@ -205,7 +205,7 @@ const products = {
   update: [
     isUUIDParam('id', 'El ID de producto'),
     isString('title', 'El título del producto', { min: 2, max: 150, required: false }),
-    isString('description', 'La descripción del producto', { min: 2, max: 500, required: false }),
+    isString('description', 'La descripción del producto', { min: 1, max: 500, required: false }),
     isString('model', 'El modelo', { min: 1, max: 100, required: false }),
     isUUID('brand_id', 'El ID de marca', false),
     isUUID('category_id', 'El ID de categoría', false),
@@ -404,8 +404,6 @@ const penalties = {
         if (isNaN(n) || n < 0.01) throw new Error('El monto de mora debe ser mayor a 0.');
         return true;
       }),
-    body('reason').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 255 }).withMessage('El motivo no puede superar los 255 caracteres.'),
   ],
   earlyPay: [
     isUUIDParam('id', 'El ID de cuota'),
@@ -435,6 +433,12 @@ const productVariants = {
     isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
     isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
+    body().custom((_, { req }) => {
+      const { color, size, capacity } = req.body;
+      if (!color && !size && !capacity)
+        throw new Error('La variante debe tener al menos un atributo: color, talle o capacidad.');
+      return true;
+    }),
   ],
   update: [
     isUUIDParam('id', 'El ID de variante'),
@@ -442,6 +446,12 @@ const productVariants = {
     isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
     isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999, required: false }),
+    body().custom((_, { req }) => {
+      const { color, size, capacity, current_price } = req.body;
+      if (color === undefined && size === undefined && capacity === undefined && current_price === undefined)
+        throw new Error('Debe enviar al menos un campo para actualizar: color, talle, capacidad o precio.');
+      return true;
+    }),
   ],
   id: [ isUUIDParam('id', 'El ID de variante') ],
 };
@@ -516,18 +526,6 @@ const commissions = {
   ],
 };
 
-// ── AUTH ──────────────────────────────────────────────────────
-const auth = {
-  login: [
-    body('dni').trim()
-      .notEmpty().withMessage('El DNI es obligatorio.')
-      .isLength({ min: 7, max: 20 }).withMessage('El DNI debe tener entre 7 y 20 caracteres.'),
-    body('password')
-      .notEmpty().withMessage('La contraseña es obligatoria.')
-      .isLength({ max: 100 }).withMessage('La contraseña no puede superar los 100 caracteres.'),
-  ],
-};
-
 module.exports = {
   // Bloques atómicos reutilizables
   isString, isDni, isEmail, isPhone, isUUID, isUUIDParam,
@@ -549,7 +547,6 @@ module.exports = {
   expenses,
   expenseCategories,
   productCategories,
-  auth,
 };
 
 // productUnits se valida directamente en su propio router.

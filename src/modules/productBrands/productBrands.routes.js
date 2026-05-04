@@ -19,15 +19,22 @@ router.get('/:id',
   controller.getById
 );
 
+const nameRule = body('name').trim()
+  .notEmpty().withMessage('El nombre de la marca es obligatorio.').bail()
+  .isLength({ min: 2, max: 100 }).withMessage('El nombre debe tener entre 2 y 100 caracteres.');
+
 router.post('/',
   authorize('ADMIN'),
-  [
-    body('name').trim()
-      .notEmpty().withMessage('El nombre de la marca es obligatorio.')
-      .isLength({ min: 2, max: 100 }).withMessage('El nombre debe tener entre 2 y 100 caracteres.'),
-  ],
+  [nameRule],
   validate,
   controller.create
+);
+
+router.put('/:id',
+  authorize('ADMIN'),
+  [param('id').isUUID().withMessage('El ID debe ser un UUID válido.'), nameRule],
+  validate,
+  controller.update
 );
 
 router.patch('/:id/deactivate',
