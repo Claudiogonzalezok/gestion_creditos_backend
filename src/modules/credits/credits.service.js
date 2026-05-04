@@ -13,20 +13,49 @@ const {
   getProductInstallmentContribution,
 } = require('../../utils/creditCalculator');
 
+/**
+ * Calcula el capital realmente financiado de una venta a crédito.
+ * Mantiene separado el precio total del producto del enganche inicial.
+ * @param {number|string} totalAmount - Precio total histórico de la venta.
+ * @param {number|string} downPayment - Enganche entregado por el cliente.
+ * @returns {number} Capital financiado neto.
+ */
+const getFinancedAmount = (totalAmount, downPayment = 0) => {
+  const total = parseFloat(totalAmount || 0);
+  const down  = parseFloat(downPayment || 0);
+  return Math.round((total - down) * 100) / 100;
+};
+
+/**
+ * Completa campos calculados de una venta para exponer capital financiado.
+ * @param {object} credit - Crédito recuperado desde persistencia.
+ * @returns {object|null} Crédito enriquecido para respuesta.
+ */
+const decorateSaleCredit = (credit) => {
+  if (!credit || credit.type !== 'SALE') return credit;
+  credit.financed_amount = getFinancedAmount(credit.total_amount, credit.down_payment);
+  return credit;
+};
+
+/**
+ * Elimina campos que no aplican al tipo de crédito y agrega derivados útiles.
+ * @param {object} credit - Crédito a sanitizar antes de responder.
+ * @returns {object|null} Crédito listo para exponer por API.
+ */
 const sanitizeCredit = (credit) => {
   if (!credit) return credit;
   if (credit.type === 'LOAN') {
     delete credit.down_payment;
     delete credit.down_payment_method;
     delete credit.down_payment_transfer_reference;
+  }
+  if (credit.type === 'SALE') {
+    delete credit.interest_rate;
     delete credit.prepaid_installments;
     delete credit.prepaid_installments_method;
     delete credit.prepaid_installments_transfer_reference;
   }
-  if (credit.type === 'SALE') {
-    delete credit.interest_rate;
-  }
-  return credit;
+  return decorateSaleCredit(credit);
 };
 
 const getAll = async (filters, requestingUser) => {
@@ -41,6 +70,13 @@ const getById = async (id) => {
   return sanitizeCredit(credit);
 };
 
+/**
+ * Crea una pre-operación de crédito respetando las reglas de LOAN y SALE.
+ * En ventas conserva el precio total para comisión y calcula el capital financiado aparte.
+ * @param {object} data - Datos validados de entrada.
+ * @param {object} requestingUser - Usuario autenticado que origina la operación.
+ * @returns {Promise<object>} Crédito pendiente listo para aprobación.
+ */
 const create = async (data, requestingUser) => {
   const customerCheck = await pool.query(
     `SELECT id, status FROM customers WHERE id = $1`, [data.customer_id]
@@ -64,8 +100,7 @@ const create = async (data, requestingUser) => {
       });
       delete credit.down_payment;
       delete credit.down_payment_method;
-      delete credit.prepaid_installments;
-      delete credit.prepaid_installments_method;
+      delete credit.down_payment_transfer_reference;
       return credit;
     });
   }
@@ -119,10 +154,6 @@ const create = async (data, requestingUser) => {
     if (downPayment >= totalAmount)
       throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
 
-    const prepaidInstallments = parseInt(data.prepaid_installments || 0);
-    if (prepaidInstallments >= data.installments_count)
-      throw { status: 400, message: 'El adelanto de cuotas no puede ser igual o mayor a la cantidad total de cuotas.' };
-
     const credit = await queries.create(client, {
       customer_id:                              data.customer_id,
       created_by:                               requestingUser.id,
@@ -131,9 +162,9 @@ const create = async (data, requestingUser) => {
       down_payment:                             downPayment,
       down_payment_method:                      data.down_payment_method                      || null,
       down_payment_transfer_reference:          data.down_payment_transfer_reference          || null,
-      prepaid_installments:                     prepaidInstallments,
-      prepaid_installments_method:              data.prepaid_installments_method              || null,
-      prepaid_installments_transfer_reference:  data.prepaid_installments_transfer_reference  || null,
+      prepaid_installments:                     0,
+      prepaid_installments_method:              null,
+      prepaid_installments_transfer_reference:  null,
       installments_count:                       data.installments_count,
       payment_frequency:                        data.payment_frequency,
       notes:                                    data.notes,
@@ -152,11 +183,17 @@ const create = async (data, requestingUser) => {
       await puQueries.updateStatus(client, unitId, 'RESERVED');
     }
 
-    return credit;
+    return sanitizeCredit(credit);
   });
 };
 
 // simulate: SALE acepta products[{variant_id, quantity}]
+/**
+ * Simula el plan de cuotas según el tipo de operación y sus tasas vigentes.
+ * Para SALE usa tasas por producto y muestra el capital financiado luego del enganche.
+ * @param {object} params - Parámetros del cotizador.
+ * @returns {Promise<object>} Resultado orientativo de la simulación.
+ */
 const simulate = async ({ type, total_amount, installments_count, payment_frequency, products, down_payment }) => {
   // ── LOAN ─────────────────────────────────────────────────────
   if (type === 'LOAN') {
@@ -222,7 +259,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
   }
 
   const downPayment    = parseFloat(down_payment || 0);
-  const financedAmount = downPayment > 0 ? totalBase - downPayment : totalBase;
+  const financedAmount = getFinancedAmount(totalBase, downPayment);
 
   if (downPayment >= totalBase)
     throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
@@ -255,6 +292,15 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
   return result;
 };
 
+/**
+ * Aprueba un crédito pendiente y congela sus condiciones históricas.
+     * Para SALE toma product_rates por producto y registra enganches sin afectar la comisión.
+     * El adelanto de cuotas posterior se procesa exclusivamente desde el módulo de cobros.
+ * @param {string} id - ID del crédito.
+ * @param {string} adminId - Admin que aprueba la operación.
+ * @param {number} [newInstallmentsCount] - Nueva cantidad de cuotas opcional.
+ * @returns {Promise<object>} Crédito aprobado con su estado actualizado.
+ */
 const approve = async (id, adminId, newInstallmentsCount) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
@@ -287,9 +333,10 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   if (!creditUnits.length)
     throw { status: 409, message: 'El crédito no tiene unidades asociadas.' };
 
-  const downPayment  = parseFloat(credit.down_payment || 0);
-  const totalBase    = parseFloat(credit.total_amount);
-  const capitalRatio = downPayment > 0 ? (totalBase - downPayment) / totalBase : 1;
+  const downPayment    = parseFloat(credit.down_payment || 0);
+  const totalBase      = parseFloat(credit.total_amount);
+  const financedAmount = getFinancedAmount(totalBase, downPayment);
+  const capitalRatio   = downPayment > 0 ? financedAmount / totalBase : 1;
 
   for (const u of creditUnits) {
     if (u.unit_status !== 'RESERVED')

@@ -128,19 +128,25 @@ const hasActiveCredits = async (id) => {
   return r.rows.length > 0;
 };
 
+/**
+ * Crea un producto y retorna el registro completo con nombre de categoría y marca.
+ * Usa read-after-write sobre findById para garantizar una respuesta consistente.
+ */
 const create = async ({ title, description, model, brand_id, category_id }) => {
   const r = await pool.query(
     `INSERT INTO products (title, description, model, brand_id, category_id)
      VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, title, description, model, brand_id, category_id, status, created_at`,
+     RETURNING id`,
     [title, description || null, model || null, brand_id || null, category_id || null]
   );
-  return {
-    ...r.rows[0],
-    available_count: 0, reserved_count: 0, sold_count: 0, variants: [],
-  };
+  return await findById(r.rows[0].id);
 };
 
+/**
+ * Actualiza un producto y retorna el registro completo con nombre de categoría y marca.
+ * Usa read-after-write sobre findById para garantizar una respuesta consistente.
+ * @returns {Object|null} producto actualizado o null si no existe
+ */
 const update = async (id, { title, description, model, brand_id, category_id }) => {
   const r = await pool.query(
     `UPDATE products
@@ -151,10 +157,11 @@ const update = async (id, { title, description, model, brand_id, category_id }) 
          category_id = COALESCE($5, category_id),
          updated_at  = NOW()
      WHERE id = $6
-     RETURNING id, title, description, model, brand_id, category_id, status, updated_at`,
+     RETURNING id`,
     [title || null, description || null, model || null, brand_id || null, category_id || null, id]
   );
-  return r.rows[0] || null;
+  if (!r.rows[0]) return null;
+  return await findById(r.rows[0].id);
 };
 
 const deactivate = async (id) => {

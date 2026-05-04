@@ -14,6 +14,13 @@ const getById = async (id) => {
   return payment;
 };
 
+/**
+ * Registra una pre-carga de cobro validando el saldo disponible del crédito.
+ * Permite montos que cubran varias cuotas siempre que no superen el saldo pendiente total.
+ * @param {object} data - Datos validados del cobro.
+ * @param {object} requestingUser - Cobrador autenticado que registra la pre-carga.
+ * @returns {Promise<object>} Pre-carga creada en estado pendiente.
+ */
 const create = async (data, requestingUser) => {
   // Verificar que la cuota exista y tenga saldo pendiente
   const instCheck = await pool.query(
@@ -56,6 +63,13 @@ const create = async (data, requestingUser) => {
   });
 };
 
+/**
+ * Aprueba una pre-carga y distribuye excedentes sobre cuotas futuras.
+ * Cuando cubre cuotas completas las marca como pago adelantado y corre los vencimientos restantes.
+ * @param {string} id - ID de la pre-carga.
+ * @param {string} adminId - Admin que valida el cobro.
+ * @returns {Promise<object>} Cobro aprobado con su estado actualizado.
+ */
 const approve = async (id, adminId) => {
   const payment = await queries.findById(id);
   if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
@@ -104,7 +118,8 @@ const approve = async (id, adminId) => {
             inst.id,
             adminId,
             'Pago adelantado',
-            payment.payment_method
+            payment.payment_method,
+            payment.transfer_reference
           );
           remaining = round(remaining - instBalance);
           paidCount++;

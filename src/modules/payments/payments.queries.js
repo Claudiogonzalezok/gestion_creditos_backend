@@ -45,6 +45,11 @@ const findById = async (id) => {
 };
 
 // Suma de pre-cargas PENDING para una cuota (monto comprometido pendiente de aprobación)
+/**
+ * Suma el monto comprometido en pre-cargas pendientes de una cuota.
+ * @param {string} installmentId - ID de la cuota.
+ * @returns {Promise<number>} Total pendiente de aprobación ya comprometido.
+ */
 const getPendingCommittedAmount = async (installmentId) => {
   const r = await pool.query(
     `SELECT COALESCE(SUM(amount_received), 0)::float8 AS total
@@ -156,6 +161,14 @@ const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumbe
 // desde HOY + 1 período. Independientemente de cuántas cuotas se adelantaron,
 // la siguiente cuota siempre vence el próximo período desde la fecha de aprobación.
 // Guarda original_due_date antes de modificar (solo si aún no fue guardada).
+/**
+ * Recorre las fechas de las cuotas aún impagas hacia adelante conservando auditoría.
+ * Guarda la fecha original solo la primera vez que una cuota es reprogramada.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} creditId - ID del crédito afectado.
+ * @param {string} paymentFrequency - Frecuencia del crédito.
+ * @param {string|Date} baseDueDate - Fecha base desde la que se recalcula el plan.
+ */
 const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDueDate) => {
   let interval;
   if (paymentFrequency === 'WEEKLY')        interval = '1 week';
@@ -182,17 +195,27 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
 };
 
 // Marca una cuota como pagada por adelanto con nota auditada
-const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, paymentMethod) => {
+/**
+ * Marca una cuota futura como pagada por adelanto y registra el movimiento aprobado.
+ * Propaga método y referencia para mantener trazabilidad cuando el cobro fue transferencia.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} installmentId - ID de la cuota adelantada.
+ * @param {string} adminId - Admin que aprueba el adelanto.
+ * @param {string} note - Nota auditada del movimiento.
+ * @param {string} paymentMethod - Método usado en el cobro original.
+ * @param {string|null} transferReference - Referencia bancaria si aplica.
+ */
+const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, paymentMethod, transferReference = null) => {
   await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, status, approved_by, approved_at, notes)
-     SELECT id, $1, amount_due - amount_paid, $2, 'APPROVED', $1, NOW(), $3
-     FROM installments WHERE id = $4`,
-    [adminId, paymentMethod, note, installmentId]
+       (installment_id, collector_id, amount_received, payment_method, transfer_reference, status, approved_by, approved_at, notes)
+     SELECT id, $1, amount_due - amount_paid, $2, $3, 'APPROVED', $1, NOW(), $4
+      FROM installments WHERE id = $5`,
+    [adminId, paymentMethod, transferReference || null, note, installmentId]
   );
   await client.query(
     `UPDATE installments
-     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
+      SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
      WHERE id = $1`,
     [installmentId]
   );

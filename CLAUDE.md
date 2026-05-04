@@ -10,6 +10,28 @@ Cuenta con dos portales separados: uno administrativo/operativo y uno para clien
 - **Autenticación:** JWT (JSON Web Tokens)
 - **Arquitectura:** MVC (Model, View, Controller)
 
+## Comentarios de código
+
+**Nunca descomentar bloques comentados con `/* ... */` o `/** ... */`.** Si un bloque está comentado, dejarlo así — no quitarle los comentarios ni reescribirlo sin ellos, aunque parezca código explicativo o documentación.
+
+## Documentación de funciones
+
+Toda función nueva o modificada debe tener un bloque `/** ... */` en español, justo arriba de la firma. Estilo:
+
+```js
+/**
+ * Breve descripción de qué hace y por qué (una o dos líneas).
+ * @param {Tipo} nombre - qué representa
+ * @returns {Tipo} qué devuelve (omitir si no retorna nada relevante)
+ */
+```
+
+Reglas:
+- Descripción en español, clara y concisa — que se entienda sin leer el cuerpo.
+- `@param` solo cuando los parámetros no son obvios por el nombre.
+- `@returns` solo cuando el valor de retorno no es obvio.
+- No repetir lo que ya dice el nombre de la función.
+
 ## Actores / Roles del sistema
 | Rol | Descripción |
 |---|---|
