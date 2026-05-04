@@ -1,4 +1,4 @@
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 // ── 1. Reporte de recaudación ─────────────────────────────────
 
@@ -50,7 +50,7 @@ const getCollectionReport = async (dateFrom, dateTo) => {
       ) sub
      GROUP BY day
      ORDER BY day`,
-    [dateFrom, dateTo]
+    [dateFrom, dateTo],
   );
 
   const summary = await pool.query(
@@ -86,7 +86,7 @@ const getCollectionReport = async (dateFrom, dateTo) => {
         WHERE cdp.created_at::date BETWEEN $1 AND $2
           AND cdp.payment_type = 'DOWN_PAYMENT'
       ) sub`,
-    [dateFrom, dateTo]
+    [dateFrom, dateTo],
   );
 
   return { summary: summary.rows[0], daily: daily.rows };
@@ -103,14 +103,14 @@ const getPortfolioReport = async () => {
        COALESCE(SUM(c.total_amount), 0)::float8 AS total_amount
      FROM credits c
      GROUP BY c.status, c.type
-     ORDER BY c.status, c.type`
+     ORDER BY c.status, c.type`,
   );
 
   const activeBalance = await pool.query(
     `SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS pending_balance
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
-     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID')`
+     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID')`,
   );
 
   const topCustomers = await pool.query(
@@ -128,13 +128,13 @@ const getPortfolioReport = async () => {
      LEFT JOIN users u   ON u.id = cu.assigned_collector_id
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY pending_balance DESC
-     LIMIT 10`
+     LIMIT 10`,
   );
 
   return {
-    by_status_type:        byStatusType.rows,
+    by_status_type: byStatusType.rows,
     active_pending_balance: activeBalance.rows[0].pending_balance,
-    top_customers:         topCustomers.rows,
+    top_customers: topCustomers.rows,
   };
 };
 
@@ -160,7 +160,7 @@ const getOverdueReport = async () => {
        COALESCE(SUM(i.amount_due - i.amount_paid)
                       FILTER (WHERE (CURRENT_DATE - i.due_date) > 90), 0)::float8      AS bucket_90plus_amount
      FROM installments i
-     WHERE i.status = 'OVERDUE'`
+     WHERE i.status = 'OVERDUE'`,
   );
 
   const byCustomer = await pool.query(
@@ -185,7 +185,7 @@ const getOverdueReport = async () => {
      LEFT JOIN users u ON u.id  = cu.assigned_collector_id
      WHERE i.status = 'OVERDUE'
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
-     ORDER BY total_overdue DESC`
+     ORDER BY total_overdue DESC`,
   );
 
   return { summary: summary.rows[0], by_customer: byCustomer.rows };
@@ -218,7 +218,7 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
      WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
      ORDER BY total_collected DESC`,
-    [dateFrom, dateTo]
+    [dateFrom, dateTo],
   );
   return r.rows;
 };
@@ -250,7 +250,7 @@ const getProductsReport = async (stockThreshold = 5) => {
      LEFT JOIN product_rates    pr ON pr.product_id = p.id
      GROUP BY p.id, p.description, p.title, p.status
      ORDER BY times_sold DESC`,
-    [stockThreshold]
+    [stockThreshold],
   );
   return r.rows;
 };
@@ -269,7 +269,7 @@ const getUpcomingReport = async (days = 30) => {
      WHERE c.status = 'ACTIVE'
        AND i.status  = 'PENDING'
        AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 - 1)`,
-    [n]
+    [n],
   );
 
   const byDay = await pool.query(
@@ -284,7 +284,7 @@ const getUpcomingReport = async (days = 30) => {
        AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 - 1)
      GROUP BY i.due_date
      ORDER BY i.due_date`,
-    [n]
+    [n],
   );
 
   const byCustomer = await pool.query(
@@ -305,13 +305,13 @@ const getUpcomingReport = async (days = 30) => {
        AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 - 1)
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY next_due_date, expected_amount DESC`,
-    [n]
+    [n],
   );
 
   return {
-    days:        n,
-    summary:     summary.rows[0],
-    by_day:      byDay.rows,
+    days: n,
+    summary: summary.rows[0],
+    by_day: byDay.rows,
     by_customer: byCustomer.rows,
   };
 };
@@ -394,7 +394,7 @@ const getSummaryReport = async () => {
           pending_credits pc,
           portfolio po,
           overdue ov,
-          upcoming up`
+          upcoming up`,
   );
   return r.rows[0];
 };

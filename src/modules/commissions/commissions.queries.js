@@ -34,11 +34,13 @@ const getPendingTotal = async (userId) => {
   return r.rows[0].total;
 };
 
-// IDs, montos y rango de semanas de todas las comisiones pendientes de un usuario
+// IDs, montos y rango de semanas de todas las comisiones pendientes de un usuario.
+// FOR UPDATE bloquea las filas para evitar doble liquidación en requests concurrentes.
 const getPendingIds = async (client, userId) => {
   const r = await client.query(
     `SELECT id, amount::float8, week_start, week_end FROM commissions
-     WHERE user_id = $1 AND status = 'PENDING'`,
+     WHERE user_id = $1 AND status = 'PENDING'
+     FOR UPDATE`,
     [userId]
   );
   return r.rows;

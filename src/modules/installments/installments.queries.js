@@ -90,16 +90,4 @@ const earlyPay = async (client, id, adminId, paymentMethod, transferReference) =
   return inst;
 };
 
-// Proceso automático — ejecutado desde el cron job de mora
-const markOverdue = async (graceDays) => {
-  const r = await pool.query(
-    `UPDATE installments SET status = 'OVERDUE', updated_at = NOW()
-     WHERE status IN ('PENDING', 'PARTIAL')
-       AND due_date < CURRENT_DATE - ($1::integer - 1)
-     RETURNING id`,
-    [graceDays]
-  );
-  return r.rowCount;
-};
-
-module.exports = { findAll, findById, applyPenalty, waivePenalty, earlyPay, markOverdue };
+module.exports = { findAll, findById, applyPenalty, waivePenalty, earlyPay };

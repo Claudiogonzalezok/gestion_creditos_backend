@@ -103,35 +103,194 @@ const seed = async () => {
       }
     }
 
-    // ── 3. Productos + unidades + tasas por producto ─────────────────────
-    // soldUnits = unidades pre-vendidas (estado SOLD) para vincular a créditos.
-    // availableUnits = stock disponible.
+    // ── 3. Lookup de marcas + alta de marcas adicionales ────────────────
+    const brandRows = await client.query(
+      `SELECT id, name FROM product_brands WHERE active = TRUE`
+    );
+    const brandMap = {};
+    for (const row of brandRows.rows) brandMap[row.name] = row.id;
+
+    // Marcas no incluidas en el preload de la migración base
+    for (const name of ['Noblex', 'Longvie']) {
+      if (!brandMap[name]) {
+        const r = await client.query(
+          `INSERT INTO product_brands (name) VALUES ($1)
+           ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
+          [name]
+        );
+        brandMap[name] = r.rows[0].id;
+      }
+    }
+
+    // ── 4. Productos + variantes + unidades + tasas ──────────────────────
+    // title    → debe coincidir exactamente con los productDesc usados en los créditos
+    // soldUnits → unidades en estado SOLD para vincular a créditos ya aprobados
     const productsData = [
-      // Electrónica
-      { desc: 'Smart TV 43" Samsung 4K',           price:  450000, cat: 'Electrónica',             availableUnits:  5, soldUnits:  5 },
-      { desc: 'Smart TV 55" LG OLED',              price:  890000, cat: 'Electrónica',             availableUnits:  2, soldUnits:  2 },
-      { desc: 'Notebook Lenovo IdeaPad 15"',       price:  680000, cat: 'Electrónica',             availableUnits:  3, soldUnits:  4 },
-      { desc: 'Tablet Samsung Galaxy Tab A8',      price:  280000, cat: 'Electrónica',             availableUnits:  0, soldUnits:  0 },
-      { desc: 'Televisor 32" Noblex HD',           price:  190000, cat: 'Electrónica',             availableUnits:  5, soldUnits:  3 },
-      // Electrodomésticos
-      { desc: 'Aire Acondicionado Split 3000w Noblex', price: 520000, cat: 'Electrodomésticos',   availableUnits:  5, soldUnits:  3 },
-      { desc: 'Heladera Whirlpool No Frost 400L',  price:  750000, cat: 'Electrodomésticos',       availableUnits:  2, soldUnits:  3 },
-      { desc: 'Lavarropas Automático Drean 7kg',   price:  490000, cat: 'Electrodomésticos',       availableUnits:  2, soldUnits:  2 },
-      { desc: 'Microondas Whirlpool 25L',          price:  180000, cat: 'Electrodomésticos',       availableUnits:  8, soldUnits:  4 },
-      { desc: 'Cocina Longvie 4 hornallas',        price:  320000, cat: 'Electrodomésticos',       availableUnits:  0, soldUnits:  6 },
-      // Telefonía
-      { desc: 'Celular Motorola Edge 30',          price:  350000, cat: 'Telefonía',               availableUnits:  9, soldUnits:  8 },
-      { desc: 'Celular Samsung Galaxy A54',        price:  420000, cat: 'Telefonía',               availableUnits:  4, soldUnits:  5 },
-      { desc: 'iPhone 14 128GB',                   price: 1200000, cat: 'Telefonía',               availableUnits:  1, soldUnits:  1 },
-      { desc: 'Celular Xiaomi Redmi Note 12',      price:  250000, cat: 'Telefonía',               availableUnits: 10, soldUnits:  6 },
-      // Indumentaria y Calzado
-      { desc: 'Zapatillas Nike Air Max 270',       price:  180000, cat: 'Indumentaria y Calzado',  availableUnits: 12, soldUnits: 12 },
-      { desc: 'Zapatillas Adidas Ultraboost',      price:  220000, cat: 'Indumentaria y Calzado',  availableUnits:  7, soldUnits:  8 },
-      { desc: 'Campera Puma Deportiva',            price:   95000, cat: 'Indumentaria y Calzado',  availableUnits:  0, soldUnits:  3 },
-      // Muebles y Hogar
-      { desc: 'Sofá 3 cuerpos Rústico',            price:  380000, cat: 'Muebles y Hogar',         availableUnits:  2, soldUnits:  1 },
-      { desc: 'Juego de dormitorio + colchón Queen', price: 620000, cat: 'Muebles y Hogar',        availableUnits:  1, soldUnits:  1 },
-      { desc: 'Mesa comedor 6 sillas',             price:  290000, cat: 'Muebles y Hogar',         availableUnits:  3, soldUnits:  2 },
+      // ── Electrónica ───────────────────────────────────────────────────
+      {
+        title:       'Smart TV 43" Samsung 4K',
+        description: 'Smart TV 43 pulgadas resolución 4K UHD, sistema Tizen, Wi-Fi y Bluetooth integrados.',
+        model:       'UN43TU7000GCXZB',
+        brand:       'Samsung', cat: 'Electrónica',
+        color: null, size: null, capacity: '43 pulgadas',
+        price: 450000, availableUnits: 5, soldUnits: 5,
+      },
+      {
+        title:       'Smart TV 55" LG OLED',
+        description: 'Televisor OLED 55 pulgadas 4K con panel α9 Gen5 AI, webOS 22 y control ThinQ AI.',
+        model:       'OLED55C2PSA',
+        brand:       'LG', cat: 'Electrónica',
+        color: null, size: null, capacity: '55 pulgadas',
+        price: 890000, availableUnits: 2, soldUnits: 2,
+      },
+      {
+        title:       'Notebook Lenovo IdeaPad 15"',
+        description: 'Notebook 15.6" Full HD, Intel Core i5 de 11ª gen, 8 GB RAM DDR4, 512 GB SSD, Windows 11 Home.',
+        model:       'IdeaPad 3 15ITL6',
+        brand:       'Lenovo', cat: 'Electrónica',
+        color: null, size: null, capacity: '15" · 8 GB · 512 GB',
+        price: 680000, availableUnits: 3, soldUnits: 4,
+      },
+      {
+        title:       'Tablet Samsung Galaxy Tab A8',
+        description: 'Tablet 10.5" con procesador Unisoc T618, 3 GB RAM, 32 GB almacenamiento, Wi-Fi, Android 11.',
+        model:       'SM-X200NZAALAR',
+        brand:       'Samsung', cat: 'Electrónica',
+        color: null, size: null, capacity: '10.5" · 32 GB',
+        price: 280000, availableUnits: 0, soldUnits: 0,
+      },
+      {
+        title:       'Televisor 32" Noblex HD',
+        description: 'Televisor LED 32 pulgadas HD 720p, entradas HDMI y USB. Ideal para ambientes secundarios.',
+        model:       'EA32X5100',
+        brand:       'Noblex', cat: 'Electrónica',
+        color: null, size: null, capacity: '32 pulgadas',
+        price: 190000, availableUnits: 5, soldUnits: 3,
+      },
+      // ── Electrodomésticos ─────────────────────────────────────────────
+      {
+        title:       'Aire Acondicionado Split 3000w Noblex',
+        description: 'Split frío/calor 3000 W con control remoto, temporizador 24 h y filtro lavable.',
+        model:       'NXSA30WICO',
+        brand:       'Noblex', cat: 'Electrodomésticos',
+        color: 'Blanco', size: null, capacity: '3000 W',
+        price: 520000, availableUnits: 5, soldUnits: 3,
+      },
+      {
+        title:       'Heladera Whirlpool No Frost 400L',
+        description: 'Heladera con freezer No Frost 400 litros, dispensador de agua, display electrónico y sistema Total No Frost.',
+        model:       'WRB42AB2',
+        brand:       'Whirlpool', cat: 'Electrodomésticos',
+        color: 'Acero inoxidable', size: null, capacity: '400 litros',
+        price: 750000, availableUnits: 2, soldUnits: 3,
+      },
+      {
+        title:       'Lavarropas Automático Drean 7kg',
+        description: 'Lavarropas carga frontal 7 kg, 14 programas, centrifugado 1000 RPM y función Eco.',
+        model:       'Next 7.14 ECO',
+        brand:       'Drean', cat: 'Electrodomésticos',
+        color: 'Blanco', size: null, capacity: '7 kg',
+        price: 490000, availableUnits: 2, soldUnits: 2,
+      },
+      {
+        title:       'Microondas Whirlpool 25L',
+        description: 'Microondas 25 litros con grill, 5 niveles de potencia y función descongelado automático por peso.',
+        model:       'WM25BD',
+        brand:       'Whirlpool', cat: 'Electrodomésticos',
+        color: 'Negro', size: null, capacity: '25 litros',
+        price: 180000, availableUnits: 8, soldUnits: 4,
+      },
+      {
+        title:       'Cocina Longvie 4 hornallas',
+        description: 'Cocina a gas 4 hornallas con horno y grill, encendido automático, termostato y visor en puerta.',
+        model:       'M6200F',
+        brand:       'Longvie', cat: 'Electrodomésticos',
+        color: 'Acero inoxidable', size: null, capacity: null,
+        price: 320000, availableUnits: 0, soldUnits: 6,
+      },
+      // ── Telefonía ─────────────────────────────────────────────────────
+      {
+        title:       'Celular Motorola Edge 30',
+        description: 'Smartphone 6.5" OLED 144 Hz, Snapdragon 778G+, 8 GB RAM, 256 GB, cámara triple 50 MP.',
+        model:       'XT2203-1',
+        brand:       'Motorola', cat: 'Telefonía',
+        color: 'Negro', size: null, capacity: '256 GB',
+        price: 350000, availableUnits: 9, soldUnits: 8,
+      },
+      {
+        title:       'Celular Samsung Galaxy A54',
+        description: 'Smartphone 6.4" Super AMOLED, Exynos 1380, 8 GB RAM, 128 GB, cámara triple 50 MP, IP67.',
+        model:       'SM-A546EZKDARO',
+        brand:       'Samsung', cat: 'Telefonía',
+        color: 'Negro', size: null, capacity: '128 GB',
+        price: 420000, availableUnits: 4, soldUnits: 5,
+      },
+      {
+        title:       'iPhone 14 128GB',
+        description: 'Smartphone Apple chip A15 Bionic, pantalla Super Retina XDR 6.1", cámara dual 12 MP, Face ID.',
+        model:       'A2882',
+        brand:       'Apple', cat: 'Telefonía',
+        color: 'Medianoche', size: null, capacity: '128 GB',
+        price: 1200000, availableUnits: 1, soldUnits: 1,
+      },
+      {
+        title:       'Celular Xiaomi Redmi Note 12',
+        description: 'Smartphone 6.67" AMOLED 120 Hz, Snapdragon 685, 4 GB RAM, 128 GB, cámara triple 50 MP.',
+        model:       'Redmi Note 12 4G',
+        brand:       'Xiaomi', cat: 'Telefonía',
+        color: 'Negro', size: null, capacity: '128 GB',
+        price: 250000, availableUnits: 10, soldUnits: 6,
+      },
+      // ── Indumentaria y Calzado ────────────────────────────────────────
+      {
+        title:       'Zapatillas Nike Air Max 270',
+        description: 'Zapatillas con cámara Air Max 270 en el talón, parte superior de malla transpirable y suela de goma.',
+        model:       'Air Max 270',
+        brand:       'Nike', cat: 'Indumentaria y Calzado',
+        color: 'Negro / Rojo', size: '42', capacity: null,
+        price: 180000, availableUnits: 12, soldUnits: 12,
+      },
+      {
+        title:       'Zapatillas Adidas Ultraboost',
+        description: 'Zapatillas running con entresuela Boost de amortiguación, parte superior Primeknit y suela Continental.',
+        model:       'Ultraboost 22',
+        brand:       'Adidas', cat: 'Indumentaria y Calzado',
+        color: 'Blanco', size: '42', capacity: null,
+        price: 220000, availableUnits: 7, soldUnits: 8,
+      },
+      {
+        title:       'Campera Puma Deportiva',
+        description: 'Campera deportiva con cierre completo, bolsillos laterales con cierre y logo Puma bordado. Tela liviana.',
+        model:       'ESS Padded Jacket',
+        brand:       'Puma', cat: 'Indumentaria y Calzado',
+        color: 'Negro', size: 'L', capacity: null,
+        price: 95000, availableUnits: 0, soldUnits: 3,
+      },
+      // ── Muebles y Hogar ───────────────────────────────────────────────
+      {
+        title:       'Sofá 3 cuerpos Rústico',
+        description: 'Sofá 3 cuerpos tapizado en tela premium, estructura de madera maciza y patas de acero cromado.',
+        model:       'SOF-3C-RUST',
+        brand:       'Genérico', cat: 'Muebles y Hogar',
+        color: 'Gris', size: null, capacity: null,
+        price: 380000, availableUnits: 2, soldUnits: 1,
+      },
+      {
+        title:       'Juego de dormitorio + colchón Queen',
+        description: 'Cama Queen 160×200 cm con dos mesas de luz y colchón de resortes ensacados 160×200 cm.',
+        model:       'DOR-QUEEN-SET',
+        brand:       'Genérico', cat: 'Muebles y Hogar',
+        color: 'Blanco', size: 'Queen 160×200', capacity: null,
+        price: 620000, availableUnits: 1, soldUnits: 1,
+      },
+      {
+        title:       'Mesa comedor 6 sillas',
+        description: 'Juego de comedor mesa rectangular 160×90 cm con tapa de vidrio templado y 6 sillas en ecocuero.',
+        model:       'MES-COM-6S',
+        brand:       'Genérico', cat: 'Muebles y Hogar',
+        color: 'Natural / Negro', size: null, capacity: null,
+        price: 290000, availableUnits: 3, soldUnits: 2,
+      },
     ];
 
     // Tasas por producto (mismo coeficiente para todos): 1c, 2c, 3c, 4c mensual
@@ -148,17 +307,18 @@ const seed = async () => {
 
     for (const pd of productsData) {
       const pRes = await client.query(
-        `INSERT INTO products (title, status, category_id)
-         VALUES ($1, 'ACTIVE', $2) RETURNING id`,
-        [pd.desc, catIds[pd.cat]]
+        `INSERT INTO products (title, description, model, brand_id, category_id, status)
+         VALUES ($1, $2, $3, $4, $5, 'ACTIVE') RETURNING id`,
+        [pd.title, pd.description || null, pd.model || null,
+         pd.brand ? (brandMap[pd.brand] || null) : null, catIds[pd.cat]]
       );
       const productId = pRes.rows[0].id;
 
-      // Variante por defecto con el precio
+      // Variante por defecto con atributos y precio
       const vRes = await client.query(
-        `INSERT INTO product_variants (product_id, current_price, status)
-         VALUES ($1, $2, 'ACTIVE') RETURNING id`,
-        [productId, pd.price]
+        `INSERT INTO product_variants (product_id, color, size, capacity, current_price, status)
+         VALUES ($1, $2, $3, $4, $5, 'ACTIVE') RETURNING id`,
+        [productId, pd.color || null, pd.size || null, pd.capacity || null, pd.price]
       );
       const variantId = vRes.rows[0].id;
 
@@ -190,7 +350,7 @@ for (let i = 0; i < pd.availableUnits; i++) {
         );
       }
 
-      productMap[pd.desc] = { id: productId, price: pd.price, soldUnitIds };
+      productMap[pd.title] = { id: productId, price: pd.price, soldUnitIds };
     }
     console.log('   ✅  5 categorías, 20 productos, unidades y tasas creados.');
 
@@ -442,7 +602,7 @@ for (let i = 0; i < pd.availableUnits; i++) {
       await client.query(
         `INSERT INTO cash_registers
            (register_date, cash_amount, transfer_amount, total_collected,
-            total_egreses, declared_cash, difference, difference_status, observations, closed_by)
+            total_outflows, declared_cash, difference, difference_status, observations, closed_by)
          VALUES ($1,$2,$3,$4,0,$5,$6,$7,$8,$9)`,
         [regDate, cashAmt, transferAmt, total, declared, diff, diffStatus,
          'Cierre diario — datos de prueba', adminId]

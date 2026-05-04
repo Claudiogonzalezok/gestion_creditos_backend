@@ -3,7 +3,7 @@ const response = require('../../utils/response');
 
 const getDashboard = async (req, res) => {
   try {
-    return response.success(res, await service.getDashboard());
+    return response.success(res, await service.getDashboard(req.query.date || null));
   } catch (err) { return response.serverError(res, err); }
 };
 

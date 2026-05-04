@@ -34,7 +34,6 @@ const getAccountSummary = async (customerId) => {
  * Lista de créditos del cliente autenticado.
  */
 const getCredits = async (customerId) => {
-  return queries.findCredits(customerId);
   const rows = await queries.findCredits(customerId);
   return rows.map(r => ({
     ...r,

@@ -61,18 +61,41 @@ const seed = async () => {
     // ── 2. Productos y unidades para créditos PENDING ──────────────────────
     console.log('  Creando productos para créditos PENDING...');
 
-    const catRow = await client.query(`SELECT id FROM product_categories LIMIT 1`);
-    const catId = catRow.rows[0].id;
+    // Categorías específicas
+    const catElec = await client.query(
+      `SELECT id FROM product_categories WHERE LOWER(name) = 'electrónica' LIMIT 1`
+    );
+    const catIndum = await client.query(
+      `SELECT id FROM product_categories WHERE LOWER(name) = 'indumentaria y calzado' LIMIT 1`
+    );
+    const catElecId  = catElec.rows[0]?.id  || (await client.query(`SELECT id FROM product_categories LIMIT 1`)).rows[0].id;
+    const catIndumId = catIndum.rows[0]?.id || catElecId;
 
+    // Marcas
+    const sonyRow = await client.query(`SELECT id FROM product_brands WHERE LOWER(name) = 'sony' LIMIT 1`);
+    const sonyId  = sonyRow.rows[0]?.id || null;
+
+    const genericRow = await client.query(`SELECT id FROM product_brands WHERE LOWER(name) = 'genérico' LIMIT 1`);
+    const genericId  = genericRow.rows[0]?.id || null;
+
+    // Producto 1 — Consola PlayStation 5
     const product1 = await client.query(
-      `INSERT INTO products (title, status, category_id) VALUES ($1,'ACTIVE',$2) RETURNING id`,
-      ['Consola PlayStation 5', catId]
+      `INSERT INTO products (title, description, model, brand_id, category_id, status)
+       VALUES ($1,$2,$3,$4,$5,'ACTIVE') RETURNING id`,
+      [
+        'Consola PlayStation 5',
+        'Consola de videojuegos Sony con lector de discos, 825 GB SSD NVMe, GPU de 10.3 TFLOPS y control DualSense.',
+        'CFI-1215A01X',
+        sonyId,
+        catElecId,
+      ]
     );
     const product1Id = product1.rows[0].id;
 
     const variant1 = await client.query(
-      `INSERT INTO product_variants (product_id, current_price, status) VALUES ($1,650000,'ACTIVE') RETURNING id`,
-      [product1Id]
+      `INSERT INTO product_variants (product_id, color, size, capacity, current_price, status)
+       VALUES ($1,$2,$3,$4,650000,'ACTIVE') RETURNING id`,
+      [product1Id, 'Blanco', null, '825 GB']
     );
     const variant1Id = variant1.rows[0].id;
 
@@ -93,15 +116,24 @@ const seed = async () => {
       );
     }
 
+    // Producto 2 — Bicicleta Mountain Bike
     const product2 = await client.query(
-      `INSERT INTO products (title, status, category_id) VALUES ($1,'ACTIVE',$2) RETURNING id`,
-      ['Bicicleta Mountain Bike', catId]
+      `INSERT INTO products (title, description, model, brand_id, category_id, status)
+       VALUES ($1,$2,$3,$4,$5,'ACTIVE') RETURNING id`,
+      [
+        'Bicicleta Mountain Bike',
+        'Bicicleta mountain bike rodado 29 con cuadro de aluminio, frenos de disco hidráulicos y 21 velocidades.',
+        'MTB-ROD29-ALU',
+        genericId,
+        catIndumId,
+      ]
     );
     const product2Id = product2.rows[0].id;
 
     const variant2 = await client.query(
-      `INSERT INTO product_variants (product_id, current_price, status) VALUES ($1,280000,'ACTIVE') RETURNING id`,
-      [product2Id]
+      `INSERT INTO product_variants (product_id, color, size, capacity, current_price, status)
+       VALUES ($1,$2,$3,$4,280000,'ACTIVE') RETURNING id`,
+      [product2Id, 'Negro', 'Talle M', null]
     );
     const variant2Id = variant2.rows[0].id;
 

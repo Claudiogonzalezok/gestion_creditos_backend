@@ -164,15 +164,6 @@ const createCommission = async (client, userId, creditId, amount, weekStart, wee
   );
 };
 
-const reject = async (id, rejectionReason, adminId) => {
-  await pool.query(
-    `UPDATE credits
-     SET status = 'REJECTED', rejection_reason = $1, approved_by = $2,
-         approved_at = NOW(), updated_at = NOW()
-     WHERE id = $3`,
-    [rejectionReason, adminId, id]
-  );
-};
 
 const findCreditUnitIds = async (creditId) => {
   const r = await pool.query(
@@ -244,7 +235,7 @@ module.exports = {
   findAll, findById, findCreditUnits, findCreditUnitIds,
   create, createCreditUnit, saveHistoricalRate,
   approve, generateInstallments, createCommission,
-  createDownPayment,
-  reject, getPendingInstallments, settleAllInstallments, settleCredit,
+  createDownPayment, markPrepaidInstallments,
+  getPendingInstallments, settleAllInstallments, settleCredit,
   expireOldCredits,
 };

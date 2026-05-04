@@ -9,6 +9,10 @@ const { getValue } = require('../modules/systemConfig/systemConfig.queries');
 
 const closeWeeklyCycle = async () => {
   try {
+    // Leer el parámetro en cada ejecución para reflejar cambios del Admin sin reinicio
+    const closeDay = parseInt(await getValue('commission_week_close_day') || '6');
+    if (new Date().getDay() !== closeDay) return;
+
     const { week_start, week_end } = getWeekBounds(new Date());
 
     const r = await pool.query(
@@ -43,12 +47,13 @@ const closeWeeklyCycle = async () => {
   }
 };
 
-const start = async () => {
-  const closeDay = parseInt(await getValue('commission_week_close_day') || '6');
-  cron.schedule(`59 23 * * ${closeDay}`, closeWeeklyCycle, {
+const start = () => {
+  // Corre todos los días a las 23:59; el día de cierre se evalúa dinámicamente
+  // dentro de closeWeeklyCycle leyendo commission_week_close_day desde system_config.
+  cron.schedule('59 23 * * *', closeWeeklyCycle, {
     timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
   });
-  console.log(`[JOB weeklyCommissionCycle] Programado — día ${closeDay} a las 23:59.`);
+  console.log('[JOB weeklyCommissionCycle] Programado — todos los días a las 23:59.');
 };
 
 module.exports = { start, closeWeeklyCycle };

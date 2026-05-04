@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS public.users (
     locked_at        TIMESTAMPTZ     NULL,
     last_login_at    TIMESTAMPTZ     NULL,
     force_relogin_at TIMESTAMPTZ     NULL,
-    address          VARCHAR(50)     NULL,
+    address          VARCHAR(255)    NULL,
     created_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
     updated_at       TIMESTAMPTZ     NOT NULL DEFAULT NOW()
 );
@@ -208,13 +208,13 @@ CREATE TABLE IF NOT EXISTS public.credits (
     total_amount                      NUMERIC(12,2)   NOT NULL
                                           CONSTRAINT credits_total_amount_check CHECK (total_amount > 0),
     down_payment                      NUMERIC(12,2)   NOT NULL DEFAULT 0
-                                          CONSTRAINT credits_down_payment_check CHECK (down_payment >= 0),
+                                          CONSTRAINT credits_down_payment_check CHECK (down_payment IS NULL OR down_payment < total_amount),
     down_payment_method               VARCHAR(15)     NULL
                                           CONSTRAINT credits_down_payment_method_check
                                           CHECK (down_payment_method IN ('CASH','TRANSFER')),
     down_payment_transfer_reference   VARCHAR(100)    NULL,
     prepaid_installments              SMALLINT        NOT NULL DEFAULT 0
-                                          CONSTRAINT credits_prepaid_installments_check CHECK (prepaid_installments >= 0),
+                                          CONSTRAINT credits_prepaid_installments_check CHECK (prepaid_installments IS NULL OR prepaid_installments < installments_count),
     prepaid_installments_method       VARCHAR(15)     NULL
                                           CONSTRAINT credits_prepaid_installments_method_check
                                           CHECK (prepaid_installments_method IN ('CASH','TRANSFER')),
@@ -342,7 +342,7 @@ CREATE TABLE IF NOT EXISTS public.cash_registers (
     transfer_amount   NUMERIC(12,2)   NOT NULL DEFAULT 0,
     declared_cash     NUMERIC(12,2)   NOT NULL DEFAULT 0,
     difference        NUMERIC(12,2)   NOT NULL DEFAULT 0,
-    total_egreses     NUMERIC(12,2)   NOT NULL DEFAULT 0,
+    total_outflows    NUMERIC(12,2)   NOT NULL DEFAULT 0,
     difference_status VARCHAR(15)     NOT NULL DEFAULT 'EXACT'
                           CONSTRAINT cash_registers_difference_status_check
                           CHECK (difference_status IN ('EXACT','SURPLUS','SHORTAGE')),
