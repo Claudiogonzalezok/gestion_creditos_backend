@@ -99,7 +99,7 @@ const deactivate = async (id, userId) => {
   });
 };
 
-const activate = async (id) => {
+const activate = async (id, userId) => {
   const unit = await queries.findById(id);
   if (!unit) throw { status: 404, message: 'Unidad no encontrada.' };
   if (unit.status !== 'INACTIVE')
@@ -107,6 +107,11 @@ const activate = async (id) => {
 
   await withTransaction(async (client) => {
     await queries.updateStatus(client, id, 'AVAILABLE');
+    await client.query(
+      `INSERT INTO stock_movements (product_id, product_unit_id, movement, quantity, reason, user_id)
+       VALUES ($1, $2, 'IN', 1, 'Reactivación de unidad', $3)`,
+      [unit.product_id, id, userId || null]
+    );
   });
 };
 

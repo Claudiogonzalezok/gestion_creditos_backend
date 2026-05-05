@@ -66,7 +66,7 @@ const deactivate = async (req, res) => {
 
 const activate = async (req, res) => {
   try {
-    await service.activate(req.params.id);
+    await service.activate(req.params.id, req.user.id);
     return response.success(res, null, 'Unidad reactivada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

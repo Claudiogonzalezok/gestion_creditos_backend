@@ -147,21 +147,25 @@ const create = async ({ title, description, model, brand_id, category_id }) => {
  * Usa read-after-write sobre findById para garantizar una respuesta consistente.
  * @returns {Object|null} producto actualizado o null si no existe
  */
-const update = async (id, { title, description, model, brand_id, category_id }) => {
+const update = async (id, { title, description, model, brand_id, category_id } = {}) => {
+  const params = [];
+  const sets   = [];
+
+  if (title       !== undefined) { params.push(title);       sets.push(`title = $${params.length}`); }
+  if (description !== undefined) { params.push(description); sets.push(`description = $${params.length}`); }
+  if (model       !== undefined) { params.push(model);       sets.push(`model = $${params.length}`); }
+  if (brand_id    !== undefined) { params.push(brand_id);    sets.push(`brand_id = $${params.length}`); }
+  if (category_id !== undefined) { params.push(category_id); sets.push(`category_id = $${params.length}`); }
+
+  if (!sets.length) return findById(id);
+
+  params.push(id);
   const r = await pool.query(
-    `UPDATE products
-     SET title       = COALESCE($1, title),
-         description = COALESCE($2, description),
-         model       = COALESCE($3, model),
-         brand_id    = COALESCE($4, brand_id),
-         category_id = COALESCE($5, category_id),
-         updated_at  = NOW()
-     WHERE id = $6
-     RETURNING id`,
-    [title || null, description || null, model || null, brand_id || null, category_id || null, id]
+    `UPDATE products SET ${sets.join(', ')}, updated_at = NOW() WHERE id = $${params.length} RETURNING id`,
+    params
   );
   if (!r.rows[0]) return null;
-  return await findById(r.rows[0].id);
+  return findById(r.rows[0].id);
 };
 
 const deactivate = async (id) => {
