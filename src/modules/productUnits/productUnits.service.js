@@ -37,10 +37,11 @@ const create = async ({ variantId, unitCode, notes }, userId) => {
     throw { status: 409, message: detail };
   }
 
-  return withTransaction(async (client) => {
-    const unit = await queries.create(client, { variantId, unitCode, notes, userId });
-    return queries.findById(unit.id);
+  // findById se llama fuera de la transacción para que lea datos ya committeados
+  const inserted = await withTransaction(async (client) => {
+    return queries.create(client, { variantId, unitCode, notes, userId });
   });
+  return queries.findById(inserted.id);
 };
 
 const createBulk = async (variantId, units, userId) => {
@@ -52,8 +53,9 @@ const createBulk = async (variantId, units, userId) => {
   if (uniqueCodes.size !== codes.length)
     throw { status: 409, message: 'El listado contiene códigos de unidad duplicados.' };
 
-  return withTransaction(async (client) => {
-    const created = [];
+  // Se guardan solo los ids dentro de la transacción; findById corre después del COMMIT
+  const insertedIds = await withTransaction(async (client) => {
+    const ids = [];
     for (const u of units) {
       const existing = await queries.findByUnitCodeForClient(client, u.unit_code);
       if (existing) {
@@ -65,10 +67,13 @@ const createBulk = async (variantId, units, userId) => {
       const unit = await queries.create(client, {
         variantId, unitCode: u.unit_code, notes: u.notes, userId,
       });
-      created.push(unit);
+      ids.push(unit.id);
     }
-    return { created: created.length, units: created };
+    return ids;
   });
+
+  const fullUnits = await Promise.all(insertedIds.map(id => queries.findById(id)));
+  return { created: fullUnits.length, units: fullUnits };
 };
 
 const update = async (id, { unitCode, notes }) => {
