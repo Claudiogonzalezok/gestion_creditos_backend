@@ -34,16 +34,18 @@ const findById = async (id) => {
   return r.rows[0] || null;
 };
 
+// Solo busca unidades activas: los códigos de unidades INACTIVE pueden reutilizarse
 const findByUnitCode = async (unitCode) => {
   const r = await pool.query(
-    `SELECT id FROM product_units WHERE unit_code = $1`, [unitCode]
+    `SELECT id FROM product_units WHERE unit_code = $1 AND status != 'INACTIVE'`, [unitCode]
   );
   return r.rows[0] || null;
 };
 
+// Versión transaccional de findByUnitCode para uso en bulk create
 const findByUnitCodeForClient = async (client, unitCode) => {
   const r = await client.query(
-    `SELECT id FROM product_units WHERE unit_code = $1`, [unitCode]
+    `SELECT id FROM product_units WHERE unit_code = $1 AND status != 'INACTIVE'`, [unitCode]
   );
   return r.rows[0] || null;
 };
