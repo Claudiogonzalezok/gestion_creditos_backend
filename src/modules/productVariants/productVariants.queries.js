@@ -6,10 +6,20 @@ const findAll = async ({ productId, status } = {}) => {
            pv.status, pv.created_at, pv.updated_at,
            p.id AS product_id, p.title AS product_name,
            p.description, p.model, p.status AS product_status,
-           pb.id AS brand_id, pb.name AS brand_name
+           pb.id AS brand_id, pb.name AS brand_name,
+           COALESCE(stock.available_count, 0) AS available_count,
+           COALESCE(stock.reserved_count,  0) AS reserved_count,
+           COALESCE(stock.sold_count,       0) AS sold_count
     FROM product_variants pv
     JOIN products p          ON p.id  = pv.product_id
     LEFT JOIN product_brands pb ON pb.id = p.brand_id
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) FILTER (WHERE status = 'AVAILABLE')::int AS available_count,
+        COUNT(*) FILTER (WHERE status = 'RESERVED')::int  AS reserved_count,
+        COUNT(*) FILTER (WHERE status = 'SOLD')::int      AS sold_count
+      FROM product_units WHERE variant_id = pv.id
+    ) stock ON TRUE
     WHERE 1=1`;
   const params = [];
   if (productId) { params.push(productId); q += ` AND pv.product_id = $${params.length}`; }
