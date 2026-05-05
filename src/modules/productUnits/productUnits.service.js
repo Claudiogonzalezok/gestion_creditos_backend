@@ -29,8 +29,13 @@ const getById = async (id) => {
 const create = async ({ variantId, unitCode, notes }, userId) => {
   await assertVariantActive(variantId);
 
-  if (await queries.findByUnitCode(unitCode))
-    throw { status: 409, message: `Ya existe una unidad con el código "${unitCode}".` };
+  const existing = await queries.findByUnitCode(unitCode);
+  if (existing) {
+    const detail = existing.status === 'INACTIVE'
+      ? `El código "${unitCode}" pertenece a una unidad dada de baja y no puede reutilizarse.`
+      : `Ya existe una unidad con el código "${unitCode}".`;
+    throw { status: 409, message: detail };
+  }
 
   return withTransaction(async (client) => {
     const unit = await queries.create(client, { variantId, unitCode, notes, userId });
@@ -51,8 +56,12 @@ const createBulk = async (variantId, units, userId) => {
     const created = [];
     for (const u of units) {
       const existing = await queries.findByUnitCodeForClient(client, u.unit_code);
-      if (existing)
-        throw { status: 409, message: `Ya existe una unidad con el código "${u.unit_code}".` };
+      if (existing) {
+        const detail = existing.status === 'INACTIVE'
+          ? `El código "${u.unit_code}" pertenece a una unidad dada de baja y no puede reutilizarse.`
+          : `Ya existe una unidad con el código "${u.unit_code}".`;
+        throw { status: 409, message: detail };
+      }
       const unit = await queries.create(client, {
         variantId, unitCode: u.unit_code, notes: u.notes, userId,
       });
