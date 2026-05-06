@@ -38,6 +38,7 @@ const getCredits = async (customerId) => {
   return rows.map(r => ({
     ...r,
     total_amount:       parseFloat(r.total_amount),
+    total_to_return:    parseFloat(r.total_to_return),
     total_installments: parseInt(r.total_installments),
     paid_installments:  parseInt(r.paid_installments),
     pending_penalty:    parseFloat(r.pending_penalty),
@@ -52,7 +53,13 @@ const getCredits = async (customerId) => {
 const getCreditById = async (creditId, customerId) => {
   const credit = await queries.findCreditById(creditId, customerId);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-  return credit;
+
+  const totalToReturn = credit.installments.reduce(
+    (sum, i) => sum + parseFloat(i.amount_due),
+    0,
+  );
+
+  return { ...credit, total_to_return: totalToReturn };
 };
 
 module.exports = { getAccountSummary, getCredits, getCreditById };

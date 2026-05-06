@@ -57,6 +57,7 @@ const findCredits = async (customerId) => {
                                                             AS next_due_date,
        MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))::float8
                                                             AS next_due_amount,
+       COALESCE(SUM(i.amount_due), 0)::float8                AS total_to_return,
        COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0) AS pending_penalty,
        BOOL_OR(i.status = 'OVERDUE')                        AS has_overdue
      FROM credits c
