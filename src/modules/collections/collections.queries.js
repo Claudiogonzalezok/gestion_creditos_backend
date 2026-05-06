@@ -1,7 +1,15 @@
 const pool = require('../../config/db');
 
-// Busca cuotas pendientes/vencidas asignadas a un cobrador para una fecha dada
-const findInstallmentsForSheet = async (collectorId, date, filter) => {
+/**
+ * Busca cuotas pendientes/vencidas asignadas a un cobrador para una fecha dada.
+ * Permite ejecutar dentro de transacción cuando se pasa un cliente de BD.
+ * @param {string} collectorId - ID del cobrador.
+ * @param {string} date - Fecha de referencia de la planilla.
+ * @param {string} filter - Filtro de cuotas a incluir.
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool] - Conexión o cliente para ejecutar la query.
+ * @returns {Promise<Array<object>>} Lista de cuotas candidatas a incluir en la planilla.
+ */
+const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) => {
   let statusFilter;
   let params;
 
@@ -20,7 +28,7 @@ const findInstallmentsForSheet = async (collectorId, date, filter) => {
     params = [collectorId];
   }
 
-  const r = await pool.query(
+  const r = await db.query(
     `SELECT
        i.id AS installment_id,
        i.installment_number,
@@ -47,8 +55,14 @@ const findInstallmentsForSheet = async (collectorId, date, filter) => {
   return r.rows;
 };
 
-const create = async ({ collectorId, date, filter, adminId }) => {
-  const r = await pool.query(
+/**
+ * Crea la cabecera de una planilla de cobro.
+ * @param {{ collectorId: string, date: string, filter: string, adminId: string }} payload - Datos de creación.
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool] - Conexión o cliente para ejecutar la query.
+ * @returns {Promise<object>} Cabecera de planilla recién creada.
+ */
+const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
+  const r = await db.query(
     `INSERT INTO collection_sheets (collector_id, sheet_date, filter_used, generated_by)
      VALUES ($1, $2, $3, $4)
      RETURNING id, collector_id, sheet_date, filter_used, generated_by, created_at`,
@@ -57,8 +71,13 @@ const create = async ({ collectorId, date, filter, adminId }) => {
   return r.rows[0];
 };
 
-// Nota: la tabla usa "sheet_id" (no "collection_sheet_id") y tiene "planned_amount"
-const createDetails = async (sheetId, items) => {
+/**
+ * Inserta los detalles de una planilla usando snapshot del monto al momento de emisión.
+ * @param {string} sheetId - ID de la planilla.
+ * @param {Array<object>} items - Cuotas incluidas en la planilla.
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool] - Conexión o cliente para ejecutar la query.
+ */
+const createDetails = async (sheetId, items, db = pool) => {
   if (!items.length) return;
   const values = items.map((item, i) => {
     const base = i * 4;
@@ -70,7 +89,7 @@ const createDetails = async (sheetId, items) => {
     i + 1,
     item.amount_due,   // planned_amount — snapshot del monto al emitir la planilla
   ]);
-  await pool.query(
+  await db.query(
     `INSERT INTO collection_sheet_details (sheet_id, installment_id, order_number, planned_amount)
      VALUES ${values}`,
     params
