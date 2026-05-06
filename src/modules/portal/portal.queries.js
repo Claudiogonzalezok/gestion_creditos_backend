@@ -80,7 +80,7 @@ const findCredits = async (customerId) => {
                                                             AS pending_penalty,
        BOOL_OR(i.status = 'OVERDUE')                        AS has_overdue,
        MIN(i.amount_due)::float8                            AS installment_amount,
-       (SELECT STRING_AGG(DISTINCT p.name, ' + ')
+       (SELECT STRING_AGG(DISTINCT p.title, ' + ')
         FROM credit_products cp
         JOIN product_units pu ON pu.id = cp.product_unit_id
         JOIN product_variants pv ON pv.id = pu.variant_id
@@ -109,7 +109,7 @@ const findCreditById = async (creditId, customerId) => {
        c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
        c.down_payment::float8, c.down_payment_method,
        c.prepaid_installments::int, c.interest_rate::float8,
-       (SELECT STRING_AGG(DISTINCT p.name, ' + ')
+       (SELECT STRING_AGG(DISTINCT p.title, ' + ')
         FROM credit_products cp
         JOIN product_units pu ON pu.id = cp.product_unit_id
         JOIN product_variants pv ON pv.id = pu.variant_id
