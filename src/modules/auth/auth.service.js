@@ -3,6 +3,8 @@ const queries      = require('./auth.queries');
 const jwtUtil      = require('../../utils/jwt');
 const { getValue } = require('../systemConfig/systemConfig.queries');
 
+const SALT_ROUNDS = 12;
+
 // ── Login sistema interno ─────────────────────────────────────
 const loginInternal = async (dni, password) => {
   const [user, maxAttemptsStr, expiryHs] = await Promise.all([
@@ -89,6 +91,21 @@ const loginPortal = async (dni, password) => {
   };
 };
 
+// ── Cambio de contraseña portal ───────────────────────────────
+const changePortalPassword = async (customerId, currentPassword, newPassword) => {
+  const customer = await queries.findCustomerPasswordHash(customerId);
+  if (!customer) throw { status: 404, message: 'Cliente no encontrado.' };
+
+  const valid = await bcrypt.compare(currentPassword, customer.portal_password_hash);
+  if (!valid) throw { status: 401, message: 'La contraseña actual es incorrecta.' };
+
+  if (currentPassword === newPassword)
+    throw { status: 400, message: 'La nueva contraseña no puede ser igual a la actual.' };
+
+  const hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  await queries.changePortalPassword(customerId, hash);
+};
+
 // ── Logout: agregar token a blacklist ─────────────────────────
 const logout = async (payload, isPortal = false) => {
   const expiresAt = new Date(payload.exp * 1000);
@@ -100,4 +117,4 @@ const logout = async (payload, isPortal = false) => {
   );
 };
 
-module.exports = { loginInternal, loginPortal, logout };
+module.exports = { loginInternal, loginPortal, changePortalPassword, logout };

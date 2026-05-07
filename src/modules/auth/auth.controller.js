@@ -51,6 +51,19 @@ const logoutPortal = async (req, res) => {
   }
 };
 
+// POST /api/auth/portal/change-password
+const changePortalPassword = async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    await service.changePortalPassword(req.customer.id, current_password, new_password);
+    return response.success(res, null, 'Contraseña cambiada correctamente.');
+  } catch (err) {
+    if (err.status === 401) return response.unauthorized(res, err.message);
+    if (err.status === 400) return response.badRequest(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 // GET /api/auth/me — Devuelve el usuario autenticado actual
 const me = async (req, res) => {
   try {
@@ -70,4 +83,4 @@ const me = async (req, res) => {
   }
 };
 
-module.exports = { loginInternal, loginPortal, logout, logoutPortal, me };
+module.exports = { loginInternal, loginPortal, changePortalPassword, logout, logoutPortal, me };

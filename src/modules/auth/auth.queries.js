@@ -63,6 +63,26 @@ const resetPortalFailedAttempts = async (customerId) => {
   );
 };
 
+const findCustomerPasswordHash = async (id) => {
+  const result = await pool.query(
+    `SELECT portal_password_hash, portal_is_temp_password FROM customers WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+};
+
+const changePortalPassword = async (id, passwordHash) => {
+  await pool.query(
+    `UPDATE customers
+     SET portal_password_hash    = $1,
+         portal_is_temp_password = FALSE,
+         portal_failed_attempts  = 0,
+         updated_at              = NOW()
+     WHERE id = $2`,
+    [passwordHash, id]
+  );
+};
+
 const blacklistToken = async (jti, userId, customerId, expiresAt) => {
   await pool.query(
     `INSERT INTO token_blacklist (token_jti, user_id, customer_id, expires_at)
@@ -77,8 +97,9 @@ const cleanExpiredTokens = async () => {
 };
 
 module.exports = {
-  findUserByDni, findCustomerByDni,
+  findUserByDni, findCustomerByDni, findCustomerPasswordHash,
   incrementFailedAttempts, lockUser, resetFailedAttempts,
   incrementPortalFailedAttempts, lockCustomer, resetPortalFailedAttempts,
+  changePortalPassword,
   blacklistToken, cleanExpiredTokens,
 };
