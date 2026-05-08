@@ -6,6 +6,7 @@ const { validate }                = require('../../middlewares/validate.middlewa
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
 // ── Cotizador público: sin autenticación (CU10) ───────────────
+router.get('/simulate/options', controller.getSimulateOptions);
 router.post('/simulate', v.credits.simulate, validate, controller.simulate);
 
 // ── Rutas protegidas ──────────────────────────────────────────
