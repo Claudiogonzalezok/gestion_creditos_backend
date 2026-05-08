@@ -96,10 +96,80 @@ const cleanExpiredTokens = async () => {
   return result.rowCount;
 };
 
+// ── Refresh Tokens ────────────────────────────────────────────────────────────
+
+const createRefreshToken = async (hashed, familyId, userId, customerId, expiresAt) => {
+  const result = await pool.query(
+    `INSERT INTO refresh_tokens (token, family_id, user_id, customer_id, expires_at)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, family_id`,
+    [hashed, familyId, userId || null, customerId || null, expiresAt]
+  );
+  return result.rows[0];
+};
+
+const findRefreshToken = async (hashed) => {
+  const result = await pool.query(
+    `SELECT id, token, family_id, user_id, customer_id, revoked, expires_at
+     FROM refresh_tokens
+     WHERE token = $1`,
+    [hashed]
+  );
+  return result.rows[0] || null;
+};
+
+const revokeRefreshToken = async (id) => {
+  await pool.query(
+    `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW() WHERE id = $1`,
+    [id]
+  );
+};
+
+// Revoca toda la familia — se usa cuando se detecta reutilización de un token revocado.
+const revokeFamilyRefreshTokens = async (familyId) => {
+  const result = await pool.query(
+    `UPDATE refresh_tokens
+     SET revoked = TRUE, revoked_at = NOW()
+     WHERE family_id = $1 AND revoked = FALSE`,
+    [familyId]
+  );
+  return result.rowCount;
+};
+
+// Revoca todos los refresh tokens activos de un usuario (logout global).
+const revokeAllUserRefreshTokens = async (userId) => {
+  const result = await pool.query(
+    `UPDATE refresh_tokens
+     SET revoked = TRUE, revoked_at = NOW()
+     WHERE user_id = $1 AND revoked = FALSE`,
+    [userId]
+  );
+  return result.rowCount;
+};
+
+// Revoca todos los refresh tokens activos de un cliente portal (logout global).
+const revokeAllCustomerRefreshTokens = async (customerId) => {
+  const result = await pool.query(
+    `UPDATE refresh_tokens
+     SET revoked = TRUE, revoked_at = NOW()
+     WHERE customer_id = $1 AND revoked = FALSE`,
+    [customerId]
+  );
+  return result.rowCount;
+};
+
+const cleanExpiredRefreshTokens = async () => {
+  const result = await pool.query(`DELETE FROM refresh_tokens WHERE expires_at < NOW()`);
+  return result.rowCount;
+};
+
 module.exports = {
   findUserByDni, findCustomerByDni, findCustomerPasswordHash,
   incrementFailedAttempts, lockUser, resetFailedAttempts,
   incrementPortalFailedAttempts, lockCustomer, resetPortalFailedAttempts,
   changePortalPassword,
   blacklistToken, cleanExpiredTokens,
+  createRefreshToken, findRefreshToken, revokeRefreshToken,
+  revokeFamilyRefreshTokens, revokeAllUserRefreshTokens, revokeAllCustomerRefreshTokens,
+  cleanExpiredRefreshTokens,
 };

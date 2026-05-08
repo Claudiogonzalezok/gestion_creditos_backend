@@ -1,4 +1,5 @@
 const jwt    = require('jsonwebtoken');
+const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 // Generar token para usuarios internos (Admin, Vendedor, Cobrador)
@@ -54,10 +55,25 @@ const extractToken = (req) => {
   return header.split(' ')[1];
 };
 
+// Genera un refresh token opaco: UUID v4 raw para la cookie + su hash SHA-256 para BD.
+// El raw nunca se almacena — solo el hash. Así un dump de BD no compromete los tokens.
+const generateRefreshToken = () => {
+  const raw    = uuidv4();
+  const hashed = crypto.createHash('sha256').update(raw).digest('hex');
+  return { raw, hashed };
+};
+
+// Hashea el raw refresh token recibido de la cookie para buscarlo en BD.
+const hashRefreshToken = (raw) => {
+  return crypto.createHash('sha256').update(raw).digest('hex');
+};
+
 module.exports = {
   generateInternalToken,
   generatePortalToken,
   verifyInternalToken,
   verifyPortalToken,
   extractToken,
+  generateRefreshToken,
+  hashRefreshToken,
 };
