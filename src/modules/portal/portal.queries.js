@@ -71,15 +71,22 @@ const findCredits = async (customerId) => {
        c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
        COUNT(i.id)::int                                              AS total_installments,
        COUNT(i.id) FILTER (WHERE i.status = 'PAID')::int            AS paid_installments,
-       MIN(i.due_date) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
-                                                            AS next_due_date,
-       MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))::float8
-                                                            AS next_due_amount,
+       -- Próxima cuota: fecha y monto corresponden a la MISMA cuota (la más próxima a vencer).
+       -- Se usan subqueries correlacionadas para garantizar que ambos valores sean de la misma fila.
+       (SELECT i2.due_date FROM installments i2
+        WHERE i2.credit_id = c.id AND i2.status IN ('PENDING','OVERDUE','PARTIAL')
+        ORDER BY i2.due_date ASC LIMIT 1)                           AS next_due_date,
+       (SELECT i2.amount_due::float8 FROM installments i2
+        WHERE i2.credit_id = c.id AND i2.status IN ('PENDING','OVERDUE','PARTIAL')
+        ORDER BY i2.due_date ASC LIMIT 1)                           AS next_due_amount,
        COALESCE(SUM(i.amount_due), 0)::float8               AS total_to_return,
        COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0)::float8
                                                             AS pending_penalty,
        BOOL_OR(i.status = 'OVERDUE')                        AS has_overdue,
-       MIN(i.amount_due)::float8                            AS installment_amount,
+       -- Monto de cuota estándar: el de la primera cuota generada (número 1).
+       (SELECT i3.amount_due::float8 FROM installments i3
+        WHERE i3.credit_id = c.id
+        ORDER BY i3.installment_number ASC LIMIT 1)                 AS installment_amount,
        (SELECT STRING_AGG(DISTINCT p.title, ' + ')
         FROM credit_products cp
         JOIN product_units pu ON pu.id = cp.product_unit_id
