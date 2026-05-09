@@ -296,14 +296,27 @@ const credits = {
     isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
   ],
   simulateAll: [
-    body('type').equals('LOAN').withMessage('simulateAll solo soporta tipo LOAN.'),
-    body('total_amount')
+    isEnum('type', 'El tipo de crédito', ['SALE', 'LOAN']),
+    body('total_amount').optional()
       .custom(val => {
         const n = parseFloat(val);
         if (isNaN(n) || n < 1 || n > 99999999)
           throw new Error('El monto total debe ser un número entre 1 y 99999999.');
         return true;
       }),
+    body('products').optional().isArray({ min: 1 })
+      .withMessage('Los productos deben ser un arreglo con al menos un ítem.'),
+    body('products.*.variant_id').optional()
+      .isUUID().withMessage('Cada variant_id debe ser un UUID válido.'),
+    body('products.*.quantity').optional()
+      .isInt({ min: 1, max: 9999 }).withMessage('La cantidad debe ser entre 1 y 9999.'),
+    body().custom((body) => {
+      if (body.type === 'LOAN' && !body.total_amount)
+        throw new Error('El monto total es obligatorio para préstamos.');
+      if (body.type === 'SALE' && (!body.products || !body.products.length))
+        throw new Error('Para ventas se deben indicar las variantes (products[{variant_id, quantity}]).');
+      return true;
+    }),
   ],
   approve: [
     isUUIDParam('id', 'El ID de crédito'),
