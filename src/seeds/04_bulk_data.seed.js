@@ -4,7 +4,7 @@
 //
 // Requisito: ejecutar semillas 01, 02 y 03 antes que esta.
 //
-// Contraseña de todos los usuarios: 1234
+// Contraseña de todos los usuarios: 123456
 // Ejecutar: npm run seed (o node src/seeds/index.seed.js)
 
 const bcrypt = require('bcryptjs');
@@ -33,10 +33,23 @@ const cuota = (total, rate, count) =>
 
 // ──────────────────────────────────────────────────────────────────────────
 const seed = async () => {
-  // Idempotencia: si el vendedor ya existe, saltar
+  // Idempotencia: si los usuarios ya existen, al menos alinear sus credenciales actuales.
   const check = await pool.query(`SELECT id FROM users WHERE dni = '11111111'`);
+  const operationalPassword = '123456';
+  const hash = await bcrypt.hash(operationalPassword, 10);
   if (check.rows.length > 0) {
-    console.log('   ⚠️   Semilla 04 ya ejecutada — saltando.');
+    console.log('   ⚠️   Semilla 04 ya ejecutada — actualizando credenciales operativas...');
+    await pool.query(
+      `UPDATE users
+       SET password_hash = $1,
+           failed_attempts = 0,
+           locked_at = NULL,
+           force_relogin_at = NULL,
+           updated_at = NOW()
+       WHERE dni IN ('11111111', '22222222', '33333333')`,
+      [hash]
+    );
+    console.log('   ✅  Credenciales de SELLER / COLLECTOR / SELLER_COLLECTOR actualizadas a 123456.');
     return;
   }
 
@@ -53,8 +66,6 @@ const seed = async () => {
 
     // ── 1. Usuarios operativos ───────────────────────────────────────────
     console.log('  Creando usuarios operativos...');
-    const hash = await bcrypt.hash('1234', 10);
-
     const sellerRow = await client.query(
       `INSERT INTO users (full_name, dni, email, address, password_hash, role, status, is_temp_password)
        VALUES ($1,$2,$3,$4,$5,'SELLER','ACTIVE',FALSE) RETURNING id`,
@@ -613,7 +624,7 @@ for (let i = 0; i < pd.availableUnits; i++) {
     console.log('   ✅  3 cierres de caja creados.');
     console.log('');
     console.log('   ┌──────────────────────────────────────────────┐');
-    console.log('   │  Usuarios (contraseña: 1234 para todos)      │');
+    console.log('   │  Usuarios (contraseña: 123456 para todos)    │');
     console.log('   │  Vendedor:          DNI 11111111             │');
     console.log('   │  Cobrador:          DNI 22222222             │');
     console.log('   │  Vendedor+Cobrador: DNI 33333333             │');
