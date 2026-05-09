@@ -5,6 +5,7 @@ const pool = require("../../config/db");
  * - deuda total vigente
  * - conteo de cuotas por estado
  * - próximos vencimientos (30 días)
+ * - resumen de créditos (activos, liquidados, total cuotas)
  */
 const getAccountSummary = async (customerId) => {
   // Totales de cuotas
@@ -24,12 +25,13 @@ const getAccountSummary = async (customerId) => {
     [customerId],
   );
 
-  // Próximos vencimientos (30 días), solo cuotas pendientes
+  // Próximos vencimientos (30 días), solo cuotas pendientes o vencidas
   const upcoming = await pool.query(
     `SELECT
        i.id, i.installment_number, i.due_date,
        i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
-       c.id AS credit_id, c.type AS credit_type
+       c.id AS credit_id, c.type AS credit_type,
+       c.installments_count AS credit_installments_count
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
      WHERE c.customer_id = $1
@@ -40,7 +42,23 @@ const getAccountSummary = async (customerId) => {
     [customerId],
   );
 
-  return { totals: totals.rows[0], upcoming: upcoming.rows };
+  // Resumen de créditos del cliente
+  const creditsSummary = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE status = 'ACTIVE')  AS active_credits,
+       COUNT(*) FILTER (WHERE status = 'SETTLED') AS settled_credits,
+       COALESCE(SUM(installments_count), 0)::int  AS total_installments_count
+     FROM credits
+     WHERE customer_id = $1
+       AND status IN ('ACTIVE','SETTLED')`,
+    [customerId],
+  );
+
+  return {
+    totals: totals.rows[0],
+    upcoming: upcoming.rows,
+    creditsSummary: creditsSummary.rows[0],
+  };
 };
 
 /**
@@ -50,15 +68,25 @@ const findCredits = async (customerId) => {
   const r = await pool.query(
     `SELECT
        c.id, c.type, c.total_amount::float8, c.installments_count::int,
-       c.payment_frequency, c.status, c.created_at, c.approved_at,
+       c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
        COUNT(i.id)::int                                              AS total_installments,
        COUNT(i.id) FILTER (WHERE i.status = 'PAID')::int            AS paid_installments,
        MIN(i.due_date) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))
                                                             AS next_due_date,
        MIN(i.amount_due) FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL'))::float8
                                                             AS next_due_amount,
-       COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0) AS pending_penalty,
-       BOOL_OR(i.status = 'OVERDUE')                        AS has_overdue
+       COALESCE(SUM(i.amount_due), 0)::float8               AS total_to_return,
+       COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0)::float8
+                                                            AS pending_penalty,
+       BOOL_OR(i.status = 'OVERDUE')                        AS has_overdue,
+       MIN(i.amount_due)::float8                            AS installment_amount,
+       (SELECT STRING_AGG(DISTINCT p.title, ' + ')
+        FROM credit_products cp
+        JOIN product_units pu ON pu.id = cp.product_unit_id
+        JOIN product_variants pv ON pv.id = pu.variant_id
+        JOIN products p ON p.id = pv.product_id
+        WHERE cp.credit_id = c.id
+       )                                                     AS credit_name
      FROM credits c
      LEFT JOIN installments i ON i.credit_id = c.id
      WHERE c.customer_id = $1
@@ -78,7 +106,16 @@ const findCreditById = async (creditId, customerId) => {
   const credit = await pool.query(
     `SELECT
        c.id, c.type, c.total_amount::float8, c.installments_count::int,
-       c.payment_frequency, c.status, c.created_at, c.approved_at
+       c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
+       c.down_payment::float8, c.down_payment_method,
+       c.prepaid_installments::int, c.interest_rate::float8,
+       (SELECT STRING_AGG(DISTINCT p.title, ' + ')
+        FROM credit_products cp
+        JOIN product_units pu ON pu.id = cp.product_unit_id
+        JOIN product_variants pv ON pv.id = pu.variant_id
+        JOIN products p ON p.id = pv.product_id
+        WHERE cp.credit_id = c.id
+       ) AS credit_name
      FROM credits c
      WHERE c.id = $1
        AND c.customer_id = $2

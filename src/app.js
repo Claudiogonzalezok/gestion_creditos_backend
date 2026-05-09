@@ -1,10 +1,11 @@
 require('dotenv').config();
 
-const express    = require('express');
-const cors       = require('cors');
-const helmet     = require('helmet');
-const morgan     = require('morgan');
-const rateLimit  = require('express-rate-limit');
+const express      = require('express');
+const cors         = require('cors');
+const helmet       = require('helmet');
+const morgan       = require('morgan');
+const rateLimit    = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
 const swaggerUi  = require('swagger-ui-express');
 const swaggerSpec = require('./config/swagger');
 
@@ -38,6 +39,7 @@ app.use(cors({
 // ── Parsers ───────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // ── Logger ────────────────────────────────────────────────────
 if (process.env.NODE_ENV !== 'test') {
@@ -64,6 +66,16 @@ const loginLimiter = rateLimit({
 });
 app.use('/api/auth/login',        loginLimiter);
 app.use('/api/auth/portal/login', loginLimiter);
+
+const refreshLimiter = rateLimit({
+  windowMs:        15 * 60 * 1000,
+  max:             60,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  message: { ok: false, message: 'Demasiadas solicitudes de renovación de sesión. Intentá nuevamente en 15 minutos.' },
+});
+app.use('/api/auth/refresh',        refreshLimiter);
+app.use('/api/auth/portal/refresh', refreshLimiter);
 
 // ── Rutas ─────────────────────────────────────────────────────
 app.use('/api/auth',         require('./modules/auth/auth.routes'));

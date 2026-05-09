@@ -74,6 +74,25 @@ const findActiveRate = async (payment_frequency, installments_count, amount) => 
   return r.rows[0] || null;
 };
 
+/**
+ * Devuelve los valores únicos de installments_count activos, agrupados por payment_frequency.
+ * Usado por el endpoint público del simulador.
+ */
+const findActiveInstallmentOptions = async () => {
+  const r = await pool.query(
+    `SELECT DISTINCT payment_frequency, installments_count::int
+     FROM interest_rates
+     WHERE active = TRUE
+     ORDER BY payment_frequency, installments_count ASC`
+  );
+  const result = {};
+  for (const row of r.rows) {
+    if (!result[row.payment_frequency]) result[row.payment_frequency] = [];
+    result[row.payment_frequency].push(row.installments_count);
+  }
+  return result;
+};
+
 const create = async ({ payment_frequency, installments_count, min_amount, max_amount, rate }) => {
   const r = await pool.query(
     `INSERT INTO interest_rates
@@ -114,6 +133,6 @@ const activate = async (id) =>
   pool.query(`UPDATE interest_rates SET active = TRUE, updated_at = NOW() WHERE id = $1`, [id]);
 
 module.exports = {
-  findAll, findById, findExact, findOverlap, findActiveRate,
+  findAll, findById, findExact, findOverlap, findActiveRate, findActiveInstallmentOptions,
   create, update, reactivate, deactivate, activate,
 };

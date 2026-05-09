@@ -1,5 +1,6 @@
 const service  = require('./credits.service');
 const response = require('../../utils/response');
+const irQueries = require('../interestRates/interestRates.queries');
 
 const getAll = async (req, res) => {
   try {
@@ -34,6 +35,13 @@ const create = async (req, res) => {
     if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }
+};
+
+const getSimulateOptions = async (req, res) => {
+  try {
+    const options = await irQueries.findActiveInstallmentOptions();
+    return response.success(res, options);
+  } catch (err) { return response.serverError(res, err); }
 };
 
 const simulate = async (req, res) => {
@@ -82,4 +90,4 @@ const earlySettlement = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, simulate, approve, reject, earlySettlement };
+module.exports = { getAll, getById, create, getSimulateOptions, simulate, approve, reject, earlySettlement };
