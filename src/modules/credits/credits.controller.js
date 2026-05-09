@@ -69,7 +69,9 @@ const simulateAll = async (req, res) => {
 
 const getSimulateProducts = async (req, res) => {
   try {
-    return response.success(res, await prQueries.findProductsWithActiveRates());
+    const search = String(req.query.search || '').trim().slice(0, 100);
+    const limit  = parseInt(req.query.limit) || 10;
+    return response.success(res, await prQueries.findProductsWithActiveRates({ search, limit }));
   } catch (err) { return response.serverError(res, err); }
 };
 

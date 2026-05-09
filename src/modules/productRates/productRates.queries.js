@@ -121,9 +121,26 @@ const findActiveInstallmentOptionsForProduct = async (productId) => {
 
 /**
  * Devuelve productos activos con al menos una tasa de venta configurada,
- * junto con sus variantes activas. Usado en el endpoint público del simulador.
+ * junto con sus variantes activas. Soporta búsqueda por nombre y límite de resultados.
+ * @param {object}  opts
+ * @param {string}  [opts.search=''] - Texto a buscar en el título (ILIKE).
+ * @param {number}  [opts.limit=10]  - Máximo de productos a devolver (tope 50).
  */
-const findProductsWithActiveRates = async () => {
+const findProductsWithActiveRates = async ({ search = '', limit = 10 } = {}) => {
+  const params = [];
+  const conditions = [
+    `p.status = 'ACTIVE'`,
+    `EXISTS (SELECT 1 FROM product_rates pr WHERE pr.product_id = p.id AND pr.active = TRUE)`,
+  ];
+
+  if (search) {
+    params.push(`%${search}%`);
+    conditions.push(`p.title ILIKE $${params.length}`);
+  }
+
+  params.push(Math.min(Math.max(parseInt(limit) || 10, 1), 50));
+  const limitIdx = params.length;
+
   const r = await pool.query(`
     SELECT p.id, p.title,
       COALESCE(
@@ -140,14 +157,11 @@ const findProductsWithActiveRates = async () => {
       ) AS variants
     FROM products p
     JOIN product_variants pv ON pv.product_id = p.id
-    WHERE p.status = 'ACTIVE'
-      AND EXISTS (
-        SELECT 1 FROM product_rates pr
-        WHERE pr.product_id = p.id AND pr.active = TRUE
-      )
+    WHERE ${conditions.join(' AND ')}
     GROUP BY p.id, p.title
     ORDER BY p.title
-  `);
+    LIMIT $${limitIdx}
+  `, params);
   return r.rows;
 };
 
