@@ -486,4 +486,30 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
   });
 };
 
-module.exports = { getAll, getById, create, simulate, approve, reject, earlySettlement };
+/**
+ * Calcula todas las combinaciones de cuotas/frecuencia activas para un monto dado.
+ * Omite silenciosamente las combinaciones sin tasa configurada para ese rango de monto.
+ * @param {object} params
+ * @param {string} params.type        - Tipo de crédito (LOAN).
+ * @param {number} params.total_amount - Monto solicitado.
+ * @returns {Promise<object[]>} Array con los resultados de todas las simulaciones válidas.
+ */
+const simulateAll = async ({ type, total_amount }) => {
+  const options = await irQueries.findActiveInstallmentOptions();
+  const results = [];
+
+  for (const [payment_frequency, installments_counts] of Object.entries(options)) {
+    for (const installments_count of installments_counts) {
+      try {
+        const result = await simulate({ type, total_amount, installments_count, payment_frequency });
+        results.push(result);
+      } catch {
+        // Sin tasa para esta combinación y monto — se omite
+      }
+    }
+  }
+
+  return results;
+};
+
+module.exports = { getAll, getById, create, simulate, simulateAll, approve, reject, earlySettlement };

@@ -56,6 +56,15 @@ const simulate = async (req, res) => {
   }
 };
 
+const simulateAll = async (req, res) => {
+  try {
+    const { type, total_amount } = req.body;
+    return response.success(res, await service.simulateAll({ type, total_amount }), 'Simulaciones calculadas.');
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
 const approve = async (req, res) => {
   try {
     const credit = await service.approve(req.params.id, req.user.id, req.body.installments_count);
@@ -90,4 +99,4 @@ const earlySettlement = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, getSimulateOptions, simulate, approve, reject, earlySettlement };
+module.exports = { getAll, getById, create, getSimulateOptions, simulate, simulateAll, approve, reject, earlySettlement };

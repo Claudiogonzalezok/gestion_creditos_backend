@@ -295,6 +295,16 @@ const credits = {
       .withMessage('La cantidad de cuotas debe ser un número entre 1 y 120.'),
     isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
   ],
+  simulateAll: [
+    body('type').equals('LOAN').withMessage('simulateAll solo soporta tipo LOAN.'),
+    body('total_amount')
+      .custom(val => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 1 || n > 99999999)
+          throw new Error('El monto total debe ser un número entre 1 y 99999999.');
+        return true;
+      }),
+  ],
   approve: [
     isUUIDParam('id', 'El ID de crédito'),
     body('installments_count').optional()
