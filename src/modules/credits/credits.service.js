@@ -208,6 +208,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
       payment_frequency,
       installments_count,
       total_amount:       amount,
+      rate:               coef,
       installment_amount: getInstallmentAmount(amount, coef, installments_count),
       total_to_return:    getTotalToReturn(amount, coef, installments_count),
       note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
