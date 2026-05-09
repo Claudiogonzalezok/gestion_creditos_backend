@@ -515,10 +515,17 @@ const simulateAll = async ({ type, total_amount, products }) => {
   // ── SALE ─────────────────────────────────────────────────────
   const variantId = products[0].variant_id;
   const varRes = await pool.query(
-    `SELECT pv.product_id FROM product_variants pv WHERE pv.id = $1`,
+    `SELECT pv.product_id, pv.status AS variant_status, p.status AS product_status
+     FROM product_variants pv
+     JOIN products p ON p.id = pv.product_id
+     WHERE pv.id = $1`,
     [variantId]
   );
   if (!varRes.rows[0]) throw { status: 404, message: 'Variante no encontrada.' };
+  if (varRes.rows[0].variant_status !== 'ACTIVE')
+    throw { status: 409, message: 'La variante seleccionada no está disponible.' };
+  if (varRes.rows[0].product_status !== 'ACTIVE')
+    throw { status: 409, message: 'El producto seleccionado no está disponible.' };
   const productId = varRes.rows[0].product_id;
 
   const options = await prQueries.findActiveInstallmentOptionsForProduct(productId);

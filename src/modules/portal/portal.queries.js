@@ -8,51 +8,48 @@ const pool = require("../../config/db");
  * - resumen de créditos (activos, liquidados, total cuotas)
  */
 const getAccountSummary = async (customerId) => {
-  // Totales de cuotas
-  const totals = await pool.query(
-    `SELECT
-       COALESCE(SUM(CASE WHEN i.status IN ('PENDING','OVERDUE','PARTIAL')
-                    THEN i.amount_due - i.amount_paid ELSE 0 END), 0) AS total_owed,
-       COUNT(*) FILTER (WHERE i.status = 'PAID')                       AS paid_count,
-       COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))        AS pending_count,
-       COUNT(*) FILTER (WHERE i.status = 'OVERDUE')                    AS overdue_count,
-       COALESCE(SUM(i.amount_paid) FILTER (WHERE i.status = 'PAID'), 0) AS total_paid_amount,
-       COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0) AS pending_penalty_amount
-     FROM installments i
-     JOIN credits c ON c.id = i.credit_id
-     WHERE c.customer_id = $1
-       AND c.status IN ('ACTIVE','SETTLED')`,
-    [customerId],
-  );
-
-  // Próximos vencimientos (30 días), solo cuotas pendientes o vencidas
-  const upcoming = await pool.query(
-    `SELECT
-       i.id, i.installment_number, i.due_date,
-       i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
-       c.id AS credit_id, c.type AS credit_type,
-       c.installments_count AS credit_installments_count
-     FROM installments i
-     JOIN credits c ON c.id = i.credit_id
-     WHERE c.customer_id = $1
-       AND c.status = 'ACTIVE'
-       AND i.status IN ('PENDING','OVERDUE','PARTIAL')
-       AND i.due_date <= CURRENT_DATE + INTERVAL '30 days'
-     ORDER BY i.due_date ASC`,
-    [customerId],
-  );
-
-  // Resumen de créditos del cliente
-  const creditsSummary = await pool.query(
-    `SELECT
-       COUNT(*) FILTER (WHERE status = 'ACTIVE')  AS active_credits,
-       COUNT(*) FILTER (WHERE status = 'SETTLED') AS settled_credits,
-       COALESCE(SUM(installments_count), 0)::int  AS total_installments_count
-     FROM credits
-     WHERE customer_id = $1
-       AND status IN ('ACTIVE','SETTLED')`,
-    [customerId],
-  );
+  const [totals, upcoming, creditsSummary] = await Promise.all([
+    pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN i.status IN ('PENDING','OVERDUE','PARTIAL')
+                      THEN i.amount_due - i.amount_paid ELSE 0 END), 0) AS total_owed,
+         COUNT(*) FILTER (WHERE i.status = 'PAID')                       AS paid_count,
+         COUNT(*) FILTER (WHERE i.status IN ('PENDING','PARTIAL'))        AS pending_count,
+         COUNT(*) FILTER (WHERE i.status = 'OVERDUE')                    AS overdue_count,
+         COALESCE(SUM(i.amount_paid) FILTER (WHERE i.status = 'PAID'), 0) AS total_paid_amount,
+         COALESCE(SUM(i.penalty_amount) FILTER (WHERE i.status = 'OVERDUE'), 0) AS pending_penalty_amount
+       FROM installments i
+       JOIN credits c ON c.id = i.credit_id
+       WHERE c.customer_id = $1
+         AND c.status IN ('ACTIVE','SETTLED')`,
+      [customerId],
+    ),
+    pool.query(
+      `SELECT
+         i.id, i.installment_number, i.due_date,
+         i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
+         c.id AS credit_id, c.type AS credit_type,
+         c.installments_count AS credit_installments_count
+       FROM installments i
+       JOIN credits c ON c.id = i.credit_id
+       WHERE c.customer_id = $1
+         AND c.status = 'ACTIVE'
+         AND i.status IN ('PENDING','OVERDUE','PARTIAL')
+         AND i.due_date <= CURRENT_DATE + INTERVAL '30 days'
+       ORDER BY i.due_date ASC`,
+      [customerId],
+    ),
+    pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'ACTIVE')  AS active_credits,
+         COUNT(*) FILTER (WHERE status = 'SETTLED') AS settled_credits,
+         COALESCE(SUM(installments_count), 0)::int  AS total_installments_count
+       FROM credits
+       WHERE customer_id = $1
+         AND status IN ('ACTIVE','SETTLED')`,
+      [customerId],
+    ),
+  ]);
 
   return {
     totals: totals.rows[0],
@@ -110,38 +107,39 @@ const findCredits = async (customerId) => {
  * Solo retorna el crédito si pertenece al cliente autenticado.
  */
 const findCreditById = async (creditId, customerId) => {
-  const credit = await pool.query(
-    `SELECT
-       c.id, c.type, c.total_amount::float8, c.installments_count::int,
-       c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
-       c.down_payment::float8, c.down_payment_method,
-       c.prepaid_installments::int, c.interest_rate::float8,
-       (SELECT STRING_AGG(DISTINCT p.title, ' + ')
-        FROM credit_products cp
-        JOIN product_units pu ON pu.id = cp.product_unit_id
-        JOIN product_variants pv ON pv.id = pu.variant_id
-        JOIN products p ON p.id = pv.product_id
-        WHERE cp.credit_id = c.id
-       ) AS credit_name
-     FROM credits c
-     WHERE c.id = $1
-       AND c.customer_id = $2
-       AND c.status IN ('ACTIVE','SETTLED')`,
-    [creditId, customerId],
-  );
-  if (!credit.rows[0]) return null;
+  const [creditRes, installmentsRes] = await Promise.all([
+    pool.query(
+      `SELECT
+         c.id, c.type, c.total_amount::float8, c.installments_count::int,
+         c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
+         c.down_payment::float8, c.down_payment_method,
+         c.prepaid_installments::int, c.interest_rate::float8,
+         (SELECT STRING_AGG(DISTINCT p.title, ' + ')
+          FROM credit_products cp
+          JOIN product_units pu ON pu.id = cp.product_unit_id
+          JOIN product_variants pv ON pv.id = pu.variant_id
+          JOIN products p ON p.id = pv.product_id
+          WHERE cp.credit_id = c.id
+         ) AS credit_name
+       FROM credits c
+       WHERE c.id = $1
+         AND c.customer_id = $2
+         AND c.status IN ('ACTIVE','SETTLED')`,
+      [creditId, customerId],
+    ),
+    pool.query(
+      `SELECT
+         id, installment_number, due_date,
+         amount_due::float8, amount_paid::float8, penalty_amount::float8, status
+       FROM installments
+       WHERE credit_id = $1
+       ORDER BY installment_number ASC`,
+      [creditId],
+    ),
+  ]);
 
-  const installments = await pool.query(
-    `SELECT
-       id, installment_number, due_date,
-       amount_due::float8, amount_paid::float8, penalty_amount::float8, status
-     FROM installments
-     WHERE credit_id = $1
-     ORDER BY installment_number ASC`,
-    [creditId],
-  );
-
-  return { ...credit.rows[0], installments: installments.rows };
+  if (!creditRes.rows[0]) return null;
+  return { ...creditRes.rows[0], installments: installmentsRes.rows };
 };
 
 module.exports = { getAccountSummary, findCredits, findCreditById };
