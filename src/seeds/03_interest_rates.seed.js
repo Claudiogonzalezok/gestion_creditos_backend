@@ -55,6 +55,96 @@ const rates = [
   { min_amount: 500001, max_amount: null,   installments_count: 2, payment_frequency: 'MONTHLY', rate: 0.44 },
   { min_amount: 500001, max_amount: null,   installments_count: 3, payment_frequency: 'MONTHLY', rate: 0.68 },
   { min_amount: 500001, max_amount: null,   installments_count: 4, payment_frequency: 'MONTHLY', rate: 0.88 },
+
+  // ════════════════════════════════════════════════════════════════
+  // QUINCENAL (BIWEEKLY) — 2/4/6 cuotas ≈ 1/2/3 meses
+  // Base: mensual + ~6%. Mayor costo por más frecuencia de cobro.
+  // ════════════════════════════════════════════════════════════════
+
+  // ── Hasta $100.000 ──────────────────────────────────────────
+  { min_amount:      0, max_amount: 100000, installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.34 },
+  { min_amount:      0, max_amount: 100000, installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.58 },
+  { min_amount:      0, max_amount: 100000, installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.95 },
+
+  // ── $100.001 a $150.000 ──────────────────────────────────────
+  { min_amount: 100001, max_amount: 150000, installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.32 },
+  { min_amount: 100001, max_amount: 150000, installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.61 },
+  { min_amount: 100001, max_amount: 150000, installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.91 },
+
+  // ── $150.001 a $200.000 ──────────────────────────────────────
+  { min_amount: 150001, max_amount: 200000, installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.30 },
+  { min_amount: 150001, max_amount: 200000, installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.59 },
+  { min_amount: 150001, max_amount: 200000, installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.86 },
+  { min_amount: 150001, max_amount: 200000, installments_count: 8, payment_frequency: 'BIWEEKLY', rate: 1.02 },
+
+  // ── $200.001 a $300.000 ──────────────────────────────────────
+  { min_amount: 200001, max_amount: 300000, installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.27 },
+  { min_amount: 200001, max_amount: 300000, installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.52 },
+  { min_amount: 200001, max_amount: 300000, installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.86 },
+  { min_amount: 200001, max_amount: 300000, installments_count: 8, payment_frequency: 'BIWEEKLY', rate: 1.02 },
+
+  // ── $300.001 a $400.000 ──────────────────────────────────────
+  { min_amount: 300001, max_amount: 400000, installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.26 },
+  { min_amount: 300001, max_amount: 400000, installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.51 },
+  { min_amount: 300001, max_amount: 400000, installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.86 },
+  { min_amount: 300001, max_amount: 400000, installments_count: 8, payment_frequency: 'BIWEEKLY', rate: 1.01 },
+
+  // ── $400.001 a $500.000 ──────────────────────────────────────
+  { min_amount: 400001, max_amount: 500000, installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.24 },
+  { min_amount: 400001, max_amount: 500000, installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.48 },
+  { min_amount: 400001, max_amount: 500000, installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.73 },
+  { min_amount: 400001, max_amount: 500000, installments_count: 8, payment_frequency: 'BIWEEKLY', rate: 0.94 },
+
+  // ── Más de $500.000 ──────────────────────────────────────────
+  { min_amount: 500001, max_amount: null,   installments_count: 2, payment_frequency: 'BIWEEKLY', rate: 0.24 },
+  { min_amount: 500001, max_amount: null,   installments_count: 4, payment_frequency: 'BIWEEKLY', rate: 0.48 },
+  { min_amount: 500001, max_amount: null,   installments_count: 6, payment_frequency: 'BIWEEKLY', rate: 0.73 },
+  { min_amount: 500001, max_amount: null,   installments_count: 8, payment_frequency: 'BIWEEKLY', rate: 0.94 },
+
+  // ════════════════════════════════════════════════════════════════
+  // SEMANAL (WEEKLY) — 4/8/12 cuotas ≈ 1/2/3 meses
+  // Base: mensual + ~12%. Mayor costo operativo por cobro semanal.
+  // ════════════════════════════════════════════════════════════════
+
+  // ── Hasta $100.000 ──────────────────────────────────────────
+  { min_amount:      0, max_amount: 100000, installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.36 },
+  { min_amount:      0, max_amount: 100000, installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.62 },
+  { min_amount:      0, max_amount: 100000, installments_count: 12, payment_frequency: 'WEEKLY', rate: 1.00 },
+
+  // ── $100.001 a $150.000 ──────────────────────────────────────
+  { min_amount: 100001, max_amount: 150000, installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.34 },
+  { min_amount: 100001, max_amount: 150000, installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.65 },
+  { min_amount: 100001, max_amount: 150000, installments_count: 12, payment_frequency: 'WEEKLY', rate: 0.96 },
+
+  // ── $150.001 a $200.000 ──────────────────────────────────────
+  { min_amount: 150001, max_amount: 200000, installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.32 },
+  { min_amount: 150001, max_amount: 200000, installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.63 },
+  { min_amount: 150001, max_amount: 200000, installments_count: 12, payment_frequency: 'WEEKLY', rate: 0.91 },
+  { min_amount: 150001, max_amount: 200000, installments_count: 16, payment_frequency: 'WEEKLY', rate: 1.08 },
+
+  // ── $200.001 a $300.000 ──────────────────────────────────────
+  { min_amount: 200001, max_amount: 300000, installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.29 },
+  { min_amount: 200001, max_amount: 300000, installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.55 },
+  { min_amount: 200001, max_amount: 300000, installments_count: 12, payment_frequency: 'WEEKLY', rate: 0.91 },
+  { min_amount: 200001, max_amount: 300000, installments_count: 16, payment_frequency: 'WEEKLY', rate: 1.08 },
+
+  // ── $300.001 a $400.000 ──────────────────────────────────────
+  { min_amount: 300001, max_amount: 400000, installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.28 },
+  { min_amount: 300001, max_amount: 400000, installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.54 },
+  { min_amount: 300001, max_amount: 400000, installments_count: 12, payment_frequency: 'WEEKLY', rate: 0.91 },
+  { min_amount: 300001, max_amount: 400000, installments_count: 16, payment_frequency: 'WEEKLY', rate: 1.07 },
+
+  // ── $400.001 a $500.000 ──────────────────────────────────────
+  { min_amount: 400001, max_amount: 500000, installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.26 },
+  { min_amount: 400001, max_amount: 500000, installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.51 },
+  { min_amount: 400001, max_amount: 500000, installments_count: 12, payment_frequency: 'WEEKLY', rate: 0.78 },
+  { min_amount: 400001, max_amount: 500000, installments_count: 16, payment_frequency: 'WEEKLY', rate: 0.99 },
+
+  // ── Más de $500.000 ──────────────────────────────────────────
+  { min_amount: 500001, max_amount: null,   installments_count:  4, payment_frequency: 'WEEKLY', rate: 0.26 },
+  { min_amount: 500001, max_amount: null,   installments_count:  8, payment_frequency: 'WEEKLY', rate: 0.51 },
+  { min_amount: 500001, max_amount: null,   installments_count: 12, payment_frequency: 'WEEKLY', rate: 0.78 },
+  { min_amount: 500001, max_amount: null,   installments_count: 16, payment_frequency: 'WEEKLY', rate: 0.99 },
 ];
 
 const seed = async () => {
