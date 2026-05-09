@@ -67,8 +67,9 @@ const getCredits = async (customerId) => {
     paid_installments:  parseInt(r.paid_installments),
     next_due_date:      r.next_due_date ?? null,
     next_due_amount:    r.next_due_amount != null ? parseFloat(r.next_due_amount) : null,
-    pending_penalty:    parseFloat(r.pending_penalty),
-    has_overdue:        r.has_overdue === true,
+    pending_penalty:         parseFloat(r.pending_penalty),
+    has_overdue:             r.has_overdue === true,
+    overdue_installments:    parseInt(r.overdue_installments),
   }));
 };
 

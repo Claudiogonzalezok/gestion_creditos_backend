@@ -75,6 +75,7 @@ const findCredits = async (customerId) => {
        c.payment_frequency, c.status, c.created_at, c.approved_at, c.settled_at,
        COUNT(i.id)::int                                              AS total_installments,
        COUNT(i.id) FILTER (WHERE i.status = 'PAID')::int            AS paid_installments,
+       COUNT(i.id) FILTER (WHERE i.status = 'OVERDUE')::int         AS overdue_installments,
        -- Próxima cuota: fecha y monto corresponden a la MISMA cuota (la más próxima a vencer).
        -- Se usan subqueries correlacionadas para garantizar que ambos valores sean de la misma fila.
        (SELECT i2.due_date FROM installments i2
