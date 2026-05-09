@@ -1,6 +1,7 @@
 const service  = require('./credits.service');
 const response = require('../../utils/response');
 const irQueries = require('../interestRates/interestRates.queries');
+const prQueries = require('../productRates/productRates.queries');
 
 const getAll = async (req, res) => {
   try {
@@ -58,11 +59,18 @@ const simulate = async (req, res) => {
 
 const simulateAll = async (req, res) => {
   try {
-    const { type, total_amount } = req.body;
-    return response.success(res, await service.simulateAll({ type, total_amount }), 'Simulaciones calculadas.');
+    const { type, total_amount, products } = req.body;
+    return response.success(res, await service.simulateAll({ type, total_amount, products }), 'Simulaciones calculadas.');
   } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
     return response.serverError(res, err);
   }
+};
+
+const getSimulateProducts = async (req, res) => {
+  try {
+    return response.success(res, await prQueries.findProductsWithActiveRates());
+  } catch (err) { return response.serverError(res, err); }
 };
 
 const approve = async (req, res) => {
@@ -99,4 +107,4 @@ const earlySettlement = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, getSimulateOptions, simulate, simulateAll, approve, reject, earlySettlement };
+module.exports = { getAll, getById, create, getSimulateOptions, getSimulateProducts, simulate, simulateAll, approve, reject, earlySettlement };

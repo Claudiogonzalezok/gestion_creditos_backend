@@ -487,28 +487,52 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
 };
 
 /**
- * Calcula todas las combinaciones de cuotas/frecuencia activas para un monto dado.
- * Omite silenciosamente las combinaciones sin tasa configurada para ese rango de monto.
+ * Calcula todas las combinaciones activas de cuotas/frecuencia para un monto o producto dado.
+ * Omite silenciosamente las combinaciones sin tasa configurada.
  * @param {object} params
- * @param {string} params.type        - Tipo de crédito (LOAN).
- * @param {number} params.total_amount - Monto solicitado.
+ * @param {string}   params.type         - 'LOAN' o 'SALE'.
+ * @param {number}   [params.total_amount] - Monto (requerido para LOAN).
+ * @param {object[]} [params.products]    - Variantes con cantidad (requerido para SALE).
  * @returns {Promise<object[]>} Array con los resultados de todas las simulaciones válidas.
  */
-const simulateAll = async ({ type, total_amount }) => {
-  const options = await irQueries.findActiveInstallmentOptions();
-  const results = [];
+const simulateAll = async ({ type, total_amount, products }) => {
+  if (type === 'LOAN') {
+    const options = await irQueries.findActiveInstallmentOptions();
+    const results = [];
+    for (const [payment_frequency, installments_counts] of Object.entries(options)) {
+      for (const installments_count of installments_counts) {
+        try {
+          const result = await simulate({ type, total_amount, installments_count, payment_frequency });
+          results.push(result);
+        } catch {
+          // Sin tasa para esta combinación y monto — se omite
+        }
+      }
+    }
+    return results;
+  }
 
+  // ── SALE ─────────────────────────────────────────────────────
+  const variantId = products[0].variant_id;
+  const varRes = await pool.query(
+    `SELECT pv.product_id FROM product_variants pv WHERE pv.id = $1`,
+    [variantId]
+  );
+  if (!varRes.rows[0]) throw { status: 404, message: 'Variante no encontrada.' };
+  const productId = varRes.rows[0].product_id;
+
+  const options = await prQueries.findActiveInstallmentOptionsForProduct(productId);
+  const results = [];
   for (const [payment_frequency, installments_counts] of Object.entries(options)) {
     for (const installments_count of installments_counts) {
       try {
-        const result = await simulate({ type, total_amount, installments_count, payment_frequency });
+        const result = await simulate({ type, products, installments_count, payment_frequency });
         results.push(result);
       } catch {
-        // Sin tasa para esta combinación y monto — se omite
+        // Sin tasa para esta combinación — se omite
       }
     }
   }
-
   return results;
 };
 
