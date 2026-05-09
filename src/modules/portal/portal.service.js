@@ -40,6 +40,7 @@ const getAccountSummary = async (customerId) => {
       credit_id:                  u.credit_id,
       credit_type:                u.credit_type,
       credit_installments_count:  parseInt(u.credit_installments_count),
+      credit_name:                u.credit_name ?? null,
     })),
   };
 };

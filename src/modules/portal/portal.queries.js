@@ -29,7 +29,14 @@ const getAccountSummary = async (customerId) => {
          i.id, i.installment_number, i.due_date,
          i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
          c.id AS credit_id, c.type AS credit_type,
-         c.installments_count AS credit_installments_count
+         c.installments_count AS credit_installments_count,
+         (SELECT STRING_AGG(DISTINCT p.title, ' + ')
+          FROM credit_products cp
+          JOIN product_units pu ON pu.id = cp.product_unit_id
+          JOIN product_variants pv ON pv.id = pu.variant_id
+          JOIN products p ON p.id = pv.product_id
+          WHERE cp.credit_id = c.id
+         ) AS credit_name
        FROM installments i
        JOIN credits c ON c.id = i.credit_id
        WHERE c.customer_id = $1
