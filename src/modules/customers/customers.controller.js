@@ -4,8 +4,8 @@ const response = require('../../utils/response');
 // GET /api/customers
 const getAll = async (req, res) => {
   try {
-    const { status, search, collector_id } = req.query;
-    const customers = await service.getAll({ status, search, collector_id }, req.user);
+    const { status, search, collector_id, include_summary } = req.query;
+    const customers = await service.getAll({ status, search, collector_id, include_summary }, req.user);
     return response.success(res, customers);
   } catch (err) {
     return response.serverError(res, err);
@@ -17,6 +17,17 @@ const getById = async (req, res) => {
   try {
     const customer = await service.getById(req.params.id, req.user);
     return response.success(res, customer);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+// GET /api/customers/:id/wizard-summary
+const getWizardSummary = async (req, res) => {
+  try {
+    const summary = await service.getWizardSummary(req.params.id, req.user);
+    return response.success(res, summary);
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     return response.serverError(res, err);
@@ -122,6 +133,6 @@ const unlockPortal = async (req, res) => {
 };
 
 module.exports = {
-  getAll, getById, create, update, deactivate, activate,
+  getAll, getById, getWizardSummary, create, update, deactivate, activate,
   enablePortal, disablePortal, resetPortalPassword, unlockPortal,
 };
