@@ -208,6 +208,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
       payment_frequency,
       installments_count,
       total_amount:       amount,
+      rate:               coef,
       installment_amount: getInstallmentAmount(amount, coef, installments_count),
       total_to_return:    getTotalToReturn(amount, coef, installments_count),
       note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
@@ -486,4 +487,61 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
   });
 };
 
-module.exports = { getAll, getById, create, simulate, approve, reject, earlySettlement };
+/**
+ * Calcula todas las combinaciones activas de cuotas/frecuencia para un monto o producto dado.
+ * Omite silenciosamente las combinaciones sin tasa configurada.
+ * @param {object} params
+ * @param {string}   params.type         - 'LOAN' o 'SALE'.
+ * @param {number}   [params.total_amount] - Monto (requerido para LOAN).
+ * @param {object[]} [params.products]    - Variantes con cantidad (requerido para SALE).
+ * @returns {Promise<object[]>} Array con los resultados de todas las simulaciones válidas.
+ */
+const simulateAll = async ({ type, total_amount, products }) => {
+  if (type === 'LOAN') {
+    const options = await irQueries.findActiveInstallmentOptions();
+    const results = [];
+    for (const [payment_frequency, installments_counts] of Object.entries(options)) {
+      for (const installments_count of installments_counts) {
+        try {
+          const result = await simulate({ type, total_amount, installments_count, payment_frequency });
+          results.push(result);
+        } catch {
+          // Sin tasa para esta combinación y monto — se omite
+        }
+      }
+    }
+    return results;
+  }
+
+  // ── SALE ─────────────────────────────────────────────────────
+  const variantId = products[0].variant_id;
+  const varRes = await pool.query(
+    `SELECT pv.product_id, pv.status AS variant_status, p.status AS product_status
+     FROM product_variants pv
+     JOIN products p ON p.id = pv.product_id
+     WHERE pv.id = $1`,
+    [variantId]
+  );
+  if (!varRes.rows[0]) throw { status: 404, message: 'Variante no encontrada.' };
+  if (varRes.rows[0].variant_status !== 'ACTIVE')
+    throw { status: 409, message: 'La variante seleccionada no está disponible.' };
+  if (varRes.rows[0].product_status !== 'ACTIVE')
+    throw { status: 409, message: 'El producto seleccionado no está disponible.' };
+  const productId = varRes.rows[0].product_id;
+
+  const options = await prQueries.findActiveInstallmentOptionsForProduct(productId);
+  const results = [];
+  for (const [payment_frequency, installments_counts] of Object.entries(options)) {
+    for (const installments_count of installments_counts) {
+      try {
+        const result = await simulate({ type, products, installments_count, payment_frequency });
+        results.push(result);
+      } catch {
+        // Sin tasa para esta combinación — se omite
+      }
+    }
+  }
+  return results;
+};
+
+module.exports = { getAll, getById, create, simulate, simulateAll, approve, reject, earlySettlement };

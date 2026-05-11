@@ -99,4 +99,74 @@ const update = async (id, fields) => {
   return findById(id);
 };
 
-module.exports = { findAll, findById, findExact, findActiveRate, create, update };
+/**
+ * Devuelve las combinaciones activas de (frecuencia → [cuotas]) para un producto dado.
+ * Mismo formato que findActiveInstallmentOptions de interestRates.
+ */
+const findActiveInstallmentOptionsForProduct = async (productId) => {
+  const r = await pool.query(
+    `SELECT DISTINCT payment_frequency, installments_count::int
+     FROM product_rates
+     WHERE product_id = $1 AND active = TRUE
+     ORDER BY payment_frequency, installments_count ASC`,
+    [productId]
+  );
+  const result = {};
+  for (const row of r.rows) {
+    if (!result[row.payment_frequency]) result[row.payment_frequency] = [];
+    result[row.payment_frequency].push(row.installments_count);
+  }
+  return result;
+};
+
+/**
+ * Devuelve productos activos con al menos una tasa de venta configurada,
+ * junto con sus variantes activas. Soporta búsqueda por nombre y límite de resultados.
+ * @param {object}  opts
+ * @param {string}  [opts.search=''] - Texto a buscar en el título (ILIKE).
+ * @param {number}  [opts.limit=10]  - Máximo de productos a devolver (tope 50).
+ */
+const findProductsWithActiveRates = async ({ search = '', limit = 10 } = {}) => {
+  const params = [];
+  const conditions = [
+    `p.status = 'ACTIVE'`,
+    `EXISTS (SELECT 1 FROM product_rates pr WHERE pr.product_id = p.id AND pr.active = TRUE)`,
+  ];
+
+  if (search) {
+    params.push(`%${search}%`);
+    conditions.push(`p.title ILIKE $${params.length}`);
+  }
+
+  params.push(Math.min(Math.max(parseInt(limit) || 10, 1), 50));
+  const limitIdx = params.length;
+
+  const r = await pool.query(`
+    SELECT p.id, p.title,
+      COALESCE(
+        json_agg(
+          DISTINCT jsonb_build_object(
+            'id',            pv.id,
+            'color',         pv.color,
+            'size',          pv.size,
+            'capacity',      pv.capacity,
+            'current_price', pv.current_price::float8
+          )
+        ) FILTER (WHERE pv.status = 'ACTIVE'),
+        '[]'::json
+      ) AS variants
+    FROM products p
+    JOIN product_variants pv ON pv.product_id = p.id
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY p.id, p.title
+    ORDER BY p.title
+    LIMIT $${limitIdx}
+  `, params);
+  return r.rows;
+};
+
+module.exports = {
+  findAll, findById, findExact, findActiveRate,
+  findActiveInstallmentOptionsForProduct, findProductsWithActiveRates,
+  create, update,
+};

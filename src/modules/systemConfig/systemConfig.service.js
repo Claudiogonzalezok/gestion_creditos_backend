@@ -8,7 +8,7 @@ const VALID_RANGES = {
   credit_expiry_days:        { min: 1,    max: 365      },
   min_credit_amount:         { min: 1,    max: 999999   },
   max_credit_amount:         { min: 1,    max: 99999999 },
-  jwt_expiry_internal_hs:    { min: 1,    max: 72       },
+  jwt_expiry_internal_hs:    { min: 0.08, max: 72       },
   jwt_expiry_portal_min:     { min: 5,    max: 1440     },
   login_max_attempts:        { min: 1,    max: 10       },
   commission_week_close_day: { min: 1,    max: 7        },

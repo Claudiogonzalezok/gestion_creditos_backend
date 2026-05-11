@@ -15,7 +15,7 @@ const _verifyInternalSession = async (req, res, next, allowTempPassword) => {
     payload = verifyInternalToken(token);
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
-      return response.unauthorized(res, 'Tu sesión expiró. Ingresá nuevamente.');
+      return response.unauthorized(res, 'TOKEN_EXPIRED');
     }
     return response.unauthorized(res);
   }
@@ -82,7 +82,7 @@ const authenticatePortal = async (req, res, next) => {
     payload = verifyPortalToken(token);
   } catch (err) {
     if (err.name === 'TokenExpiredError') {
-      return response.unauthorized(res, 'Tu sesión expiró. Ingresá nuevamente.');
+      return response.unauthorized(res, 'TOKEN_EXPIRED');
     }
     return response.unauthorized(res);
   }

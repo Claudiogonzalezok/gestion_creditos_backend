@@ -1,16 +1,16 @@
-// Elimina tokens JWT expirados de la blacklist para mantener el rendimiento
-// de la verificación de sesión. Se ejecuta todos los días a las 04:00 hs.
+// Elimina tokens expirados de token_blacklist y refresh_tokens.
+// Se ejecuta todos los días a las 04:00 hs.
 
 const cron = require('node-cron');
-const { cleanExpiredTokens } = require('../modules/auth/auth.queries');
+const { cleanExpiredTokens, cleanExpiredRefreshTokens } = require('../modules/auth/auth.queries');
 
 const runCleanup = async () => {
   try {
-    const deleted = await cleanExpiredTokens();
-    if (deleted > 0)
-      console.log(`[JOB tokenCleanup] ${deleted} token(s) expirado(s) eliminado(s).`);
-    else
-      console.log('[JOB tokenCleanup] Sin tokens expirados para eliminar.');
+    const [deletedBl, deletedRt] = await Promise.all([
+      cleanExpiredTokens(),
+      cleanExpiredRefreshTokens(),
+    ]);
+    console.log(`[JOB tokenCleanup] Blacklist: ${deletedBl} eliminado(s). RefreshTokens: ${deletedRt} eliminado(s).`);
   } catch (err) {
     console.error('[JOB tokenCleanup] Error:', err.message);
   }
