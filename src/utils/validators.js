@@ -276,6 +276,8 @@ const credits = {
       .isUUID().withMessage('Cada variant_id debe ser un UUID válido.'),
     body('products.*.quantity').optional()
       .isInt({ min: 1, max: 9999 }).withMessage('La cantidad debe ser entre 1 y 9999.'),
+    body('products.*.installments_count').optional()
+      .isInt({ min: 1, max: 120 }).withMessage('La cantidad de cuotas por producto debe ser entre 1 y 120.'),
     body('down_payment').optional({ nullable: true })
       .custom(val => {
         if (val == null) return true;
@@ -283,6 +285,7 @@ const credits = {
         if (isNaN(n) || n < 0) throw new Error('El enganche debe ser un número mayor o igual a 0.');
         return true;
       }),
+    isDate('first_payment_date', 'La fecha del primer pago', false),
     body().custom((body) => {
       if (body.type === 'LOAN' && !body.total_amount)
         throw new Error('El monto total es obligatorio para préstamos.');

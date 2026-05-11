@@ -1,6 +1,27 @@
 const { localDate } = require('./date');
 
 /**
+ * Aplica el avance de período para una frecuencia de pago sobre una fecha base.
+ * @param {Date} baseDate - Fecha desde la cual se aplica el desplazamiento.
+ * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
+ * @param {number} periods - Cantidad de períodos a mover.
+ * @returns {Date} Nueva fecha desplazada.
+ */
+const addFrequencyPeriods = (baseDate, frequency, periods) => {
+  const due = new Date(baseDate);
+  if (frequency === 'WEEKLY') {
+    due.setDate(baseDate.getDate() + 7 * periods);
+    return due;
+  }
+  if (frequency === 'BIWEEKLY') {
+    due.setDate(baseDate.getDate() + 14 * periods);
+    return due;
+  }
+  due.setMonth(baseDate.getMonth() + periods);
+  return due;
+};
+
+/**
  * Calcula el monto por cuota redondeado hacia arriba al millar más cercano.
  * Todas las cuotas son iguales entre sí.
  *
@@ -45,13 +66,30 @@ const getDueDates = (startDate, installmentsCount, frequency) => {
   base.setHours(12, 0, 0, 0);
 
   for (let i = 1; i <= installmentsCount; i++) {
-    const due = new Date(base);
-    switch (frequency) {
-      case 'WEEKLY':   due.setDate(base.getDate() + 7 * i);    break;
-      case 'BIWEEKLY': due.setDate(base.getDate() + 14 * i);   break;
-      case 'MONTHLY':  due.setMonth(base.getMonth() + i);       break;
-    }
-    dates.push(due);
+    dates.push(addFrequencyPeriods(base, frequency, i));
+  }
+  return dates;
+};
+
+/**
+ * Genera vencimientos tomando una primera fecha explícita como ancla.
+ * Si no se informa, reutiliza la lógica histórica basada en la fecha actual.
+ * @param {string|Date|null} firstPaymentDate - Primera fecha de pago elegida.
+ * @param {number} installmentsCount - Cantidad total de cuotas.
+ * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
+ * @returns {Date[]} Fechas de vencimiento calculadas.
+ */
+const getDueDatesFromFirstPayment = (firstPaymentDate, installmentsCount, frequency) => {
+  if (!firstPaymentDate) {
+    return getDueDates(new Date(), installmentsCount, frequency);
+  }
+
+  const dates = [];
+  const base = new Date(firstPaymentDate);
+  base.setHours(12, 0, 0, 0);
+
+  for (let i = 0; i < installmentsCount; i++) {
+    dates.push(addFrequencyPeriods(base, frequency, i));
   }
   return dates;
 };
@@ -91,7 +129,9 @@ module.exports = {
   getInstallmentAmount,
   getTotalWithInterest,
   getTotalToReturn,
+  addFrequencyPeriods,
   getDueDates,
+  getDueDatesFromFirstPayment,
   getWeekBounds,
   getProductInstallmentContribution,
 };

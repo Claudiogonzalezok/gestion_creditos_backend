@@ -47,8 +47,28 @@ const getSimulateOptions = async (req, res) => {
 
 const simulate = async (req, res) => {
   try {
-    const { type, total_amount, installments_count, payment_frequency, products, down_payment } = req.body;
-    return response.success(res, await service.simulate({ type, total_amount, installments_count, payment_frequency, products, down_payment }), 'Simulación calculada.');
+    const {
+      type,
+      total_amount,
+      installments_count,
+      payment_frequency,
+      products,
+      down_payment,
+      first_payment_date,
+    } = req.body;
+    return response.success(
+      res,
+      await service.simulate({
+        type,
+        total_amount,
+        installments_count,
+        payment_frequency,
+        products,
+        down_payment,
+        first_payment_date,
+      }),
+      'Simulación calculada.',
+    );
   } catch (err) {
     if (err.status === 400) return response.badRequest(res, err.message);
     if (err.status === 404) return response.notFound(res, err.message);
