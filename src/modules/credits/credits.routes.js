@@ -46,7 +46,7 @@ router.patch('/:id/early-settlement',
 
 // Historial de cobros aprobados del crédito
 router.get('/:creditId/payments',
-  authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'),
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   [require('express-validator').param('creditId').isUUID().withMessage('creditId debe ser un UUID válido.')],
   validate,
   paymentsController.getByCredit

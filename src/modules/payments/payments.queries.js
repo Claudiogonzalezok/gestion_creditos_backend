@@ -5,6 +5,7 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
     SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.created_at,
            p.approved_at, p.approved_by,
+           p.is_reversal, p.admin_direct, p.parent_payment_id,
            i.installment_number, i.amount_due::float8, i.due_date,
            c.id AS credit_id, c.type AS credit_type,
            cu.full_name AS customer_name, cu.dni AS customer_dni,
@@ -323,7 +324,7 @@ const createReversal = async (client, { installmentId, adminId, amountReceived, 
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, payment_method, transfer_reference,
         status, approved_by, approved_at, notes, is_reversal, reversal_reason, reversed_by_payment_id)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), $6, TRUE, $6, $7)
+     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), NULL, TRUE, $6, $7)
      RETURNING id, installment_id, amount_received::float8, payment_method, status`,
     [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, reason, originalPaymentId]
   );
@@ -391,6 +392,22 @@ const restoreInstallmentFromReversal = async (client, installmentId, amountToRes
   );
 };
 
+/**
+ * Obtiene el estado del crédito al que pertenece una cuota (sin lock, para validaciones rápidas).
+ * @param {string} installmentId
+ * @returns {Promise<{credit_id: string, status: string}|null>}
+ */
+const getCreditStatusByInstallment = async (installmentId) => {
+  const r = await pool.query(
+    `SELECT c.id AS credit_id, c.status
+     FROM installments i
+     JOIN credits c ON c.id = i.credit_id
+     WHERE i.id = $1`,
+    [installmentId]
+  );
+  return r.rows[0] || null;
+};
+
 module.exports = {
   findAll, findById, getPendingCommittedAmount, create,
   lockAndGetPayment, lockAndGetInstallment, lockAndGetCredit,
@@ -398,4 +415,5 @@ module.exports = {
   getTotalPendingBalance, getPendingInstallmentsFrom, shiftInstallmentDates,
   markInstallmentAsPrepaid, createApproved, createReversal,
   findChildPayments, findPaymentsByCredit, restoreInstallmentFromReversal,
+  getCreditStatusByInstallment,
 };

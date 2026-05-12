@@ -181,6 +181,10 @@ const create = async (data, requestingUser) => {
   const inst = instCheck.rows[0];
   if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
 
+  const creditInfo = await queries.getCreditStatusByInstallment(data.installment_id);
+  if (creditInfo && creditInfo.status !== 'ACTIVE')
+    throw { status: 409, message: `No se pueden registrar cobros en un crédito en estado ${creditInfo.status}.` };
+
   const amountDue     = inst.amount_due;
   const amountPaid    = inst.amount_paid;
   const pendingAmount = await queries.getPendingCommittedAmount(data.installment_id);
@@ -317,6 +321,13 @@ const adminDirect = async (data, adminId) => {
   const inst = instCheck.rows[0];
   if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
 
+  // Validar que el crédito esté ACTIVE — no se puede cobrar sobre créditos liquidados o rechazados
+  const creditInfo = await queries.getCreditStatusByInstallment(data.installment_id);
+  if (creditInfo && creditInfo.status === 'SETTLED')
+    throw { status: 409, message: 'Este crédito ya fue liquidado totalmente. No es posible registrar cobros.' };
+  if (creditInfo && !['ACTIVE'].includes(creditInfo.status))
+    throw { status: 409, message: `No se pueden registrar cobros en un crédito en estado ${creditInfo.status}.` };
+
   const amountReceived = parseFloat(data.amount_received);
   const totalPending   = await queries.getTotalPendingBalance(inst.credit_id);
   if (amountReceived > totalPending)
@@ -399,6 +410,11 @@ const reverse = async (id, reason, adminId) => {
       throw { status: 409, message: 'Solo se pueden revertir cobros aprobados.' };
     if (payment.is_reversal)
       throw { status: 409, message: 'No se puede revertir un cobro que ya es una reversión.' };
+
+    // Los sub-pagos generados por distribución (parent_payment_id != null) no se revierten
+    // de forma independiente — solo se revierten como parte del cobro padre (total reversal).
+    if (payment.parent_payment_id)
+      throw { status: 409, message: 'Este cobro es un sub-pago por distribución. Para revertirlo, revierta el cobro principal.' };
 
     // Validación 2: verificar con subquery si ya existe un payment que referencia este como original.
     // payment.reversed_by_payment_id es el campo en el payment de REVERSIÓN → no sirve aquí.
