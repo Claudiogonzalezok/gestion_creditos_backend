@@ -38,7 +38,10 @@ const _validateCajaOpen = async (date) => {
  * @param {string} adminId         - ID del usuario que aprueba (para cuotas adelantadas).
  * @returns {Promise<void>}
  */
-const _applyPaymentToInstallments = async (client, payment, amountToApply, adminId) => {
+/**
+ * @param {string|null} paymentId - ID del cobro principal (para vincular sub-pagos vía parent_payment_id).
+ */
+const _applyPaymentToInstallments = async (client, payment, amountToApply, adminId, paymentId = null) => {
   const amountDue   = parseFloat(payment.amount_due);
   const amountPaid  = parseFloat(payment.amount_paid);
 
@@ -76,7 +79,8 @@ const _applyPaymentToInstallments = async (client, payment, amountToApply, admin
           adminId,
           'Pago adelantado',
           payment.payment_method,
-          payment.transfer_reference
+          payment.transfer_reference,
+          paymentId
         );
         remaining = round(remaining - instBalance);
         paidCount++;
@@ -244,7 +248,7 @@ const approve = async (id, adminId) => {
     await queries.approve(client, id, adminId);
 
     // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
-    await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId);
+    await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId, id);
 
     // 3. Registrar movimiento contable en caja
     await _registerCashMovement(client, {
@@ -277,9 +281,169 @@ const reject = async (id, rejectionReason, adminId) => {
   await queries.reject(id, rejectionReason, adminId);
 };
 
+/**
+ * Devuelve el historial de pagos aprobados de un crédito.
+ * @param {string} creditId
+ */
+const getByCredit = async (creditId) => {
+  return queries.findPaymentsByCredit(creditId);
+};
+
+/**
+ * Registra y aprueba un cobro directo sin pre-carga (flujo admin).
+ * Valida caja abierta, crea el payment como APPROVED y distribuye el monto.
+ *
+ * @param {object} data
+ * @param {string} data.installment_id
+ * @param {number} data.amount_received
+ * @param {string} data.payment_method
+ * @param {string} [data.transfer_reference]
+ * @param {string} [data.notes]
+ * @param {string} adminId
+ * @returns {Promise<object>} Payment creado y aprobado.
+ */
+const adminDirect = async (data, adminId) => {
+  const today = localDate();
+  await _validateCajaOpen(today);
+
+  // Validar cuota
+  const instCheck = await pool.query(
+    `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id,
+            installment_number
+     FROM installments WHERE id = $1`,
+    [data.installment_id]
+  );
+  if (!instCheck.rows.length) throw { status: 404, message: 'Cuota no encontrada.' };
+  const inst = instCheck.rows[0];
+  if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
+
+  const amountReceived = parseFloat(data.amount_received);
+  const totalPending   = await queries.getTotalPendingBalance(inst.credit_id);
+  if (amountReceived > totalPending)
+    throw {
+      status: 422,
+      message: `El monto ingresado ($${amountReceived.toLocaleString('es-AR')}) supera el saldo total pendiente del crédito ($${totalPending.toLocaleString('es-AR')}).`,
+    };
+
+  let newPaymentId;
+  await withTransaction(async (client) => {
+    // Lock sobre la cuota principal
+    const lockedInst = await queries.lockAndGetInstallment(client, data.installment_id);
+    if (!lockedInst) throw { status: 404, message: 'Cuota no encontrada.' };
+    if (lockedInst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
+
+    const created = await queries.createApproved(client, {
+      installmentId:     data.installment_id,
+      adminId,
+      amountReceived,
+      paymentMethod:     data.payment_method,
+      transferReference: data.transfer_reference,
+      notes:             data.notes,
+    });
+    newPaymentId = created.id;
+
+    // Construir objeto payment compatible con _applyPaymentToInstallments
+    const paymentCtx = {
+      installment_id:     lockedInst.id,
+      installment_number: lockedInst.installment_number,
+      amount_due:         lockedInst.amount_due,
+      amount_paid:        lockedInst.amount_paid,
+      credit_id:          lockedInst.credit_id,
+      payment_frequency:  lockedInst.payment_frequency,
+      due_date:           lockedInst.due_date,
+      payment_method:     data.payment_method,
+      transfer_reference: data.transfer_reference || null,
+    };
+
+    await _applyPaymentToInstallments(client, paymentCtx, amountReceived, adminId, newPaymentId);
+
+    await _registerCashMovement(client, {
+      paymentId:     newPaymentId,
+      amount:        amountReceived,
+      paymentMethod: data.payment_method,
+      movementType:  'PAYMENT',
+      registerDate:  today,
+      userId:        adminId,
+    });
+
+    await _checkAndSettleCredit(client, lockedInst.credit_id);
+  });
+
+  return queries.findById(newPaymentId);
+};
+
+/**
+ * Revierte totalmente un cobro aprobado y todos sus sub-pagos derivados.
+ * Genera un payment compensatorio (is_reversal=TRUE) por cada cuota afectada.
+ * No elimina registros — patrón de transacción compensatoria.
+ *
+ * Reglas:
+ *  · Solo pagos APPROVED no revertidos previamente.
+ *  · Solo reversiones del día (caja abierta).
+ *  · Un cobro solo puede revertirse una vez (unique index en reversed_by_payment_id).
+ *
+ * @param {string} id     - ID del payment a revertir.
+ * @param {string} reason - Motivo obligatorio de la reversión.
+ * @param {string} adminId
+ */
+const reverse = async (id, reason, adminId) => {
+  const today = localDate();
+  await _validateCajaOpen(today);
+
+  await withTransaction(async (client) => {
+    const payment = await queries.lockAndGetPayment(client, id);
+    if (!payment)                           throw { status: 404, message: 'Cobro no encontrado.' };
+    if (payment.status !== 'APPROVED')      throw { status: 409, message: 'Solo se pueden revertir cobros aprobados.' };
+    if (payment.is_reversal)                throw { status: 409, message: 'No se puede revertir un cobro que ya es una reversión.' };
+    if (payment.reversed_by_payment_id)     throw { status: 409, message: 'Este cobro ya fue revertido anteriormente.' };
+
+    // Recolectar todos los pagos a revertir: el principal + sus sub-pagos
+    const children = await queries.findChildPayments(client, id);
+    const toReverse = [payment, ...children];
+
+    for (const p of toReverse) {
+      // Lock sobre la cuota afectada
+      await queries.lockAndGetInstallment(client, p.installment_id);
+
+      const reversal = await queries.createReversal(client, {
+        installmentId:     p.installment_id,
+        adminId,
+        amountReceived:    p.amount_received,
+        paymentMethod:     p.payment_method,
+        transferReference: p.transfer_reference,
+        reason,
+        originalPaymentId: p.id,
+      });
+
+      await queries.restoreInstallmentFromReversal(client, p.installment_id, p.amount_received);
+
+      await _registerCashMovement(client, {
+        paymentId:     reversal.id,
+        amount:        p.amount_received,
+        paymentMethod: p.payment_method,
+        movementType:  'REVERSAL',
+        registerDate:  today,
+        userId:        adminId,
+      });
+    }
+
+    // Si el crédito estaba SETTLED, reabrirlo
+    const credit = await queries.lockAndGetCredit(client, payment.credit_id);
+    if (credit && credit.status === 'SETTLED') {
+      await client.query(
+        `UPDATE credits SET status = 'ACTIVE', settled_at = NULL, settlement_type = NULL, updated_at = NOW() WHERE id = $1`,
+        [payment.credit_id]
+      );
+    }
+  });
+
+  return queries.findById(id);
+};
+
 module.exports = {
   getAll, getById, create, approve, reject,
-  // Núcleo exportado para reutilización en nuevos flujos (admin-direct, bulk, reverse)
+  getByCredit, adminDirect, reverse,
+  // Núcleo exportado para reutilización en nuevos flujos
   _validateCajaOpen,
   _applyPaymentToInstallments,
   _checkAndSettleCredit,

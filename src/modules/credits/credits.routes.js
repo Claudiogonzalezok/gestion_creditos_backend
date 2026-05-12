@@ -1,7 +1,8 @@
-const router        = require('express').Router();
-const controller    = require('./credits.controller');
-const { query }     = require('express-validator');
-const v             = require('../../utils/validators');
+const router              = require('express').Router();
+const controller          = require('./credits.controller');
+const paymentsController  = require('../payments/payments.controller');
+const { query }           = require('express-validator');
+const v                   = require('../../utils/validators');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
@@ -41,6 +42,14 @@ router.patch('/:id/reject',
 );
 router.patch('/:id/early-settlement',
   authorize('ADMIN'), v.credits.earlySettlement, validate, controller.earlySettlement
+);
+
+// Historial de cobros aprobados del crédito
+router.get('/:creditId/payments',
+  authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'),
+  [require('express-validator').param('creditId').isUUID().withMessage('creditId debe ser un UUID válido.')],
+  validate,
+  paymentsController.getByCredit
 );
 
 module.exports = router;

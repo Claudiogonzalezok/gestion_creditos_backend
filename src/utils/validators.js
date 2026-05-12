@@ -359,6 +359,21 @@ const payments = {
       .notEmpty().withMessage('El motivo de rechazo es obligatorio.')
       .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
   ],
+  adminDirect: [
+    isUUID('installment_id', 'La cuota'),
+    isPositiveNumber('amount_received', 'El monto recibido', { min: 0.01, max: 99999999 }),
+    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
+    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia de transferencia no puede superar los 100 caracteres.'),
+    body('notes').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
+  ],
+  reverse: [
+    isUUIDParam('id', 'El ID de cobro'),
+    body('reason').trim()
+      .notEmpty().withMessage('El motivo de reversión es obligatorio.')
+      .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
+  ],
   id: [ isUUIDParam('id', 'El ID de cobro') ],
 };
 
