@@ -39,4 +39,14 @@ router.patch('/:id/reject',
   authorize('ADMIN'), v.payments.reject, validate, controller.reject
 );
 
+// Cobro directo (sin pre-carga) — solo Admin
+router.post('/admin-direct',
+  authorize('ADMIN'), v.payments.adminDirect, validate, controller.adminDirect
+);
+
+// Revertir cobro aprobado — solo Admin
+router.post('/:id/reverse',
+  authorize('ADMIN'), v.payments.reverse, validate, controller.reverse
+);
+
 module.exports = router;

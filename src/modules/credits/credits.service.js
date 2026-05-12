@@ -9,9 +9,15 @@ const {
   getInstallmentAmount,
   getTotalToReturn,
   getDueDates,
+  getDueDatesFromFirstPayment,
+  adjustDueDatesWithBusinessDayRule,
   getWeekBounds,
   getProductInstallmentContribution,
 } = require('../../utils/creditCalculator');
+const {
+  moveToNextBusinessDay,
+  getActiveHolidayKeysInRange,
+} = require('../../utils/businessDay');
 
 /**
  * Calcula el capital realmente financiado de una venta a crédito.
@@ -35,6 +41,126 @@ const decorateSaleCredit = (credit) => {
   if (!credit || credit.type !== 'SALE') return credit;
   credit.financed_amount = getFinancedAmount(credit.total_amount, credit.down_payment);
   return credit;
+};
+
+/**
+ * Convierte una fecha a formato YYYY-MM-DD para exponerla por API.
+ * @param {Date} date - Fecha a serializar.
+ * @returns {string} Fecha local simplificada.
+ */
+const toApiDate = (date) => date.toISOString().slice(0, 10);
+
+/**
+ * Ajusta fechas de vencimiento al próximo día hábil según feriados activos y fines de semana.
+ * @param {Date[]} baseDueDates - Fechas base calculadas por frecuencia.
+ * @returns {Promise<Date[]>} Fechas ajustadas a calendario hábil.
+ */
+const applyBusinessDayRuleToDueDates = async (baseDueDates) => {
+  if (!baseDueDates.length) return [];
+  const holidayKeys = await getActiveHolidayKeysInRange(
+    baseDueDates[0],
+    new Date(baseDueDates[baseDueDates.length - 1].getTime() + (10 * 24 * 60 * 60 * 1000)),
+  );
+  return adjustDueDatesWithBusinessDayRule(
+    baseDueDates,
+    (date) => moveToNextBusinessDay(date, holidayKeys),
+  );
+};
+
+/**
+ * Arma un cronograma orientativo con capital, interés y saldo remanente.
+ * @param {object} params - Parámetros de cálculo del plan.
+ * @returns {Array<object>} Filas del cronograma para la UI.
+ */
+const buildSimulationSchedule = async ({
+  financedAmount,
+  installmentAmount,
+  installmentsCount,
+  paymentFrequency,
+  firstPaymentDate,
+  totalToReturn,
+}) => {
+  const count = parseInt(installmentsCount || 0);
+  if (count <= 0 || installmentAmount <= 0) return [];
+
+  const baseDueDates = getDueDatesFromFirstPayment(
+    firstPaymentDate,
+    count,
+    paymentFrequency,
+  );
+  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+  const rawCapital = financedAmount / count;
+  let remaining = totalToReturn;
+
+  return dueDates.map((dueDate, index) => {
+    const amount = installmentAmount;
+    const capital = Math.round(rawCapital * 100) / 100;
+    const interest = Math.max(0, Math.round((amount - capital) * 100) / 100);
+    remaining = Math.max(0, Math.round((remaining - amount) * 100) / 100);
+
+    return {
+      installment_number: index + 1,
+      due_date: toApiDate(dueDate),
+      amount,
+      capital,
+      interest,
+      remaining_estimated: remaining,
+    };
+  });
+};
+
+/**
+ * Arma un cronograma consolidado de venta respetando la duración propia de cada línea.
+ * @param {object} params - Parámetros del plan de venta.
+ * @returns {Array<object>} Filas agregadas para la UI.
+ */
+const buildSaleSimulationSchedule = async ({
+  groups,
+  paymentFrequency,
+  firstPaymentDate,
+  installmentsCount,
+}) => {
+  const count = parseInt(installmentsCount || 0);
+  if (count <= 0) return [];
+
+  const baseDueDates = getDueDatesFromFirstPayment(
+    firstPaymentDate,
+    count,
+    paymentFrequency,
+  );
+  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+
+  const rows = dueDates.map((dueDate, index) => {
+    let amount = 0;
+    let capital = 0;
+    let interest = 0;
+
+    for (const group of groups) {
+      if (index >= group.installments_count) continue;
+      const groupCapital = group.financed_line_total / group.installments_count;
+      const groupInterest = Math.max(0, group.installment_contribution - groupCapital);
+      amount += group.installment_contribution;
+      capital += groupCapital;
+      interest += groupInterest;
+    }
+
+    return {
+      installment_number: index + 1,
+      due_date: toApiDate(dueDate),
+      amount: Math.round(amount * 100) / 100,
+      capital: Math.round(capital * 100) / 100,
+      interest: Math.round(interest * 100) / 100,
+    };
+  });
+
+  let remaining = rows.reduce((acc, row) => acc + row.amount, 0);
+  return rows.map((row) => {
+    remaining = Math.max(0, Math.round((remaining - row.amount) * 100) / 100);
+    return {
+      ...row,
+      remaining_estimated: remaining,
+    };
+  });
 };
 
 /**
@@ -194,7 +320,15 @@ const create = async (data, requestingUser) => {
  * @param {object} params - Parámetros del cotizador.
  * @returns {Promise<object>} Resultado orientativo de la simulación.
  */
-const simulate = async ({ type, total_amount, installments_count, payment_frequency, products, down_payment }) => {
+const simulate = async ({
+  type,
+  total_amount,
+  installments_count,
+  payment_frequency,
+  products,
+  down_payment,
+  first_payment_date,
+}) => {
   // ── LOAN ─────────────────────────────────────────────────────
   if (type === 'LOAN') {
     const amount     = parseFloat(total_amount);
@@ -203,14 +337,30 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
       throw { status: 404, message: 'No existe una tasa configurada para esta combinación y monto.' };
 
     const coef = parseFloat(rateRecord.rate);
+    const installmentAmount = getInstallmentAmount(amount, coef, installments_count);
+    const totalToReturn = getTotalToReturn(amount, coef, installments_count);
     return {
       type,
       payment_frequency,
       installments_count,
       total_amount:       amount,
       rate:               coef,
-      installment_amount: getInstallmentAmount(amount, coef, installments_count),
-      total_to_return:    getTotalToReturn(amount, coef, installments_count),
+      installment_amount: installmentAmount,
+      total_to_return:    totalToReturn,
+      interest_amount:    Math.max(0, Math.round((totalToReturn - amount) * 100) / 100),
+      summary: {
+        financed_amount: amount,
+        down_payment: 0,
+        interest_amount: Math.max(0, Math.round((totalToReturn - amount) * 100) / 100),
+      },
+      schedule: await buildSimulationSchedule({
+        financedAmount: amount,
+        installmentAmount,
+        installmentsCount: installments_count,
+        paymentFrequency: payment_frequency,
+        firstPaymentDate: first_payment_date,
+        totalToReturn,
+      }),
       note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
     };
   }
@@ -236,11 +386,12 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
     if (v.variant_status !== 'ACTIVE')
       throw { status: 409, message: `La variante de "${v.title}" no está activa.` };
 
-    const rateRecord = await prQueries.findActiveRate(v.product_id, payment_frequency, installments_count);
+    const lineInstallmentsCount = parseInt(item.installments_count || installments_count);
+    const rateRecord = await prQueries.findActiveRate(v.product_id, payment_frequency, lineInstallmentsCount);
     if (!rateRecord)
       throw {
         status: 404,
-        message: `No existe tasa configurada para "${v.title}" con ${installments_count} cuotas ${payment_frequency}.`,
+        message: `No existe tasa configurada para "${v.title}" con ${lineInstallmentsCount} cuotas ${payment_frequency}.`,
       };
 
     const lineTotal = v.current_price * item.quantity;
@@ -253,6 +404,7 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
       size:         v.size,
       capacity:     v.capacity,
       quantity:     item.quantity,
+      installments_count: lineInstallmentsCount,
       unit_price:   v.current_price,
       line_total:   lineTotal,
       rate:         parseFloat(rateRecord.rate),
@@ -270,17 +422,42 @@ const simulate = async ({ type, total_amount, installments_count, payment_freque
 
   for (const g of groups) {
     const netLine = g.line_total * capitalRatio;
-    g.installment_contribution = getProductInstallmentContribution(netLine, g.rate, installments_count);
+    g.financed_line_total = Math.round(netLine * 100) / 100;
+    g.installment_contribution = getProductInstallmentContribution(netLine, g.rate, g.installments_count);
     totalInstallment += g.installment_contribution;
   }
+
+  const totalInstallmentsCount = Math.max(
+    parseInt(installments_count || 0),
+    ...groups.map((group) => parseInt(group.installments_count || 0)),
+  );
+  const financedAmountRounded = Math.round(financedAmount * 100) / 100;
+  const schedule = await buildSaleSimulationSchedule({
+    groups,
+    installmentsCount: totalInstallmentsCount,
+    paymentFrequency: payment_frequency,
+    firstPaymentDate: first_payment_date,
+  });
+  const scheduledTotal = Math.round(
+    schedule.reduce((acc, row) => acc + row.amount, 0) * 100,
+  ) / 100;
+  const totalToReturn = Math.round((scheduledTotal + downPayment) * 100) / 100;
+  const interestAmount = Math.max(0, Math.round((totalToReturn - totalBase) * 100) / 100);
 
   const result = {
     type,
     payment_frequency,
-    installments_count,
+    installments_count: totalInstallmentsCount,
     total_amount:       Math.round(totalBase * 100) / 100,
     installment_amount: totalInstallment,
-    total_to_return:    Math.round((totalInstallment * installments_count + downPayment) * 100) / 100,
+    total_to_return:    totalToReturn,
+    interest_amount:    interestAmount,
+    summary: {
+      financed_amount: financedAmountRounded,
+      down_payment: downPayment,
+      interest_amount: interestAmount,
+    },
+    schedule,
     items: groups,
     note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
   };
@@ -319,7 +496,8 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       throw { status: 409, message: 'No existe tasa de interés activa para esta combinación y monto.' };
 
     const installmentAmount = getInstallmentAmount(credit.total_amount, rateRecord.rate, installmentsCount);
-    const dueDates          = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+    const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+    const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
     await withTransaction(async (client) => {
       await queries.approve(client, id, adminId, rateRecord.rate, installmentsCount);
@@ -375,7 +553,8 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     totalInstallment += getProductInstallmentContribution(netLine, g.rate, installmentsCount);
   }
 
-  const dueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+  const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId, null, installmentsCount);

@@ -19,12 +19,17 @@ const stripFieldsByRole = (customer, requestingUser) => {
 };
 
 const getAll = async (filters, requestingUser) => {
+  const normalizedFilters = {
+    ...filters,
+    include_summary: filters?.include_summary === 'true',
+  };
+
   // COLLECTOR puro solo ve sus propios clientes asignados
   // SELLER_COLLECTOR ve todos (tiene rol vendedor también)
   if (requestingUser.role === 'COLLECTOR') {
-    filters = { ...filters, collector_id: requestingUser.id };
+    normalizedFilters.collector_id = requestingUser.id;
   }
-  const results = await queries.findAll(filters);
+  const results = await queries.findAll(normalizedFilters);
   return results.map(c => stripFieldsByRole(c, requestingUser));
 };
 
@@ -32,6 +37,46 @@ const getById = async (id, requestingUser) => {
   const customer = await queries.findById(id);
   if (!customer) throw { status: 404, message: 'Cliente no encontrado.' };
   return stripFieldsByRole(customer, requestingUser);
+};
+
+/**
+ * Devuelve el resumen enriquecido del cliente para el wizard de nueva operación.
+ * @param {string} id
+ * @param {{ role: string, id: string }} requestingUser
+ * @returns {Promise<object>}
+ */
+const getWizardSummary = async (id, requestingUser) => {
+  const summary = await queries.findWizardSummaryById(id);
+  if (!summary) throw { status: 404, message: 'Cliente no encontrado.' };
+
+  if (requestingUser.role === 'COLLECTOR' && summary.collector_id !== requestingUser.id) {
+    throw { status: 404, message: 'Cliente no encontrado.' };
+  }
+
+  const baseCustomer = stripFieldsByRole({
+    id: summary.id,
+    full_name: summary.full_name,
+    dni: summary.dni,
+    address: summary.address,
+    phone: summary.phone,
+    email: summary.email,
+    status: summary.status,
+    portal_enabled: summary.portal_enabled,
+    created_at: summary.created_at,
+    collector_id: summary.collector_id,
+    collector_name: summary.collector_name,
+  }, requestingUser);
+
+  return {
+    ...baseCustomer,
+    delinquency: summary.overdue_installments > 0 ? 'con mora' : 'sin mora',
+    payment_capacity: summary.payment_capacity,
+    active_credits: summary.active_credits,
+    paid_installments: summary.paid_installments,
+    pending_installments: summary.pending_installments,
+    overdue_installments: summary.overdue_installments,
+    credits: summary.credits,
+  };
 };
 
 const create = async (data) => {
@@ -129,6 +174,6 @@ const unlockPortal = async (id) => {
 };
 
 module.exports = {
-  getAll, getById, create, update, deactivate, activate,
+  getAll, getById, getWizardSummary, create, update, deactivate, activate,
   enablePortal, disablePortal, resetPortalPassword, unlockPortal,
 };

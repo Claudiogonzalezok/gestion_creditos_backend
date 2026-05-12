@@ -9,7 +9,8 @@
     "seed": "node src/seeds/index.seed.js",
     "migration:run": "node src/scripts/migration.run.js",
     "db:setup": "npm run migration:run && npm run seed",
-    "db:reset": "node src/scripts/db.reset.js && npm run seed"
+    "db:reset": "node src/scripts/db.reset.js && npm run seed",
+    "db:studio": "node src/scripts/db.studio.js"
   },
   "keywords": [],
   "author": "",

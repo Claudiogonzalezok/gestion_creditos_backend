@@ -1,9 +1,160 @@
-const pool    = require('../../config/db');
-const queries = require('./payments.queries');
-const { withTransaction } = require('../../utils/transaction');
+const pool                  = require('../../config/db');
+const queries               = require('./payments.queries');
+const cashMovementsQueries  = require('./cash_movements.queries');
+const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
+const { withTransaction }   = require('../../utils/transaction');
+const { localDate }         = require('../../utils/date');
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NÚCLEO FINANCIERO REUTILIZABLE
+// Funciones privadas compartidas por todos los flujos de cobranza.
+// NO llamar directamente desde controllers — solo desde funciones de este módulo.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Valida que la caja del día no esté cerrada.
+ * La existencia de un registro en cash_registers para la fecha = caja cerrada.
+ * Debe llamarse ANTES de iniciar la transacción de pago.
+ * @param {string} date - Fecha contable 'YYYY-MM-DD'.
+ * @throws {{ status: 409, message }} si la caja del día está cerrada.
+ */
+const _validateCajaOpen = async (date) => {
+  const closed = await cashRegisterQueries.findByDate(date);
+  if (closed)
+    throw {
+      status: 409,
+      message: `La caja del ${date} ya fue cerrada. No es posible registrar cobros para ese día.`,
+    };
+};
+
+/**
+ * Distribuye el monto recibido sobre la cuota principal y cuotas siguientes si sobra saldo.
+ * Toda la lógica financiera de distribución está centralizada aquí para reutilización.
+ * Requiere un client con transacción activa.
+ *
+ * @param {object} client          - Cliente de transacción pg.
+ * @param {object} payment         - Registro del payment con datos de la cuota y crédito.
+ * @param {number} amountToApply   - Monto total a distribuir.
+ * @param {string} adminId         - ID del usuario que aprueba (para cuotas adelantadas).
+ * @returns {Promise<void>}
+ */
+/**
+ * @param {string|null} paymentId - ID del cobro principal (para vincular sub-pagos vía parent_payment_id).
+ */
+const _applyPaymentToInstallments = async (client, payment, amountToApply, adminId, paymentId = null) => {
+  const amountDue   = parseFloat(payment.amount_due);
+  const amountPaid  = parseFloat(payment.amount_paid);
+
+  // Lock exclusivo sobre la cuota principal antes de modificarla
+  await queries.lockAndGetInstallment(client, payment.installment_id);
+
+  const newInstStatus = await queries.updateInstallment(
+    client,
+    payment.installment_id,
+    amountToApply,
+    amountDue,
+    amountPaid
+  );
+
+  const round = (n) => Math.round(n * 100) / 100;
+  let remaining = round(amountToApply - (amountDue - amountPaid));
+  let paidCount = 0;
+
+  // Si sobra saldo y la cuota principal quedó PAID, distribuir a cuotas siguientes
+  if (remaining > 0 && newInstStatus === 'PAID') {
+    const nextInstallments = await queries.getPendingInstallmentsFrom(
+      client,
+      payment.credit_id,
+      payment.installment_number + 1
+    );
+
+    for (const inst of nextInstallments) {
+      if (remaining <= 0) break;
+
+      const instBalance = round(parseFloat(inst.amount_due) - parseFloat(inst.amount_paid));
+      if (remaining >= instBalance) {
+        await queries.markInstallmentAsPrepaid(
+          client,
+          inst.id,
+          adminId,
+          'Pago adelantado',
+          payment.payment_method,
+          payment.transfer_reference,
+          paymentId
+        );
+        remaining = round(remaining - instBalance);
+        paidCount++;
+      } else {
+        await queries.updateInstallment(
+          client,
+          inst.id,
+          remaining,
+          parseFloat(inst.amount_due),
+          parseFloat(inst.amount_paid)
+        );
+        remaining = 0;
+      }
+    }
+  }
+
+  // Si se adelantaron cuotas completas, recorrer vencimientos de las restantes
+  if (paidCount > 0) {
+    await queries.shiftInstallmentDates(
+      client,
+      payment.credit_id,
+      payment.payment_frequency,
+      payment.due_date
+    );
+  }
+};
+
+/**
+ * Verifica si el crédito quedó totalmente liquidado y lo marca como SETTLED.
+ * Aplica SELECT FOR UPDATE sobre credits para evitar cierre doble en pagos concurrentes.
+ * Respeta la lógica de mora del cron — no recalcula ni modifica penalty_amount.
+ *
+ * @param {object} client    - Cliente de transacción pg.
+ * @param {string} creditId  - ID del crédito a verificar.
+ */
+const _checkAndSettleCredit = async (client, creditId) => {
+  // Lock sobre el crédito antes de evaluar cierre para evitar race conditions
+  const credit = await queries.lockAndGetCredit(client, creditId);
+  if (!credit || credit.status === 'SETTLED') return;
+
+  const pendingCount = await queries.countPendingInstallments(client, creditId);
+  if (pendingCount === 0) await queries.settleCredit(client, creditId);
+};
+
+/**
+ * Registra el movimiento contable en cash_movements dentro de la transacción activa.
+ * Debe ser la última operación antes del COMMIT para garantizar consistencia.
+ *
+ * @param {object} client
+ * @param {object} params
+ * @param {string} params.paymentId      - ID del payment que origina el movimiento.
+ * @param {number} params.amount         - Monto positivo del movimiento.
+ * @param {string} params.paymentMethod  - 'CASH' | 'TRANSFER'.
+ * @param {string} params.movementType   - 'PAYMENT' | 'REVERSAL'.
+ * @param {string} params.registerDate   - Fecha contable 'YYYY-MM-DD'.
+ * @param {string} params.userId         - Usuario que ejecuta la operación.
+ */
+const _registerCashMovement = async (client, { paymentId, amount, paymentMethod, movementType, registerDate, userId }) => {
+  await cashMovementsQueries.create(client, {
+    paymentId,
+    amount,
+    movementType,
+    paymentMethod,
+    registerDate,
+    createdBy: userId,
+  });
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// API PÚBLICA DEL SERVICIO
+// ══════════════════════════════════════════════════════════════════════════════
 
 const getAll = async (filters, requestingUser) => {
-  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role))
+  if (['COLLECTOR', 'SELLER_COLLECTOR'].includes(requestingUser.role))
     filters = { ...filters, collector_id: requestingUser.id };
   return queries.findAll(filters);
 };
@@ -22,7 +173,6 @@ const getById = async (id) => {
  * @returns {Promise<object>} Pre-carga creada en estado pendiente.
  */
 const create = async (data, requestingUser) => {
-  // Verificar que la cuota exista y tenga saldo pendiente
   const instCheck = await pool.query(
     `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id FROM installments WHERE id = $1`,
     [data.installment_id]
@@ -31,7 +181,10 @@ const create = async (data, requestingUser) => {
   const inst = instCheck.rows[0];
   if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
 
-  // Calcular saldo disponible en la cuota descontando pre-cargas PENDING ya registradas
+  const creditInfo = await queries.getCreditStatusByInstallment(data.installment_id);
+  if (creditInfo && creditInfo.status !== 'ACTIVE')
+    throw { status: 409, message: `No se pueden registrar cobros en un crédito en estado ${creditInfo.status}.` };
+
   const amountDue     = inst.amount_due;
   const amountPaid    = inst.amount_paid;
   const pendingAmount = await queries.getPendingCommittedAmount(data.installment_id);
@@ -42,8 +195,6 @@ const create = async (data, requestingUser) => {
 
   const amountReceived = parseFloat(data.amount_received);
 
-  // Permitir que el monto supere la cuota actual (adelanto de cuotas):
-  // el límite superior es el saldo total pendiente del crédito completo.
   if (amountReceived > available) {
     const totalPending = await queries.getTotalPendingBalance(inst.credit_id);
     if (amountReceived > totalPending)
@@ -64,98 +215,68 @@ const create = async (data, requestingUser) => {
 };
 
 /**
- * Aprueba una pre-carga y distribuye excedentes sobre cuotas futuras.
- * Cuando cubre cuotas completas las marca como pago adelantado y corre los vencimientos restantes.
- * @param {string} id - ID de la pre-carga.
+ * Aprueba una pre-carga y distribuye el monto sobre cuotas futuras si hay excedente.
+ * Valida que la caja del día esté abierta antes de procesar.
+ * Usa SELECT FOR UPDATE sobre el payment e installment para evitar aprobaciones concurrentes.
+ *
+ * CAMBIOS DE CONTRATO API: ninguno — misma firma, misma respuesta.
+ * Comportamiento nuevo:
+ *   · Valida caja abierta (lanza 409 si la caja del día fue cerrada).
+ *   · Genera registro en cash_movements dentro de la misma transacción.
+ *   · Usa locks transaccionales para serializar aprobaciones simultáneas.
+ *
+ * @param {string} id      - ID de la pre-carga.
  * @param {string} adminId - Admin que valida el cobro.
  * @returns {Promise<object>} Cobro aprobado con su estado actualizado.
  */
 const approve = async (id, adminId) => {
-  const payment = await queries.findById(id);
-  if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
-  if (payment.status !== 'PENDING')
-    throw { status: 409, message: 'Solo se pueden aprobar cobros en estado PENDIENTE.' };
+  const today = localDate();
 
-  const amountDue      = parseFloat(payment.amount_due);
-  const amountPaid     = parseFloat(payment.amount_paid);
-  const amountReceived = parseFloat(payment.amount_received);
-
-  if (amountPaid >= amountDue)
-    throw { status: 409, message: 'Esta cuota ya se encuentra totalmente pagada.' };
+  // Validar caja ANTES de iniciar la transacción (operación de solo lectura)
+  await _validateCajaOpen(today);
 
   await withTransaction(async (client) => {
+    // Lock exclusivo sobre el payment para serializar aprobaciones concurrentes
+    const payment = await queries.lockAndGetPayment(client, id);
+    if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
+    if (payment.status !== 'PENDING')
+      throw { status: 409, message: 'Solo se pueden aprobar cobros en estado PENDIENTE.' };
+
+    const amountDue  = parseFloat(payment.amount_due);
+    const amountPaid = parseFloat(payment.amount_paid);
+
+    if (amountPaid >= amountDue)
+      throw { status: 409, message: 'Esta cuota ya se encuentra totalmente pagada.' };
+
+    // 1. Marcar el payment como APPROVED
     await queries.approve(client, id, adminId);
 
-    // Aplicar el monto recibido a la cuota principal
-    const newInstStatus = await queries.updateInstallment(
-      client,
-      payment.installment_id,
-      amountReceived,
-      amountDue,
-      amountPaid
-    );
+    // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
+    await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId, id);
 
-    const round = (n) => Math.round(n * 100) / 100;
-    let remaining = round(amountReceived - (amountDue - amountPaid));
-    let paidCount = 0; // cuotas adelantadas (aparte de la cuota principal)
+    // 3. Registrar movimiento contable en caja
+    await _registerCashMovement(client, {
+      paymentId:      id,
+      amount:         parseFloat(payment.amount_received),
+      paymentMethod:  payment.payment_method,
+      movementType:   'PAYMENT',
+      registerDate:   today,
+      userId:         adminId,
+    });
 
-    // Si sobra saldo, aplicar a cuotas siguientes (adelanto)
-    if (remaining > 0 && newInstStatus === 'PAID') {
-      const nextInstallments = await queries.getPendingInstallmentsFrom(
-        client,
-        payment.credit_id,
-        payment.installment_number + 1
-      );
-
-      for (const inst of nextInstallments) {
-        if (remaining <= 0) break;
-
-        const instBalance = round(parseFloat(inst.amount_due) - parseFloat(inst.amount_paid));
-        if (remaining >= instBalance) {
-          // Cubre esta cuota completa → marcar como PAID con nota de adelanto
-          await queries.markInstallmentAsPrepaid(
-            client,
-            inst.id,
-            adminId,
-            'Pago adelantado',
-            payment.payment_method,
-            payment.transfer_reference
-          );
-          remaining = round(remaining - instBalance);
-          paidCount++;
-        } else {
-          // Cubre solo parcialmente → actualizar amount_paid
-          await queries.updateInstallment(
-            client,
-            inst.id,
-            remaining,
-            parseFloat(inst.amount_due),
-            parseFloat(inst.amount_paid)
-          );
-          remaining = 0;
-        }
-      }
-    }
-
-    // Si se adelantaron cuotas completas, reasignar fechas de las restantes
-    // desde hoy + 1 período (la siguiente cuota siempre vence el mes/semana que viene)
-    if (paidCount > 0) {
-      await queries.shiftInstallmentDates(
-        client,
-        payment.credit_id,
-        payment.payment_frequency,
-        payment.due_date
-      );
-    }
-
-    // Verificar si el crédito quedó totalmente liquidado
-    const pendingCount = await queries.countPendingInstallments(client, payment.credit_id);
-    if (pendingCount === 0) await queries.settleCredit(client, payment.credit_id);
+    // 4. Verificar si el crédito quedó totalmente liquidado (con lock sobre credits)
+    await _checkAndSettleCredit(client, payment.credit_id);
   });
 
   return queries.findById(id);
 };
 
+/**
+ * Rechaza una pre-carga. No genera movimiento de caja.
+ * @param {string} id              - ID de la pre-carga.
+ * @param {string} rejectionReason - Motivo del rechazo.
+ * @param {string} adminId         - Admin que rechaza.
+ */
 const reject = async (id, rejectionReason, adminId) => {
   const payment = await queries.findById(id);
   if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
@@ -164,4 +285,207 @@ const reject = async (id, rejectionReason, adminId) => {
   await queries.reject(id, rejectionReason, adminId);
 };
 
-module.exports = { getAll, getById, create, approve, reject };
+/**
+ * Devuelve el historial de pagos aprobados de un crédito.
+ * @param {string} creditId
+ */
+const getByCredit = async (creditId) => {
+  return queries.findPaymentsByCredit(creditId);
+};
+
+/**
+ * Registra y aprueba un cobro directo sin pre-carga (flujo admin).
+ * Valida caja abierta, crea el payment como APPROVED y distribuye el monto.
+ *
+ * @param {object} data
+ * @param {string} data.installment_id
+ * @param {number} data.amount_received
+ * @param {string} data.payment_method
+ * @param {string} [data.transfer_reference]
+ * @param {string} [data.notes]
+ * @param {string} adminId
+ * @returns {Promise<object>} Payment creado y aprobado.
+ */
+const adminDirect = async (data, adminId) => {
+  const today = localDate();
+  await _validateCajaOpen(today);
+
+  // Validar cuota
+  const instCheck = await pool.query(
+    `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id,
+            installment_number
+     FROM installments WHERE id = $1`,
+    [data.installment_id]
+  );
+  if (!instCheck.rows.length) throw { status: 404, message: 'Cuota no encontrada.' };
+  const inst = instCheck.rows[0];
+  if (inst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
+
+  // Validar que el crédito esté ACTIVE — no se puede cobrar sobre créditos liquidados o rechazados
+  const creditInfo = await queries.getCreditStatusByInstallment(data.installment_id);
+  if (creditInfo && creditInfo.status === 'SETTLED')
+    throw { status: 409, message: 'Este crédito ya fue liquidado totalmente. No es posible registrar cobros.' };
+  if (creditInfo && !['ACTIVE'].includes(creditInfo.status))
+    throw { status: 409, message: `No se pueden registrar cobros en un crédito en estado ${creditInfo.status}.` };
+
+  const amountReceived = parseFloat(data.amount_received);
+  const totalPending   = await queries.getTotalPendingBalance(inst.credit_id);
+  if (amountReceived > totalPending)
+    throw {
+      status: 422,
+      message: `El monto ingresado ($${amountReceived.toLocaleString('es-AR')}) supera el saldo total pendiente del crédito ($${totalPending.toLocaleString('es-AR')}).`,
+    };
+
+  let newPaymentId;
+  await withTransaction(async (client) => {
+    // Lock sobre la cuota principal
+    const lockedInst = await queries.lockAndGetInstallment(client, data.installment_id);
+    if (!lockedInst) throw { status: 404, message: 'Cuota no encontrada.' };
+    if (lockedInst.status === 'PAID') throw { status: 409, message: 'Esta cuota ya fue pagada.' };
+
+    const created = await queries.createApproved(client, {
+      installmentId:     data.installment_id,
+      adminId,
+      amountReceived,
+      paymentMethod:     data.payment_method,
+      transferReference: data.transfer_reference,
+      notes:             data.notes,
+    });
+    newPaymentId = created.id;
+
+    // Construir objeto payment compatible con _applyPaymentToInstallments
+    const paymentCtx = {
+      installment_id:     lockedInst.id,
+      installment_number: lockedInst.installment_number,
+      amount_due:         lockedInst.amount_due,
+      amount_paid:        lockedInst.amount_paid,
+      credit_id:          lockedInst.credit_id,
+      payment_frequency:  lockedInst.payment_frequency,
+      due_date:           lockedInst.due_date,
+      payment_method:     data.payment_method,
+      transfer_reference: data.transfer_reference || null,
+    };
+
+    await _applyPaymentToInstallments(client, paymentCtx, amountReceived, adminId, newPaymentId);
+
+    await _registerCashMovement(client, {
+      paymentId:     newPaymentId,
+      amount:        amountReceived,
+      paymentMethod: data.payment_method,
+      movementType:  'PAYMENT',
+      registerDate:  today,
+      userId:        adminId,
+    });
+
+    await _checkAndSettleCredit(client, lockedInst.credit_id);
+  });
+
+  return queries.findById(newPaymentId);
+};
+
+/**
+ * Revierte totalmente un cobro aprobado y todos sus sub-pagos derivados.
+ * Genera un payment compensatorio (is_reversal=TRUE) por cada cuota afectada.
+ * No elimina registros — patrón de transacción compensatoria.
+ *
+ * Reglas:
+ *  · Solo pagos APPROVED no revertidos previamente.
+ *  · Solo reversiones del día (caja abierta).
+ *  · Un cobro solo puede revertirse una vez (unique index en reversed_by_payment_id).
+ *
+ * @param {string} id     - ID del payment a revertir.
+ * @param {string} reason - Motivo obligatorio de la reversión.
+ * @param {string} adminId
+ */
+const reverse = async (id, reason, adminId) => {
+  const today = localDate();
+
+  // Validación 1: la caja de HOY debe estar abierta (check rápido antes de la transacción)
+  await _validateCajaOpen(today);
+
+  await withTransaction(async (client) => {
+    const payment = await queries.lockAndGetPayment(client, id);
+    if (!payment)               throw { status: 404, message: 'Cobro no encontrado.' };
+    if (payment.status !== 'APPROVED')
+      throw { status: 409, message: 'Solo se pueden revertir cobros aprobados.' };
+    if (payment.is_reversal)
+      throw { status: 409, message: 'No se puede revertir un cobro que ya es una reversión.' };
+
+    // Los sub-pagos generados por distribución (parent_payment_id != null) no se revierten
+    // de forma independiente — solo se revierten como parte del cobro padre (total reversal).
+    if (payment.parent_payment_id)
+      throw { status: 409, message: 'Este cobro es un sub-pago por distribución. Para revertirlo, revierta el cobro principal.' };
+
+    // Validación 2: verificar con subquery si ya existe un payment que referencia este como original.
+    // payment.reversed_by_payment_id es el campo en el payment de REVERSIÓN → no sirve aquí.
+    // lockAndGetPayment ya incluye reversal_payment_id via subquery.
+    if (payment.reversal_payment_id)
+      throw { status: 409, message: 'Este cobro ya fue revertido anteriormente.' };
+
+    // Validación 3: el movimiento de caja del cobro debe corresponder a la caja de HOY.
+    // Si el cobro fue aprobado en una fecha cuya caja ya está cerrada, no se puede revertir.
+    const movement = await cashMovementsQueries.findPaymentMovement(client, id);
+    if (!movement)
+      throw { status: 409, message: 'No se encontró movimiento de caja para este cobro.' };
+
+    if (movement.register_date !== today) {
+      const closedCaja = await cashRegisterQueries.findByDate(movement.register_date);
+      if (closedCaja)
+        throw {
+          status: 409,
+          message: `El cobro pertenece a la caja del ${movement.register_date}, que ya fue cerrada. No es posible revertirlo.`,
+        };
+    }
+
+    // Recolectar todos los pagos a revertir: el principal + sus sub-pagos
+    const children = await queries.findChildPayments(client, id);
+    const toReverse = [payment, ...children];
+
+    for (const p of toReverse) {
+      // Lock sobre la cuota afectada
+      await queries.lockAndGetInstallment(client, p.installment_id);
+
+      const reversal = await queries.createReversal(client, {
+        installmentId:     p.installment_id,
+        adminId,
+        amountReceived:    p.amount_received,
+        paymentMethod:     p.payment_method,
+        transferReference: p.transfer_reference,
+        reason,
+        originalPaymentId: p.id,
+      });
+
+      await queries.restoreInstallmentFromReversal(client, p.installment_id, p.amount_received);
+
+      await _registerCashMovement(client, {
+        paymentId:     reversal.id,
+        amount:        p.amount_received,
+        paymentMethod: p.payment_method,
+        movementType:  'REVERSAL',
+        registerDate:  today,
+        userId:        adminId,
+      });
+    }
+
+    // Si el crédito estaba SETTLED, reabrirlo
+    const credit = await queries.lockAndGetCredit(client, payment.credit_id);
+    if (credit && credit.status === 'SETTLED') {
+      await client.query(
+        `UPDATE credits SET status = 'ACTIVE', settled_at = NULL, settlement_type = NULL, updated_at = NOW() WHERE id = $1`,
+        [payment.credit_id]
+      );
+    }
+  });
+
+  return queries.findById(id);
+};
+
+module.exports = {
+  getAll, getById, create, approve, reject,
+  getByCredit, adminDirect, reverse,
+  // Núcleo exportado para reutilización en nuevos flujos
+  _validateCajaOpen,
+  _applyPaymentToInstallments,
+  _checkAndSettleCredit,
+  _registerCashMovement,
+};
