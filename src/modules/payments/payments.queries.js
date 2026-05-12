@@ -70,6 +70,73 @@ const create = async ({ installment_id, collector_id, amount_received, payment_m
   return r.rows[0];
 };
 
+// ── Locks transaccionales (SELECT FOR UPDATE) ─────────────────────────────────
+// Deben usarse dentro de una transacción activa para serializar operaciones concurrentes.
+
+/**
+ * Obtiene un payment con lock exclusivo (FOR UPDATE) dentro de una transacción.
+ * Previene aprobaciones o reversiones simultáneas sobre el mismo cobro.
+ * @param {object} client - Cliente de transacción pg.
+ * @param {string} id - ID del payment.
+ * @returns {Promise<object|null>}
+ */
+const lockAndGetPayment = async (client, id) => {
+  const r = await client.query(
+    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.payment_method, p.transfer_reference, p.status, p.notes,
+            p.is_reversal, p.admin_direct, p.reversed_by_payment_id,
+            i.installment_number, i.amount_due::float8, i.amount_paid::float8,
+            i.due_date, i.penalty_amount::float8,
+            c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
+            cu.full_name AS customer_name, cu.dni AS customer_dni,
+            u.full_name  AS collector_name
+     FROM payments p
+     JOIN installments i ON i.id  = p.installment_id
+     JOIN credits c      ON c.id  = i.credit_id
+     JOIN customers cu   ON cu.id = c.customer_id
+     LEFT JOIN users u   ON u.id  = p.collector_id
+     WHERE p.id = $1
+     FOR UPDATE OF p`,
+    [id]
+  );
+  return r.rows[0] || null;
+};
+
+/**
+ * Obtiene una cuota con lock exclusivo (FOR UPDATE) dentro de una transacción.
+ * Previene actualizaciones concurrentes de amount_paid y status.
+ * @param {object} client - Cliente de transacción pg.
+ * @param {string} installmentId - ID de la cuota.
+ * @returns {Promise<object|null>}
+ */
+const lockAndGetInstallment = async (client, installmentId) => {
+  const r = await client.query(
+    `SELECT id, credit_id, installment_number, due_date, payment_frequency,
+            amount_due::float8, amount_paid::float8, penalty_amount::float8, status
+     FROM installments
+     WHERE id = $1
+     FOR UPDATE`,
+    [installmentId]
+  );
+  return r.rows[0] || null;
+};
+
+/**
+ * Obtiene un crédito con lock exclusivo (FOR UPDATE) dentro de una transacción.
+ * Previene race conditions en la transición ACTIVE → SETTLED cuando dos cuotas
+ * se pagan de forma simultánea y ambas verifican el cierre del crédito.
+ * @param {object} client - Cliente de transacción pg.
+ * @param {string} creditId - ID del crédito.
+ * @returns {Promise<object|null>}
+ */
+const lockAndGetCredit = async (client, creditId) => {
+  const r = await client.query(
+    `SELECT id, status FROM credits WHERE id = $1 FOR UPDATE`,
+    [creditId]
+  );
+  return r.rows[0] || null;
+};
+
 const approve = async (client, id, adminId) => {
   await client.query(
     `UPDATE payments SET status = 'APPROVED', approved_by = $1, approved_at = NOW()
@@ -223,6 +290,7 @@ const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, pa
 
 module.exports = {
   findAll, findById, getPendingCommittedAmount, create,
+  lockAndGetPayment, lockAndGetInstallment, lockAndGetCredit,
   approve, updateInstallment, countPendingInstallments, settleCredit, reject,
   getTotalPendingBalance, getPendingInstallmentsFrom, shiftInstallmentDates, markInstallmentAsPrepaid,
 };
