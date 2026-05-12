@@ -25,7 +25,7 @@ const generate = async (data, adminId) => {
   const { collector_id, date, filter } = data;
   const selectedFilter = filter || 'ALL_PENDING';
 
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     await lockSheetGeneration(client, collector_id, date);
 
     // Verificar que el cobrador exista y tenga rol COLLECTOR o SELLER_COLLECTOR
@@ -68,12 +68,12 @@ const generate = async (data, adminId) => {
 
     await queries.createDetails(sheet.id, items, client);
 
-    return {
-      ...sheet,
-      total_items: items.length,
-      items,
-    };
+    return sheet.id;
   });
+
+  // La transacción ya cerró; ahora leemos el detalle completo con JOINs
+  const full = await queries.findById(result);
+  return full;
 };
 
 const getAll = async (filters, requestingUser) => {
