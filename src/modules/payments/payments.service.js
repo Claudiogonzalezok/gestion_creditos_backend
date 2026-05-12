@@ -388,14 +388,38 @@ const adminDirect = async (data, adminId) => {
  */
 const reverse = async (id, reason, adminId) => {
   const today = localDate();
+
+  // Validación 1: la caja de HOY debe estar abierta (check rápido antes de la transacción)
   await _validateCajaOpen(today);
 
   await withTransaction(async (client) => {
     const payment = await queries.lockAndGetPayment(client, id);
-    if (!payment)                           throw { status: 404, message: 'Cobro no encontrado.' };
-    if (payment.status !== 'APPROVED')      throw { status: 409, message: 'Solo se pueden revertir cobros aprobados.' };
-    if (payment.is_reversal)                throw { status: 409, message: 'No se puede revertir un cobro que ya es una reversión.' };
-    if (payment.reversed_by_payment_id)     throw { status: 409, message: 'Este cobro ya fue revertido anteriormente.' };
+    if (!payment)               throw { status: 404, message: 'Cobro no encontrado.' };
+    if (payment.status !== 'APPROVED')
+      throw { status: 409, message: 'Solo se pueden revertir cobros aprobados.' };
+    if (payment.is_reversal)
+      throw { status: 409, message: 'No se puede revertir un cobro que ya es una reversión.' };
+
+    // Validación 2: verificar con subquery si ya existe un payment que referencia este como original.
+    // payment.reversed_by_payment_id es el campo en el payment de REVERSIÓN → no sirve aquí.
+    // lockAndGetPayment ya incluye reversal_payment_id via subquery.
+    if (payment.reversal_payment_id)
+      throw { status: 409, message: 'Este cobro ya fue revertido anteriormente.' };
+
+    // Validación 3: el movimiento de caja del cobro debe corresponder a la caja de HOY.
+    // Si el cobro fue aprobado en una fecha cuya caja ya está cerrada, no se puede revertir.
+    const movement = await cashMovementsQueries.findPaymentMovement(client, id);
+    if (!movement)
+      throw { status: 409, message: 'No se encontró movimiento de caja para este cobro.' };
+
+    if (movement.register_date !== today) {
+      const closedCaja = await cashRegisterQueries.findByDate(movement.register_date);
+      if (closedCaja)
+        throw {
+          status: 409,
+          message: `El cobro pertenece a la caja del ${movement.register_date}, que ya fue cerrada. No es posible revertirlo.`,
+        };
+    }
 
     // Recolectar todos los pagos a revertir: el principal + sus sub-pagos
     const children = await queries.findChildPayments(client, id);

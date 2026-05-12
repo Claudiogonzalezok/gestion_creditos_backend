@@ -27,12 +27,14 @@ const findById = async (id) => {
   const r = await pool.query(
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8, p.payment_method,
             p.transfer_reference, p.status, p.rejection_reason, p.notes,
+            p.is_reversal, p.admin_direct, p.reversal_reason,
             p.created_at, p.approved_at, p.approved_by,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
             i.due_date, i.penalty_amount::float8,
             c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
             cu.full_name AS customer_name, cu.dni AS customer_dni,
-            u.full_name  AS collector_name
+            u.full_name  AS collector_name,
+            (SELECT id FROM payments WHERE reversed_by_payment_id = p.id LIMIT 1) AS reversal_payment_id
      FROM payments p
      JOIN installments i ON i.id  = p.installment_id
      JOIN credits c      ON c.id  = i.credit_id
@@ -89,7 +91,8 @@ const lockAndGetPayment = async (client, id) => {
             i.due_date, i.penalty_amount::float8,
             c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
             cu.full_name AS customer_name, cu.dni AS customer_dni,
-            u.full_name  AS collector_name
+            u.full_name  AS collector_name,
+            (SELECT id FROM payments rev WHERE rev.reversed_by_payment_id = p.id LIMIT 1) AS reversal_payment_id
      FROM payments p
      JOIN installments i ON i.id  = p.installment_id
      JOIN credits c      ON c.id  = i.credit_id

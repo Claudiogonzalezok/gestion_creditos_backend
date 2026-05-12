@@ -42,4 +42,22 @@ const getSummaryByDate = async (date) => {
   return r.rows;
 };
 
-module.exports = { create, getSummaryByDate };
+/**
+ * Devuelve el movimiento de caja de tipo PAYMENT asociado a un cobro.
+ * Se usa para validar que la caja del día en que se aprobó el cobro sigue abierta
+ * antes de permitir una reversión.
+ * @param {object} client - Cliente de transacción pg.
+ * @param {string} paymentId - ID del payment aprobado.
+ * @returns {Promise<{register_date: string}|null>}
+ */
+const findPaymentMovement = async (client, paymentId) => {
+  const r = await client.query(
+    `SELECT register_date::text FROM cash_movements
+     WHERE payment_id = $1 AND movement_type = 'PAYMENT'
+     LIMIT 1`,
+    [paymentId]
+  );
+  return r.rows[0] || null;
+};
+
+module.exports = { create, getSummaryByDate, findPaymentMovement };
