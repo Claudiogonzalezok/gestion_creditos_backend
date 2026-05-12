@@ -76,6 +76,7 @@ const swaggerSpec = {
     { name: 'Expense Categories', description: 'Categorías de egresos' },
     { name: 'Reports',            description: 'Reportes (CU12)' },
     { name: 'System Config',      description: 'Configuración de parámetros del sistema (CU16)' },
+    { name: 'Holidays',           description: 'Feriados y ajustes de vencimientos por día hábil' },
     { name: 'Portal',             description: 'Portal público — estado de cuenta del cliente (CU11)' },
   ],
 
@@ -220,6 +221,148 @@ const swaggerSpec = {
         responses: {
           200: { description: 'Sesión cerrada' },
           401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/holidays': {
+      get: {
+        tags: ['Holidays'],
+        summary: 'Listar feriados',
+        security: [{ internalAuth: [] }],
+        responses: {
+          200: { description: 'Listado de feriados' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+      post: {
+        tags: ['Holidays'],
+        summary: 'Crear feriado (opcionalmente recalcula cuotas futuras)',
+        security: [{ internalAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['date', 'name', 'type'],
+                properties: {
+                  date: { $ref: '#/components/schemas/Date' },
+                  name: { type: 'string', example: 'Feriado extraordinario provincial' },
+                  type: { type: 'string', enum: ['EXTRAORDINARY', 'NATIONAL', 'LOCAL', 'BANKING'] },
+                  affects_due_dates: { type: 'boolean', example: true },
+                  active: { type: 'boolean', example: true },
+                  repeats_annually: { type: 'boolean', example: false },
+                  recalculateFutureInstallments: { type: 'boolean', example: true },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          201: { description: 'Feriado creado' },
+          409: { $ref: '#/components/responses/Conflict' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+    },
+
+    '/holidays/{id}': {
+      get: {
+        tags: ['Holidays'],
+        summary: 'Obtener feriado por ID',
+        security: [{ internalAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } },
+        ],
+        responses: {
+          200: { description: 'Feriado encontrado' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+      put: {
+        tags: ['Holidays'],
+        summary: 'Actualizar feriado',
+        security: [{ internalAuth: [] }],
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } },
+        ],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  type: { type: 'string', enum: ['EXTRAORDINARY', 'NATIONAL', 'LOCAL', 'BANKING'] },
+                  affects_due_dates: { type: 'boolean' },
+                  active: { type: 'boolean' },
+                  repeats_annually: { type: 'boolean' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Feriado actualizado' },
+          404: { $ref: '#/components/responses/NotFound' },
+        },
+      },
+    },
+
+    '/holidays/duplicate-year': {
+      post: {
+        tags: ['Holidays'],
+        summary: 'Duplicar feriados elegibles al próximo año',
+        security: [{ internalAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['sourceYear'],
+                properties: {
+                  sourceYear: { type: 'integer', example: 2026 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Duplicación ejecutada con resumen' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
+        },
+      },
+    },
+
+    '/holidays/duplicate-year/preview': {
+      post: {
+        tags: ['Holidays'],
+        summary: 'Previsualizar duplicación anual de feriados',
+        security: [{ internalAuth: [] }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['sourceYear'],
+                properties: {
+                  sourceYear: { type: 'integer', example: 2026 },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          200: { description: 'Vista previa de duplicación sin escritura' },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { $ref: '#/components/responses/Forbidden' },
         },
       },
     },

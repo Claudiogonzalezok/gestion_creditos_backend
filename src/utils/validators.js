@@ -552,6 +552,34 @@ const commissions = {
   ],
 };
 
+// ── HOLIDAYS (feriados) ───────────────────────────────────────
+const holidays = {
+  create: [
+    isDate('date', 'La fecha del feriado'),
+    isString('name', 'El nombre del feriado', { min: 2, max: 150 }),
+    isEnum('type', 'El tipo de feriado', ['EXTRAORDINARY', 'NATIONAL', 'LOCAL', 'BANKING']),
+    isBool('affects_due_dates', 'Afecta vencimientos', false),
+    isBool('active', 'Estado activo', false),
+    isBool('repeats_annually', 'Se repite anualmente', false),
+    isBool('recalculateFutureInstallments', 'Recalcular cuotas futuras', false),
+  ],
+  update: [
+    isUUIDParam('id', 'El ID de feriado'),
+    isString('name', 'El nombre del feriado', { min: 2, max: 150, required: false }),
+    isEnum('type', 'El tipo de feriado', ['EXTRAORDINARY', 'NATIONAL', 'LOCAL', 'BANKING'], false),
+    isBool('affects_due_dates', 'Afecta vencimientos', false),
+    isBool('active', 'Estado activo', false),
+    isBool('repeats_annually', 'Se repite anualmente', false),
+  ],
+  id: [ isUUIDParam('id', 'El ID de feriado') ],
+  duplicateYear: [
+    body('sourceYear')
+      .isInt({ min: 2000, max: 2999 })
+      .withMessage('El año origen debe ser un número entero entre 2000 y 2999.')
+      .toInt(),
+  ],
+};
+
 module.exports = {
   // Bloques atómicos reutilizables
   isString, isDni, isEmail, isPhone, isUUID, isUUIDParam,
@@ -570,6 +598,7 @@ module.exports = {
   penalties,
   collections,
   commissions,
+  holidays,
   expenses,
   expenseCategories,
   productCategories,

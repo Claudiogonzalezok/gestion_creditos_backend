@@ -10,9 +10,14 @@ const {
   getTotalToReturn,
   getDueDates,
   getDueDatesFromFirstPayment,
+  adjustDueDatesWithBusinessDayRule,
   getWeekBounds,
   getProductInstallmentContribution,
 } = require('../../utils/creditCalculator');
+const {
+  moveToNextBusinessDay,
+  getActiveHolidayKeysInRange,
+} = require('../../utils/businessDay');
 
 /**
  * Calcula el capital realmente financiado de una venta a crédito.
@@ -46,11 +51,28 @@ const decorateSaleCredit = (credit) => {
 const toApiDate = (date) => date.toISOString().slice(0, 10);
 
 /**
+ * Ajusta fechas de vencimiento al próximo día hábil según feriados activos y fines de semana.
+ * @param {Date[]} baseDueDates - Fechas base calculadas por frecuencia.
+ * @returns {Promise<Date[]>} Fechas ajustadas a calendario hábil.
+ */
+const applyBusinessDayRuleToDueDates = async (baseDueDates) => {
+  if (!baseDueDates.length) return [];
+  const holidayKeys = await getActiveHolidayKeysInRange(
+    baseDueDates[0],
+    new Date(baseDueDates[baseDueDates.length - 1].getTime() + (10 * 24 * 60 * 60 * 1000)),
+  );
+  return adjustDueDatesWithBusinessDayRule(
+    baseDueDates,
+    (date) => moveToNextBusinessDay(date, holidayKeys),
+  );
+};
+
+/**
  * Arma un cronograma orientativo con capital, interés y saldo remanente.
  * @param {object} params - Parámetros de cálculo del plan.
  * @returns {Array<object>} Filas del cronograma para la UI.
  */
-const buildSimulationSchedule = ({
+const buildSimulationSchedule = async ({
   financedAmount,
   installmentAmount,
   installmentsCount,
@@ -61,11 +83,12 @@ const buildSimulationSchedule = ({
   const count = parseInt(installmentsCount || 0);
   if (count <= 0 || installmentAmount <= 0) return [];
 
-  const dueDates = getDueDatesFromFirstPayment(
+  const baseDueDates = getDueDatesFromFirstPayment(
     firstPaymentDate,
     count,
     paymentFrequency,
   );
+  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
   const rawCapital = financedAmount / count;
   let remaining = totalToReturn;
 
@@ -91,7 +114,7 @@ const buildSimulationSchedule = ({
  * @param {object} params - Parámetros del plan de venta.
  * @returns {Array<object>} Filas agregadas para la UI.
  */
-const buildSaleSimulationSchedule = ({
+const buildSaleSimulationSchedule = async ({
   groups,
   paymentFrequency,
   firstPaymentDate,
@@ -100,11 +123,12 @@ const buildSaleSimulationSchedule = ({
   const count = parseInt(installmentsCount || 0);
   if (count <= 0) return [];
 
-  const dueDates = getDueDatesFromFirstPayment(
+  const baseDueDates = getDueDatesFromFirstPayment(
     firstPaymentDate,
     count,
     paymentFrequency,
   );
+  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
   const rows = dueDates.map((dueDate, index) => {
     let amount = 0;
@@ -329,7 +353,7 @@ const simulate = async ({
         down_payment: 0,
         interest_amount: Math.max(0, Math.round((totalToReturn - amount) * 100) / 100),
       },
-      schedule: buildSimulationSchedule({
+      schedule: await buildSimulationSchedule({
         financedAmount: amount,
         installmentAmount,
         installmentsCount: installments_count,
@@ -408,7 +432,7 @@ const simulate = async ({
     ...groups.map((group) => parseInt(group.installments_count || 0)),
   );
   const financedAmountRounded = Math.round(financedAmount * 100) / 100;
-  const schedule = buildSaleSimulationSchedule({
+  const schedule = await buildSaleSimulationSchedule({
     groups,
     installmentsCount: totalInstallmentsCount,
     paymentFrequency: payment_frequency,
@@ -472,7 +496,8 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       throw { status: 409, message: 'No existe tasa de interés activa para esta combinación y monto.' };
 
     const installmentAmount = getInstallmentAmount(credit.total_amount, rateRecord.rate, installmentsCount);
-    const dueDates          = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+    const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+    const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
     await withTransaction(async (client) => {
       await queries.approve(client, id, adminId, rateRecord.rate, installmentsCount);
@@ -528,7 +553,8 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     totalInstallment += getProductInstallmentContribution(netLine, g.rate, installmentsCount);
   }
 
-  const dueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+  const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId, null, installmentsCount);

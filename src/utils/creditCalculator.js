@@ -22,6 +22,16 @@ const addFrequencyPeriods = (baseDate, frequency, periods) => {
 };
 
 /**
+ * Ajusta un conjunto de vencimientos al próximo día hábil.
+ * No altera el cálculo base de frecuencia, solo normaliza fines de semana/feriados.
+ * @param {Date[]} dueDates - Fechas base calculadas por frecuencia.
+ * @param {(date: Date) => Date} moveToNextBusinessDayFn - Función de corrimiento al próximo hábil.
+ * @returns {Date[]} Fechas de vencimiento ajustadas.
+ */
+const adjustDueDatesWithBusinessDayRule = (dueDates, moveToNextBusinessDayFn) =>
+  dueDates.map((dueDate) => moveToNextBusinessDayFn(dueDate));
+
+/**
  * Calcula el monto por cuota redondeado hacia arriba al millar más cercano.
  * Todas las cuotas son iguales entre sí.
  *
@@ -130,6 +140,7 @@ module.exports = {
   getTotalWithInterest,
   getTotalToReturn,
   addFrequencyPeriods,
+  adjustDueDatesWithBusinessDayRule,
   getDueDates,
   getDueDatesFromFirstPayment,
   getWeekBounds,
