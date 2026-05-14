@@ -43,6 +43,9 @@ router.patch('/:id/reject',
 router.patch('/:id/early-settlement',
   authorize('ADMIN'), v.credits.earlySettlement, validate, controller.earlySettlement
 );
+router.post('/:id/refinance',
+  authorize('ADMIN'), v.credits.refinance, validate, controller.refinance
+);
 
 // Historial de cobros aprobados del crédito
 router.get('/:creditId/payments',
