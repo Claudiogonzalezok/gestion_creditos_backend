@@ -95,9 +95,10 @@ WHERE
 -- que solo tenga la variante estándar (color, size, capacity todos NULL).
 -- Mantiene la "Variante estándar" intacta.
 -- Precio base: toma el current_price de la variante estándar del mismo producto.
-DO $ $ DECLARE r RECORD;
-
-BEGIN FOR r IN
+DO $$
+DECLARE r RECORD;
+BEGIN
+FOR r IN
 SELECT
     DISTINCT pv.product_id,
     pv.current_price
@@ -171,4 +172,5 @@ VALUES
 
 END LOOP;
 
-END $ $;
+END
+$$;
