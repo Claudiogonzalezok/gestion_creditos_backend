@@ -625,6 +625,19 @@ const reject = async (id, rejectionReason, adminId) => {
        WHERE id = $3`,
       [rejectionReason, adminId, id]
     );
+    // Si es una refinanciación rechazada, revertir el crédito original a ACTIVE
+    if (credit.refinanced_from_credit_id) {
+      await client.query(
+        `UPDATE credits
+         SET status = 'ACTIVE',
+             refinanced_at     = NULL,
+             refinanced_by     = NULL,
+             refinanced_reason = NULL,
+             updated_at        = NOW()
+         WHERE id = $1 AND status = 'REFINANCED'`,
+        [credit.refinanced_from_credit_id]
+      );
+    }
   });
 };
 
