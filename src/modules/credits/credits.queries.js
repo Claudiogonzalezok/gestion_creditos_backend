@@ -53,6 +53,7 @@ const findById = async (id) => {
             c.interest_rate::float8, c.status, c.rejection_reason, c.notes, c.created_by,
             c.created_at, c.approved_at, c.approved_by,
             c.settled_at, c.settlement_amount::float8, c.settlement_type,
+            c.refinanced_from_credit_id,
             cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
             cu.phone AS customer_phone,
             u.id AS created_by_id, u.full_name AS created_by_name

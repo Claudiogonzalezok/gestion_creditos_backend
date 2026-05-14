@@ -193,6 +193,8 @@ const getAll = async (filters, requestingUser) => {
 const getById = async (id) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
+  const chain = await queries.getRefinancingChain(id);
+  credit.refinancing_chain = chain;
   return sanitizeCredit(credit);
 };
 
