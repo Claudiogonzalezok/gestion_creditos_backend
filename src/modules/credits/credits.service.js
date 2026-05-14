@@ -627,15 +627,20 @@ const reject = async (id, rejectionReason, adminId) => {
     );
     // Si es una refinanciación rechazada, revertir el crédito original a ACTIVE
     if (credit.refinanced_from_credit_id) {
+      const rejectedNote = `Refinanciación rechazada (${new Date().toLocaleDateString('es-AR')}): ${rejectionReason}`;
       await client.query(
         `UPDATE credits
-         SET status = 'ACTIVE',
+         SET status            = 'ACTIVE',
              refinanced_at     = NULL,
              refinanced_by     = NULL,
              refinanced_reason = NULL,
-             updated_at        = NOW()
+             notes = CASE
+               WHEN notes IS NULL THEN $2
+               ELSE notes || ' | ' || $2
+             END,
+             updated_at = NOW()
          WHERE id = $1 AND status = 'REFINANCED'`,
-        [credit.refinanced_from_credit_id]
+        [credit.refinanced_from_credit_id, rejectedNote]
       );
     }
   });
