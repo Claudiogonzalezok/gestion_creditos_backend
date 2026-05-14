@@ -13,6 +13,7 @@ router.get('/',
   [
     query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.'),
     query('collector_id').optional().isUUID().withMessage('collector_id debe ser un UUID válido.'),
+    query('include_summary').optional().isIn(['true','false']).withMessage('include_summary debe ser true o false.'),
   ],
   validate,
   controller.getAll
@@ -20,6 +21,10 @@ router.get('/',
 router.get('/:id',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.customers.id, validate,
   controller.getById
+);
+router.get('/:id/wizard-summary',
+  authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.customers.id, validate,
+  controller.getWizardSummary
 );
 
 // Alta — Admin, Vendedor y Vendedor-Cobrador

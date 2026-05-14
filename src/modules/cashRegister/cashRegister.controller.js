@@ -12,8 +12,9 @@ const close = async (req, res) => {
     const result = await service.close(req.body, req.user.id);
     return response.created(res, result, 'Cierre de caja registrado correctamente.');
   } catch (err) {
-    if (err.status === 409)
-      return response.conflict(res, err.message, err.pending_payments ?? null);
+    if (err.status === 409) return response.conflict(res, err.message, err.pending_payments ?? null);
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    if (err.status === 400) return response.badRequest(res, err.message);
     return response.serverError(res, err);
   }
 };

@@ -276,6 +276,8 @@ const credits = {
       .isUUID().withMessage('Cada variant_id debe ser un UUID válido.'),
     body('products.*.quantity').optional()
       .isInt({ min: 1, max: 9999 }).withMessage('La cantidad debe ser entre 1 y 9999.'),
+    body('products.*.installments_count').optional()
+      .isInt({ min: 1, max: 120 }).withMessage('La cantidad de cuotas por producto debe ser entre 1 y 120.'),
     body('down_payment').optional({ nullable: true })
       .custom(val => {
         if (val == null) return true;
@@ -283,6 +285,7 @@ const credits = {
         if (isNaN(n) || n < 0) throw new Error('El enganche debe ser un número mayor o igual a 0.');
         return true;
       }),
+    isDate('first_payment_date', 'La fecha del primer pago', false),
     body().custom((body) => {
       if (body.type === 'LOAN' && !body.total_amount)
         throw new Error('El monto total es obligatorio para préstamos.');
@@ -354,6 +357,21 @@ const payments = {
     isUUIDParam('id', 'El ID de cobro'),
     body('rejection_reason').trim()
       .notEmpty().withMessage('El motivo de rechazo es obligatorio.')
+      .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
+  ],
+  adminDirect: [
+    isUUID('installment_id', 'La cuota'),
+    isPositiveNumber('amount_received', 'El monto recibido', { min: 0.01, max: 99999999 }),
+    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
+    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia de transferencia no puede superar los 100 caracteres.'),
+    body('notes').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
+  ],
+  reverse: [
+    isUUIDParam('id', 'El ID de cobro'),
+    body('reason').trim()
+      .notEmpty().withMessage('El motivo de reversión es obligatorio.')
       .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
   ],
   id: [ isUUIDParam('id', 'El ID de cobro') ],
@@ -549,6 +567,34 @@ const commissions = {
   ],
 };
 
+// ── HOLIDAYS (feriados) ───────────────────────────────────────
+const holidays = {
+  create: [
+    isDate('date', 'La fecha del feriado'),
+    isString('name', 'El nombre del feriado', { min: 2, max: 150 }),
+    isEnum('type', 'El tipo de feriado', ['EXTRAORDINARY', 'NATIONAL', 'LOCAL', 'BANKING']),
+    isBool('affects_due_dates', 'Afecta vencimientos', false),
+    isBool('active', 'Estado activo', false),
+    isBool('repeats_annually', 'Se repite anualmente', false),
+    isBool('recalculateFutureInstallments', 'Recalcular cuotas futuras', false),
+  ],
+  update: [
+    isUUIDParam('id', 'El ID de feriado'),
+    isString('name', 'El nombre del feriado', { min: 2, max: 150, required: false }),
+    isEnum('type', 'El tipo de feriado', ['EXTRAORDINARY', 'NATIONAL', 'LOCAL', 'BANKING'], false),
+    isBool('affects_due_dates', 'Afecta vencimientos', false),
+    isBool('active', 'Estado activo', false),
+    isBool('repeats_annually', 'Se repite anualmente', false),
+  ],
+  id: [ isUUIDParam('id', 'El ID de feriado') ],
+  duplicateYear: [
+    body('sourceYear')
+      .isInt({ min: 2000, max: 2999 })
+      .withMessage('El año origen debe ser un número entero entre 2000 y 2999.')
+      .toInt(),
+  ],
+};
+
 module.exports = {
   // Bloques atómicos reutilizables
   isString, isDni, isEmail, isPhone, isUUID, isUUIDParam,
@@ -567,6 +613,7 @@ module.exports = {
   penalties,
   collections,
   commissions,
+  holidays,
   expenses,
   expenseCategories,
   productCategories,

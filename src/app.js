@@ -86,6 +86,7 @@ app.use('/api/product-brands',    require('./modules/productBrands/productBrands
 app.use('/api/product-variants',  require('./modules/productVariants/productVariants.routes'));
 app.use('/api/product-units',     require('./modules/productUnits/productUnits.routes'));
 app.use('/api/system-config', require('./modules/systemConfig/systemConfig.routes'));
+app.use('/api/holidays', require('./modules/holidays/holidays.routes'));
 app.use('/api/interest-rates',require('./modules/interestRates/interestRates.routes'));
 app.use('/api/product-rates', require('./modules/productRates/productRates.routes'));
 app.use('/api/credits',      require('./modules/credits/credits.routes'));

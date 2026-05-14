@@ -51,4 +51,33 @@ const reject = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, approve, reject };
+const adminDirect = async (req, res) => {
+  try {
+    const result = await service.adminDirect(req.body, req.user.id);
+    return response.created(res, result, 'Cobro registrado y aprobado correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const reverse = async (req, res) => {
+  try {
+    const result = await service.reverse(req.params.id, req.body.reason, req.user.id);
+    return response.success(res, result, 'Cobro revertido correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const getByCredit = async (req, res) => {
+  try {
+    return response.success(res, await service.getByCredit(req.params.creditId));
+  } catch (err) { return response.serverError(res, err); }
+};
+
+module.exports = { getAll, getById, create, approve, reject, adminDirect, reverse, getByCredit };
