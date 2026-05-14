@@ -13,16 +13,16 @@ INSERT INTO public.interest_rates (
     active
 )
 VALUES
-    -- WEEKLY
-    ('WEEKLY', 4, 0, 50000, 0.0800, TRUE),
-    ('WEEKLY', 8, 0, 50000, 0.1000, TRUE),
+    -- WEEKLY (las filas 0–50.000 de cuotas 4 y 8 se eliminaron: solapaban con 0–100.000 existentes)
+    ('WEEKLY', 4, 0, 100000, 0.0800, TRUE),
+    ('WEEKLY', 8, 0, 100000, 0.1000, TRUE),
     ('WEEKLY', 12, 0, 100000, 0.1200, TRUE),
     ('WEEKLY', 16, 0, 100000, 0.1400, TRUE),
     ('WEEKLY', 24, 0, 200000, 0.1600, TRUE),
 
-    -- BIWEEKLY
-    ('BIWEEKLY', 2, 0, 50000, 0.0600, TRUE),
-    ('BIWEEKLY', 4, 0, 50000, 0.0800, TRUE),
+    -- BIWEEKLY (las filas 0–50.000 de cuotas 2 y 4 se eliminaron: solapaban con 0–100.000 existentes)
+    ('BIWEEKLY', 2, 0, 100000, 0.0600, TRUE),
+    ('BIWEEKLY', 4, 0, 100000, 0.0800, TRUE),
     ('BIWEEKLY', 6, 0, 100000, 0.1000, TRUE),
     ('BIWEEKLY', 8, 0, 100000, 0.1200, TRUE),
     ('BIWEEKLY', 12, 0, 150000, 0.1400, TRUE),
