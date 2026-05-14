@@ -5,6 +5,7 @@ const prQueries   = require('../productRates/productRates.queries');
 const puQueries   = require('../productUnits/productUnits.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
 const { withTransaction } = require('../../utils/transaction');
+const { localDate } = require('../../utils/date');
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -48,7 +49,7 @@ const decorateSaleCredit = (credit) => {
  * @param {Date} date - Fecha a serializar.
  * @returns {string} Fecha local simplificada.
  */
-const toApiDate = (date) => date.toISOString().slice(0, 10);
+const toApiDate = (date) => localDate(date);
 
 /**
  * Ajusta fechas de vencimiento al próximo día hábil según feriados activos y fines de semana.
