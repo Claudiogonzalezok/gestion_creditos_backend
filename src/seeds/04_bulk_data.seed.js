@@ -42,6 +42,7 @@ const seed = async () => {
     await pool.query(
       `UPDATE users
        SET password_hash = $1,
+           is_temp_password = FALSE,
            failed_attempts = 0,
            locked_at = NULL,
            force_relogin_at = NULL,
