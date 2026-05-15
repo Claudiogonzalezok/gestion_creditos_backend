@@ -120,19 +120,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ ok: false, message: 'Error interno del servidor.' });
 });
 
-// ── Iniciar servidor ──────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`📋  Ambiente: ${process.env.NODE_ENV || 'development'}`);
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
+    console.log(`📋  Ambiente: ${process.env.NODE_ENV || 'development'}`);
 
-  // Iniciar cron jobs solo fuera del entorno de tests
-  if (process.env.NODE_ENV !== 'test') {
-    require('./jobs/overdueInstallments.job').start();
-    require('./jobs/creditExpiry.job').start();
-    require('./jobs/weeklyCommissionCycle.job').start();
-    require('./jobs/tokenCleanup.job').start();
-  }
-});
+    // Iniciar cron jobs solo fuera del entorno de tests
+    if (process.env.NODE_ENV !== 'test') {
+      require('./jobs/overdueInstallments.job').start();
+      require('./jobs/creditExpiry.job').start();
+      require('./jobs/weeklyCommissionCycle.job').start();
+      require('./jobs/tokenCleanup.job').start();
+    }
+  });
+}
 
 module.exports = app;

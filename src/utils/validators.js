@@ -339,6 +339,19 @@ const credits = {
     body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 100 }).withMessage('La referencia no puede superar los 100 caracteres.'),
   ],
+  refinance: [
+    isUUIDParam('id', 'El ID de crédito'),
+    body('installments_count').isInt({ min: 1, max: 120 })
+      .withMessage('La cantidad de cuotas debe ser un entero entre 1 y 120.'),
+    isEnum('payment_frequency', 'La frecuencia de pago', ['WEEKLY','BIWEEKLY','MONTHLY']),
+    body('reason').trim()
+      .notEmpty().withMessage('El motivo de refinanciación es obligatorio.')
+      .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
+    body('extra_charges').optional({ nullable: true }).isFloat({ min: 0 })
+      .withMessage('Los cargos adicionales deben ser un número positivo.'),
+    body('notes').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('Las notas no pueden superar los 500 caracteres.'),
+  ],
   id: [ isUUIDParam('id', 'El ID de crédito') ],
 };
 
