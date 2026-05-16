@@ -5,9 +5,13 @@ const { localDate } = require('../../utils/date');
 const getDashboard = async (date) => {
   const today = localDate();
   const target = date || today;
-  const data  = await queries.getDashboard(target);
+  const [data, closed] = await Promise.all([
+    queries.getDashboard(target),
+    queries.findByDate(target),
+  ]);
   return {
     date:                target,
+    is_closed:           !!closed,
     cash_amount:         data.cash_amount,
     transfer_amount:     data.transfer_amount,
     total_collected:     data.total_collected,

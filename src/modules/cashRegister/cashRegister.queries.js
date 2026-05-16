@@ -20,7 +20,7 @@ const getDashboard = async (date) => {
          COUNT(*) FILTER (WHERE status = 'PENDING')                                                            AS pending_count
        FROM payments
        WHERE (status = 'APPROVED' AND approved_at::date = $1::date)
-          OR  status = 'PENDING'
+          OR  (status = 'PENDING'  AND created_at::date = $1::date)
      ),
      down_payments_data AS (
         SELECT
@@ -113,14 +113,16 @@ const getDailyTotals = async (date) => {
   return r.rows[0];
 };
 
-// ── Pre-cargas pendientes (cualquier fecha) — bloquea el cierre ───────────────
-const getPendingPaymentsToday = async (_date) => {
+// ── Pre-cargas pendientes del día — bloquea el cierre ────────────────────────
+const getPendingPaymentsToday = async (date) => {
   const r = await pool.query(
     `SELECT
        COUNT(*)::int                                    AS count,
        COALESCE(SUM(amount_received), 0)::float8        AS amount
      FROM payments
-     WHERE status = 'PENDING'`
+     WHERE status = 'PENDING'
+       AND created_at::date = $1::date`,
+    [date]
   );
   return r.rows[0];
 };
