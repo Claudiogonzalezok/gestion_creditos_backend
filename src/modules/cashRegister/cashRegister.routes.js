@@ -9,6 +9,7 @@ router.use(authenticate);
 router.use(authorize('ADMIN'));
 
 router.get('/dashboard', controller.getDashboard);
+router.get('/pre-close', controller.getPreClose);
 router.get('/',
   [
     query('date_from').optional().isISO8601().withMessage('date_from debe ser una fecha válida en formato YYYY-MM-DD.'),
