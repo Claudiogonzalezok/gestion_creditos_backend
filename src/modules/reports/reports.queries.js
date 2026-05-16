@@ -371,6 +371,20 @@ const getSummaryReport = async () => {
        WHERE c.status = 'ACTIVE'
          AND i.status = 'PENDING'
          AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 6
+     ),
+     active_credits AS (
+       SELECT COUNT(*)::int AS count
+       FROM credits
+       WHERE status = 'ACTIVE'
+     ),
+     refinanced_month AS (
+       SELECT
+         COUNT(*)::int                                AS count,
+         COALESCE(SUM(total_amount), 0)::float8       AS amount
+       FROM credits
+       WHERE refinanced_from_credit_id IS NOT NULL
+         AND created_at >= date_trunc('month', CURRENT_DATE)
+         AND created_at <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
      )
      SELECT
        CURRENT_DATE                          AS report_date,
@@ -384,17 +398,22 @@ const getSummaryReport = async () => {
        pp.count                              AS pending_payments_count,
        pc.count                              AS pending_credits_count,
        po.balance                            AS active_portfolio_balance,
+       ac.count                              AS active_credits_count,
        ov.count                              AS overdue_count,
        ov.amount                             AS overdue_amount,
        up.count                              AS upcoming_7d_count,
-       up.amount                             AS upcoming_7d_amount
+       up.amount                             AS upcoming_7d_amount,
+       rm.count                              AS refinanced_month_count,
+       rm.amount                             AS refinanced_month_amount
      FROM today_payments tp,
           today_down_payments tdp,
           pending_payments pp,
           pending_credits pc,
           portfolio po,
+          active_credits ac,
           overdue ov,
-          upcoming up`,
+          upcoming up,
+          refinanced_month rm`,
   );
   return r.rows[0];
 };
