@@ -68,9 +68,11 @@ const getDashboard = async (date) => {
 // ── Totales del día para el cierre — una sola query ───────────
 /**
  * Calcula los totales diarios usados para el cierre de caja.
- * Mantiene separado el ingreso por enganches respecto de otros movimientos no requeridos.
+ * Devuelve ingresos brutos, egresos desglosados por método y saldos netos.
+ * cash_amount_neto     = (cobros_efec + enganches_efec) - (gastos_efec + comisiones_efec)
+ * transfer_amount_neto = (cobros_transf + enganches_transf) - (gastos_transf + comisiones_transf)
  * @param {string} date - Fecha local del cierre.
- * @returns {Promise<object>} Totales de efectivo, transferencias y egresos.
+ * @returns {Promise<object>} Totales brutos, egresos y netos de efectivo y transferencia.
  */
 const getDailyTotals = async (date) => {
   const r = await pool.query(
@@ -83,15 +85,18 @@ const getDailyTotals = async (date) => {
        WHERE status = 'APPROVED' AND approved_at::date = $1::date
      ),
      down_payment_totals AS (
-        SELECT
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
-        FROM credit_down_payments
-        WHERE created_at::date = $1::date
-          AND payment_type = 'DOWN_PAYMENT'
-      ),
-     egreses_totals AS (
-       SELECT COALESCE(SUM(total_paid), 0) AS total
+       SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+       FROM credit_down_payments
+       WHERE created_at::date = $1::date
+         AND payment_type = 'DOWN_PAYMENT'
+     ),
+     commissions_totals AS (
+       SELECT
+         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+         COALESCE(SUM(total_paid), 0)                                             AS total
        FROM commission_liquidations
        WHERE paid_at::date = $1::date
      ),
@@ -104,10 +109,19 @@ const getDailyTotals = async (date) => {
        WHERE created_at::date = $1::date
      )
      SELECT
-       (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
-       (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
-       (e.total + ex.total)::float8                         AS total_outflows
-     FROM payments_totals p, down_payment_totals dp, egreses_totals e, expenses_totals ex`,
+       -- Ingresos brutos por método
+       (p.cash_amount     + dp.cash_amount)::float8                                         AS gross_cash,
+       (p.transfer_amount + dp.transfer_amount)::float8                                     AS gross_transfer,
+       -- Egresos desglosados por método
+       ex.cash_amount::float8                                                               AS expenses_cash,
+       ex.transfer_amount::float8                                                           AS expenses_transfer,
+       c.cash_amount::float8                                                                AS commissions_cash,
+       c.transfer_amount::float8                                                            AS commissions_transfer,
+       (ex.total + c.total)::float8                                                         AS total_outflows,
+       -- Saldos netos por método (ingresos - egresos del mismo método)
+       (p.cash_amount     + dp.cash_amount     - ex.cash_amount     - c.cash_amount)::float8     AS cash_amount,
+       (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount)::float8 AS transfer_amount
+     FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex`,
     [date]
   );
   return r.rows[0];
@@ -122,6 +136,74 @@ const getPendingPaymentsToday = async (date) => {
      FROM payments
      WHERE status = 'PENDING'
        AND created_at::date = $1::date`,
+    [date]
+  );
+  return r.rows[0];
+};
+
+// ── Resumen pre-cierre (solo lectura) ────────────────────────
+/**
+ * Devuelve el desglose completo del día para mostrar antes del cierre.
+ * Reutiliza la misma lógica de getDailyTotals más el detalle de ingresos y pendientes.
+ * @param {string} date - Fecha local 'YYYY-MM-DD'.
+ * @returns {Promise<object>} Desglose de ingresos, egresos, saldos netos y pendientes.
+ */
+const getPreClose = async (date) => {
+  const r = await pool.query(
+    `WITH
+     payments_totals AS (
+       SELECT
+         COALESCE(SUM(amount_received) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(amount_received) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+       FROM payments
+       WHERE status = 'APPROVED' AND approved_at::date = $1::date
+     ),
+     down_payment_totals AS (
+       SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+       FROM credit_down_payments
+       WHERE created_at::date = $1::date
+         AND payment_type = 'DOWN_PAYMENT'
+     ),
+     commissions_totals AS (
+       SELECT
+         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+       FROM commission_liquidations
+       WHERE paid_at::date = $1::date
+     ),
+     expenses_totals AS (
+       SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+       FROM expenses
+       WHERE created_at::date = $1::date
+     ),
+     pending_totals AS (
+       SELECT
+         COUNT(*)::int                                   AS count,
+         COALESCE(SUM(amount_received), 0)::float8       AS amount
+       FROM payments
+       WHERE status = 'PENDING'
+         AND created_at::date = $1::date
+     )
+     SELECT
+       p.cash_amount::float8                                                                     AS cobros_efectivo,
+       p.transfer_amount::float8                                                                 AS cobros_transferencia,
+       dp.cash_amount::float8                                                                    AS enganches_efectivo,
+       dp.transfer_amount::float8                                                                AS enganches_transferencia,
+       (p.cash_amount + p.transfer_amount + dp.cash_amount + dp.transfer_amount)::float8         AS total_bruto,
+       ex.cash_amount::float8                                                                    AS gastos_efectivo,
+       ex.transfer_amount::float8                                                                AS gastos_transferencia,
+       c.cash_amount::float8                                                                     AS comisiones_efectivo,
+       c.transfer_amount::float8                                                                 AS comisiones_transferencia,
+       (ex.cash_amount + ex.transfer_amount + c.cash_amount + c.transfer_amount)::float8         AS total_egresos,
+       (p.cash_amount + dp.cash_amount - ex.cash_amount - c.cash_amount)::float8                 AS efectivo_esperado,
+       (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount)::float8 AS transferencia_esperada,
+       pt.count                                                                                  AS pendientes_count,
+       pt.amount                                                                                 AS pendientes_amount
+     FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, pending_totals pt`,
     [date]
   );
   return r.rows[0];
@@ -276,6 +358,7 @@ const linkLiquidations = async (client, cashRegisterId, date) => {
 module.exports = {
   getDashboard,
   getDailyTotals,
+  getPreClose,
   getPendingPaymentsToday,
   findByDate,
   findAll,
