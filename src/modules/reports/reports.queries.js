@@ -216,7 +216,7 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
        ON p.collector_id = u.id
        AND p.approved_at::date BETWEEN $1 AND $2
        AND p.status = 'APPROVED'
-     WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR') AND u.status = 'ACTIVE'
+     WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
      ORDER BY total_collected DESC`,
     [dateFrom, dateTo],
@@ -419,6 +419,35 @@ const getSummaryReport = async () => {
   return r.rows[0];
 };
 
+// ── 8. Reporte de vendedores ────────────────────────────────
+
+/**
+ * Obtiene el reporte de vendedores agrupando por créditos creados en el rango de fechas.
+ * Incluye roles SELLER, SELLER_COLLECTOR y ADMIN.
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<array>} Lista de vendedores con estadísticas de créditos creados.
+ */
+const getSellersReport = async (dateFrom, dateTo) => {
+  const r = await pool.query(
+    `SELECT
+       u.id                                                                      AS seller_id,
+       u.full_name                                                               AS seller_name,
+       u.role,
+       COUNT(c.id)::int                                                          AS total_credits,
+       COALESCE(SUM(c.total_amount), 0)::float8                                 AS total_amount
+     FROM users u
+     LEFT JOIN credits c
+       ON c.created_by = u.id
+       AND c.created_at::date BETWEEN $1 AND $2
+     WHERE u.role IN ('SELLER','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
+     GROUP BY u.id, u.full_name, u.role
+     ORDER BY total_amount DESC`,
+    [dateFrom, dateTo],
+  );
+  return r.rows;
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -427,4 +456,5 @@ module.exports = {
   getProductsReport,
   getUpcomingReport,
   getSummaryReport,
+  getSellersReport,
 };

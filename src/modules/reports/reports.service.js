@@ -10,6 +10,9 @@ const getOverdueReport = () => queries.getOverdueReport();
 const getCollectorsReport = async (dateFrom, dateTo) =>
   queries.getCollectorsReport(dateFrom, dateTo);
 
+const getSellersReport = async (dateFrom, dateTo) =>
+  queries.getSellersReport(dateFrom, dateTo);
+
 const getProductsReport = (stockThreshold) =>
   queries.getProductsReport(stockThreshold);
 
@@ -23,6 +26,7 @@ module.exports = {
   getPortfolioReport,
   getOverdueReport,
   getCollectorsReport,
+  getSellersReport,
   getProductsReport,
   getUpcomingReport,
   getSummaryReport,
