@@ -214,7 +214,8 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
      FROM users u
      LEFT JOIN payments p
        ON p.collector_id = u.id
-       AND p.created_at::date BETWEEN $1 AND $2
+       AND p.approved_at::date BETWEEN $1 AND $2
+       AND p.status = 'APPROVED'
      WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
      ORDER BY total_collected DESC`,

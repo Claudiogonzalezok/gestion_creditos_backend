@@ -657,33 +657,57 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
   if (!pendingInstallments.length)
     throw { status: 409, message: 'Este crédito no tiene cuotas pendientes.' };
 
+  // Validar que no haya pagos pendientes de aprobación
+  const pendingPaymentsResult = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM payments p
+     JOIN installments i ON i.id = p.installment_id
+     WHERE i.credit_id = $1 AND p.status = 'PENDING'`,
+    [id]
+  );
+  if (pendingPaymentsResult.rows[0].count > 0)
+    throw {
+      status: 409,
+      message: 'El crédito tiene pagos pendientes de aprobación. Apruébalos o rechazalos antes de cancelar anticipadamente.',
+    };
+
   const settlementAmount = Math.round(
     pendingInstallments.reduce((sum, inst) => sum + inst.amount_due - inst.amount_paid, 0) * 100
   ) / 100;
 
   return withTransaction(async (client) => {
-    await queries.settleAllInstallments(client, id);
-
     // Un payment por cuota para mantener trazabilidad completa en reportes y auditoría
+    // Se crean en PENDING status para requerir aprobación explícita (doble aprobación)
+    const paymentIds = [];
     for (const inst of pendingInstallments) {
       const instAmount = Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
-      await client.query(
+      const paymentResult = await client.query(
         `INSERT INTO payments
            (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-            status, approved_by, approved_at, notes)
-         VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Cancelación anticipada')`,
+            status, notes)
+         VALUES ($1, $2, $3, $4, $5, 'PENDING', 'Cancelación anticipada')
+         RETURNING id`,
         [inst.id, adminId, instAmount, paymentMethod, transferReference || null]
       );
+      paymentIds.push(paymentResult.rows[0].id);
     }
 
+    // Store settlement info but keep credit ACTIVE until payments are approved
+    // Once all payments are APPROVED, credit will be SETTLED via a separate process
     await client.query(
       `UPDATE credits
-       SET status = 'SETTLED', settled_at = NOW(),
-           settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION', updated_at = NOW()
+       SET settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION',
+           updated_at = NOW()
        WHERE id = $2`,
       [settlementAmount, id]
     );
-    return { credit_id: id, settlement_amount: settlementAmount, payment_method: paymentMethod };
+
+    return {
+      credit_id: id,
+      settlement_amount: settlementAmount,
+      payment_method: paymentMethod,
+      payment_ids: paymentIds,
+      message: 'Cancelación anticipada creada. Los pagos están pendientes de aprobación.'
+    };
   });
 };
 
