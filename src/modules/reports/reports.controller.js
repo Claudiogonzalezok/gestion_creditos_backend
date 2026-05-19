@@ -62,6 +62,12 @@ const getSummaryReport = async (req, res) => {
   } catch (err) { return response.serverError(res, err); }
 };
 
+const getPaymentsOverdue48h = async (req, res) => {
+  try {
+    return response.success(res, await service.getPaymentsOverdue48h());
+  } catch (err) { return response.serverError(res, err); }
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -71,4 +77,5 @@ module.exports = {
   getProductsReport,
   getUpcomingReport,
   getSummaryReport,
+  getPaymentsOverdue48h,
 };

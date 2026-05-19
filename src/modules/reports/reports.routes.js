@@ -53,4 +53,6 @@ router.get('/upcoming',
   controller.getUpcomingReport
 );
 
+router.get('/alerts/overdue-48h', controller.getPaymentsOverdue48h);
+
 module.exports = router;

@@ -21,6 +21,8 @@ const getUpcomingReport = (days) =>
 
 const getSummaryReport = () => queries.getSummaryReport();
 
+const getPaymentsOverdue48h = () => queries.getPaymentsOverdue48h();
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -30,4 +32,5 @@ module.exports = {
   getProductsReport,
   getUpcomingReport,
   getSummaryReport,
+  getPaymentsOverdue48h,
 };
