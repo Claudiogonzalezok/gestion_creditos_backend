@@ -121,7 +121,7 @@ const hasActiveCredits = async (id) => {
   const r = await pool.query(
     `SELECT pu.id FROM product_units pu
      JOIN product_variants pv ON pv.id = pu.variant_id
-     WHERE pv.product_id = $1 AND pu.status IN ('RESERVED','SOLD')
+     WHERE pv.product_id = $1 AND pu.status IN ('RESERVED')
      LIMIT 1`,
     [id]
   );
