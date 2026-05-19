@@ -330,6 +330,8 @@ const getSummaryReport = async () => {
       today_down_payments AS (
         SELECT
           COALESCE(SUM(amount), 0)::float8 AS total,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0)::float8 AS cash,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0)::float8 AS transfer,
           COUNT(*)::int                    AS count
         FROM credit_down_payments
         WHERE created_at::date = CURRENT_DATE
@@ -381,8 +383,8 @@ const getSummaryReport = async () => {
      SELECT
        CURRENT_DATE                          AS report_date,
        tp.collected                          AS today_collected,
-       tp.cash                               AS today_cash,
-       tp.transfer                           AS today_transfer,
+       (tp.cash + tdp.cash)                  AS today_cash,
+       (tp.transfer + tdp.transfer)          AS today_transfer,
        tp.count                              AS today_payments_count,
        tdp.total                             AS today_down_payments,
        tdp.count                             AS today_down_payments_count,
