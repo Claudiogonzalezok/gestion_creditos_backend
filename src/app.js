@@ -91,8 +91,9 @@ app.use('/api/interest-rates',require('./modules/interestRates/interestRates.rou
 app.use('/api/product-rates', require('./modules/productRates/productRates.routes'));
 app.use('/api/credits',      require('./modules/credits/credits.routes'));
 app.use('/api/installments', require('./modules/installments/installments.routes'));
-app.use('/api/payments',     require('./modules/payments/payments.routes'));
-app.use('/api/collections',  require('./modules/collections/collections.routes'));
+app.use('/api/payments',             require('./modules/payments/payments.routes'));
+app.use('/api/collection-attempts', require('./modules/collectionAttempts/collectionAttempts.routes'));
+app.use('/api/collections',         require('./modules/collections/collections.routes'));
 app.use('/api/commissions',  require('./modules/commissions/commissions.routes'));
 app.use('/api/cash-register',require('./modules/cashRegister/cashRegister.routes'));
 app.use('/api/expenses',          require('./modules/expenses/expenses.routes'));

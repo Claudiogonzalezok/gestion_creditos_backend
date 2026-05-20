@@ -195,6 +195,14 @@ const create = async (data, requestingUser) => {
 
   const amountReceived = parseFloat(data.amount_received);
 
+  // Si amount_received no cubre el saldo restante, la cuota quedará PARTIAL → next_visit_date obligatorio.
+  // EDGE CASE documentado (ETAPA 2): si el monto cubre la cuota actual pero redistribuye a cuotas
+  // siguientes, la cuota podría quedar PAID. La validación 100% exacta requeriría un dry-run de
+  // _applyPaymentToInstallments. Se acepta este comportamiento conservador para ETAPA 1.
+  const remainingBalance = amountDue - amountPaid;
+  if (amountReceived < remainingBalance && !data.next_visit_date)
+    throw { status: 422, message: 'La fecha de próxima visita es obligatoria para cobros parciales.' };
+
   if (amountReceived > available) {
     const totalPending = await queries.getTotalPendingBalance(inst.credit_id);
     if (amountReceived > totalPending)
@@ -211,6 +219,7 @@ const create = async (data, requestingUser) => {
     payment_method:     data.payment_method,
     transfer_reference: data.transfer_reference,
     notes:              data.notes,
+    next_visit_date:    data.next_visit_date,
   });
 };
 

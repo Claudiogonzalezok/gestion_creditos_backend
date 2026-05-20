@@ -3,7 +3,7 @@ const pool = require('../../config/db');
 const findAll = async ({ status, collector_id, installment_id } = {}) => {
   let q = `
     SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
-           p.transfer_reference, p.status, p.rejection_reason, p.notes, p.created_at,
+           p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date, p.created_at,
            p.approved_at, p.approved_by,
            p.is_reversal, p.admin_direct, p.parent_payment_id,
            i.installment_number, i.amount_due::float8, i.due_date,
@@ -27,7 +27,7 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
 const findById = async (id) => {
   const r = await pool.query(
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8, p.payment_method,
-            p.transfer_reference, p.status, p.rejection_reason, p.notes,
+            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date,
             p.is_reversal, p.admin_direct, p.reversal_reason,
             p.created_at, p.approved_at, p.approved_by,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
@@ -63,12 +63,12 @@ const getPendingCommittedAmount = async (installmentId) => {
   return r.rows[0].total;
 };
 
-const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes }) => {
+const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date }) => {
   const r = await pool.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, created_at`,
-    [installment_id, collector_id, amount_received, payment_method, transfer_reference || null, notes || null]
+    `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, installment_id, amount_received::float8, payment_method, status, next_visit_date, created_at`,
+    [installment_id, collector_id, amount_received, payment_method, transfer_reference || null, notes || null, next_visit_date || null]
   );
   return r.rows[0];
 };
