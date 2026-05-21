@@ -1,6 +1,52 @@
 const pool = require('../../config/db');
 
 // =============================================================================
+// SELECT_COLLECTION_REFERENCE — expresión derivada que arma una frase única
+// lista para mostrar: "Cuota X de N · crédito de <productos>" o
+// "Cuota X de N · préstamo de $<monto>".
+//
+// Reutilizada por findInstallmentsForSheet y findById para garantizar el mismo
+// wording en planilla del cobrador, admin y diálogo de cobro.
+//
+// Detalles:
+//   - SALE: muestra hasta 2 títulos DISTINTOS de producto, y agrega "y N más"
+//     si hay más. Cada credit_products es una unidad física (puede repetirse el
+//     mismo producto N veces); por eso usamos DISTINCT.
+//     Cadena de FKs: credit_products → product_units → product_variants → products.
+//   - LOAN: formato moneda Argentino sin depender de lc_numeric del servidor —
+//     to_char en formato US y translate(',.', '.,') lo invierte.
+//   - Asume JOIN previo: credits AS c, installments AS i.
+// =============================================================================
+const SELECT_COLLECTION_REFERENCE = `
+  CASE
+    WHEN c.type = 'SALE' THEN
+      'Cuota ' || i.installment_number::text || ' de ' || c.installments_count::text ||
+      ' · crédito de ' || COALESCE((
+        SELECT
+          CASE
+            WHEN array_length(t.titles, 1) <= 2
+              THEN array_to_string(t.titles, ' + ')
+            ELSE
+              array_to_string(t.titles[1:2], ' + ') ||
+              ' y ' || (array_length(t.titles, 1) - 2)::text || ' más'
+          END
+        FROM (
+          SELECT array_agg(DISTINCT p.title ORDER BY p.title) AS titles
+          FROM credit_products cp
+          JOIN product_units    pu ON pu.id = cp.product_unit_id
+          JOIN product_variants pv ON pv.id = pu.variant_id
+          JOIN products         p  ON p.id  = pv.product_id
+          WHERE cp.credit_id = c.id
+        ) t
+      ), 'artículos')
+    ELSE
+      'Cuota ' || i.installment_number::text || ' de ' || c.installments_count::text ||
+      ' · préstamo de $' ||
+      translate(to_char(round(c.total_amount), 'FM999G999G999G990'), ',.', '.,')
+  END
+`;
+
+// =============================================================================
 // CTE latest_next_visit — construida y documentada de forma aislada
 //
 // Fuente de verdad: ÚLTIMO registro creado por cuota (created_at DESC).
@@ -141,7 +187,8 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
          WHERE p.installment_id = i.id
            AND p.status = 'PENDING'
            AND p.is_reversal = FALSE
-       )                     AS has_pending_payment
+       )                     AS has_pending_payment,
+       ${SELECT_COLLECTION_REFERENCE} AS collection_reference
      FROM installments i
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
@@ -303,7 +350,8 @@ const findById = async (id) => {
               WHERE p.installment_id = i.id
                 AND p.status = 'PENDING'
                 AND p.is_reversal = FALSE
-            ) AS has_pending_payment
+            ) AS has_pending_payment,
+            ${SELECT_COLLECTION_REFERENCE} AS collection_reference
      FROM collection_sheet_details csd
      JOIN installments i ON i.id  = csd.installment_id
      JOIN credits c      ON c.id  = i.credit_id
