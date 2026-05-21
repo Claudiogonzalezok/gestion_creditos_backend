@@ -26,6 +26,12 @@ const generate = async (data, adminId) => {
   const { collector_id, date, filter } = data;
   const selectedFilter = filter || 'ALL_PENDING';
 
+  // No se permiten planillas para fechas pasadas — no aportan valor operativo y
+  // pueden enmascarar errores de digitación al elegir la fecha.
+  const today = new Date().toISOString().split('T')[0];
+  if (date < today)
+    throw { status: 400, message: 'No se puede generar una planilla para una fecha pasada.' };
+
   const result = await withTransaction(async (client) => {
     await lockSheetGeneration(client, collector_id, date);
 
