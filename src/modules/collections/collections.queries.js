@@ -210,13 +210,16 @@ const markSheetAsRegenerated = async (id, client) => {
 };
 
 /**
- * Lista planillas activas con filtros opcionales.
- * Solo devuelve planillas con status = 'ACTIVE' para evitar duplicados visuales.
- * Las planillas REGENERATED quedan disponibles únicamente vía findById (auditoría Admin).
- * @param {{ collectorId?: string, date?: string }} filters
+ * Lista planillas con filtros opcionales.
+ * Por defecto devuelve solo ACTIVE; con includeRegenerated=true suma las REGENERATED
+ * para auditoría (filtro exclusivo del Admin, restringido en service).
+ * @param {{ collectorId?: string, date?: string, includeRegenerated?: boolean }} filters
  * @returns {Promise<Array>}
  */
-const findAll = async ({ collectorId, date } = {}) => {
+const findAll = async ({ collectorId, date, includeRegenerated } = {}) => {
+  const statusFilter = includeRegenerated
+    ? `cs.status IN ('ACTIVE','REGENERATED')`
+    : `cs.status = 'ACTIVE'`;
   let q = `
     SELECT cs.id, cs.sheet_date, cs.filter_used, cs.status, cs.created_at,
            u.full_name AS collector_name,
@@ -224,7 +227,7 @@ const findAll = async ({ collectorId, date } = {}) => {
     FROM collection_sheets cs
     JOIN users u ON u.id = cs.collector_id
     LEFT JOIN collection_sheet_details csd ON csd.sheet_id = cs.id
-    WHERE cs.status = 'ACTIVE'`;
+    WHERE ${statusFilter}`;
   const params = [];
   if (collectorId) { params.push(collectorId); q += ` AND cs.collector_id = $${params.length}`; }
   if (date)        { params.push(date);        q += ` AND cs.sheet_date::date = $${params.length}::date`; }
@@ -253,8 +256,11 @@ const findById = async (id) => {
   if (!sheetRes.rows.length) return null;
   const sheet = sheetRes.rows[0];
 
+  // Trae next_visit_date actualizado vía CTE (último registro en payments o collection_attempts).
+  // El criterio de inclusión inicial quedó snapshoteado en csd.inclusion_criteria al generar la planilla.
   const detailsRes = await pool.query(
-    `SELECT csd.order_number,
+    `WITH ${CTE_LATEST_NEXT_VISIT}
+     SELECT csd.order_number,
             csd.planned_amount::float8,
             csd.inclusion_criteria,
             csd.antecedent_type,
@@ -272,11 +278,13 @@ const findById = async (id) => {
             c.type AS credit_type,
             cu.full_name AS customer_name,
             cu.phone AS customer_phone,
-            cu.address AS customer_address
+            cu.address AS customer_address,
+            lnv.next_visit_date
      FROM collection_sheet_details csd
      JOIN installments i ON i.id  = csd.installment_id
      JOIN credits c      ON c.id  = i.credit_id
      JOIN customers cu   ON cu.id = c.customer_id
+     LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
      WHERE csd.sheet_id = $1
      ORDER BY csd.order_number`,
     [id]

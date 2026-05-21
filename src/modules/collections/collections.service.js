@@ -95,7 +95,10 @@ const generate = async (data, adminId) => {
 const getAll = async (filters, requestingUser) => {
   // Cobrador solo ve sus propias planillas
   if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role))
-    filters = { ...filters, collectorId: requestingUser.id };
+    filters = { ...filters, collectorId: requestingUser.id, includeRegenerated: false };
+  // includeRegenerated solo aplica para Admin (auditoría de planillas regeneradas)
+  if (requestingUser.role !== 'ADMIN')
+    filters = { ...filters, includeRegenerated: false };
   return queries.findAll(filters);
 };
 
