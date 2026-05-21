@@ -27,6 +27,7 @@ const CTE_LATEST_NEXT_VISIT = `
       SELECT installment_id, next_visit_date, created_at
       FROM collection_attempts
       WHERE next_visit_date IS NOT NULL
+        AND voided_at IS NULL
     ) combined_visits
     ORDER BY installment_id, created_at DESC
   )
@@ -48,12 +49,14 @@ const CTE_LATEST_ANTECEDENT = `
   latest_antecedent AS (
     SELECT DISTINCT ON (installment_id)
       installment_id,
+      antecedent_id,
       antecedent_type,
       antecedent_date,
       antecedent_notes
     FROM (
       SELECT
         p.installment_id,
+        p.id                AS antecedent_id,
         'PARTIAL_PAYMENT'   AS antecedent_type,
         p.created_at::date  AS antecedent_date,
         p.notes             AS antecedent_notes,
@@ -64,11 +67,13 @@ const CTE_LATEST_ANTECEDENT = `
       UNION ALL
       SELECT
         ca.installment_id,
+        ca.id               AS antecedent_id,
         ca.attempt_type     AS antecedent_type,
         ca.created_at::date AS antecedent_date,
         ca.notes            AS antecedent_notes,
         ca.created_at
       FROM collection_attempts ca
+      WHERE ca.voided_at IS NULL
     ) combined_antecedents
     ORDER BY installment_id, created_at DESC
   )
@@ -127,6 +132,7 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
          WHEN lnv.next_visit_date = $2::date THEN 'VISIT_DATE'
          ELSE 'DUE_DATE'
        END                   AS inclusion_criteria,
+       la.antecedent_id,
        la.antecedent_type,
        la.antecedent_date,
        la.antecedent_notes,
@@ -274,6 +280,7 @@ const findById = async (id) => {
      SELECT csd.order_number,
             csd.planned_amount::float8,
             csd.inclusion_criteria,
+            la.antecedent_id,
             la.antecedent_type,
             la.antecedent_date,
             la.antecedent_notes,

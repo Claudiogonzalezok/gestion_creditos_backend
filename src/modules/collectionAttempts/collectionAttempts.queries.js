@@ -26,6 +26,7 @@ const findAll = async ({ collectorId, installmentId } = {}) => {
   let q = `
     SELECT ca.id, ca.attempt_type, ca.reason, ca.next_visit_date, ca.notes, ca.created_at,
            ca.installment_id, ca.collector_id, ca.created_by,
+           ca.voided_at, ca.voided_by,
            i.installment_number, i.due_date, i.amount_due::float8, i.amount_paid::float8, i.status AS installment_status,
            c.id AS credit_id, c.type AS credit_type,
            cu.full_name AS customer_name, cu.dni AS customer_dni,
@@ -52,6 +53,7 @@ const findById = async (id) => {
   const r = await pool.query(
     `SELECT ca.id, ca.attempt_type, ca.reason, ca.next_visit_date, ca.notes, ca.created_at,
             ca.installment_id, ca.collector_id, ca.created_by,
+            ca.voided_at, ca.voided_by,
             i.installment_number, i.due_date, i.amount_due::float8, i.amount_paid::float8, i.status AS installment_status,
             c.id AS credit_id, c.type AS credit_type,
             cu.full_name AS customer_name, cu.dni AS customer_dni, cu.phone AS customer_phone,
@@ -67,4 +69,34 @@ const findById = async (id) => {
   return r.rows[0] || null;
 };
 
-module.exports = { create, findAll, findById };
+/**
+ * Devuelve el registro crudo (sin joins) — usado por el service para validar
+ * ownership y reglas de anulación (mismo día, mismo cobrador, no anulado).
+ */
+const findRawById = async (id) => {
+  const r = await pool.query(
+    `SELECT id, installment_id, collector_id, created_by, attempt_type,
+            created_at, voided_at, voided_by
+     FROM collection_attempts
+     WHERE id = $1`,
+    [id]
+  );
+  return r.rows[0] || null;
+};
+
+/**
+ * Marca un intento como anulado (supersede pattern). No realiza DELETE físico.
+ * El intento sigue visible en el management log con badge "ANULADO".
+ */
+const markVoided = async (id, voidedBy) => {
+  const r = await pool.query(
+    `UPDATE collection_attempts
+     SET voided_at = NOW(), voided_by = $2
+     WHERE id = $1
+     RETURNING id, voided_at, voided_by`,
+    [id, voidedBy]
+  );
+  return r.rows[0] || null;
+};
+
+module.exports = { create, findAll, findById, findRawById, markVoided };

@@ -31,4 +31,16 @@ const getById = async (req, res) => {
   }
 };
 
-module.exports = { create, getAll, getById };
+const voidAttempt = async (req, res) => {
+  try {
+    const result = await service.voidAttempt(req.params.id, req.user);
+    return response.success(res, result, 'Intento de cobranza anulado.');
+  } catch (err) {
+    if (err.status === 403) return response.forbidden(res, err.message);
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { create, getAll, getById, voidAttempt };

@@ -29,4 +29,10 @@ router.post('/',
   controller.create
 );
 
+router.patch('/:id/void',
+  authorize('ADMIN', 'COLLECTOR', 'SELLER_COLLECTOR'),
+  v.collectionAttempts.id, validate,
+  controller.voidAttempt
+);
+
 module.exports = router;

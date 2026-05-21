@@ -116,7 +116,9 @@ const findManagementLog = async (installmentId) => {
         p.is_reversal,
         p.admin_direct,
         p.rejection_reason,
-        u.full_name            AS collector_name
+        u.full_name            AS collector_name,
+        NULL::timestamptz      AS voided_at,
+        NULL::text             AS voided_by_name
      FROM payments p
      LEFT JOIN users u ON u.id = p.collector_id
      WHERE p.installment_id = $1
@@ -134,9 +136,12 @@ const findManagementLog = async (installmentId) => {
         FALSE                  AS is_reversal,
         FALSE                  AS admin_direct,
         NULL                   AS rejection_reason,
-        u.full_name            AS collector_name
+        u.full_name            AS collector_name,
+        ca.voided_at,
+        uv.full_name           AS voided_by_name
      FROM collection_attempts ca
-     LEFT JOIN users u ON u.id = ca.collector_id
+     LEFT JOIN users u  ON u.id  = ca.collector_id
+     LEFT JOIN users uv ON uv.id = ca.voided_by
      WHERE ca.installment_id = $1
      ORDER BY created_at DESC`,
     [installmentId]

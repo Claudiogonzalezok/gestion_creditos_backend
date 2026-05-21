@@ -86,4 +86,42 @@ const getById = async (id, requestingUser) => {
   return attempt;
 };
 
-module.exports = { create, getAll, getById };
+/**
+ * Anula un intento de cobranza (supersede pattern). Reglas:
+ *   - Solo el cobrador que lo registró puede anularlo (excepto ADMIN).
+ *   - Solo el mismo día calendario en que fue registrado.
+ *   - No se puede anular un intento ya anulado.
+ *   - Nunca se elimina físicamente: queda voided_at / voided_by para auditoría.
+ *
+ * @param {string} id
+ * @param {object} requestingUser
+ * @returns {Promise<object>}
+ */
+const voidAttempt = async (id, requestingUser) => {
+  const attempt = await queries.findRawById(id);
+  if (!attempt) throw { status: 404, message: 'Intento de cobranza no encontrado.' };
+
+  if (attempt.voided_at)
+    throw { status: 409, message: 'Este intento ya fue anulado.' };
+
+  // ADMIN puede anular siempre; cobradores solo lo suyo
+  if (requestingUser.role !== 'ADMIN') {
+    if (attempt.collector_id !== requestingUser.id)
+      throw { status: 403, message: 'Solo el cobrador que registró el intento puede anularlo.' };
+  }
+
+  // Solo mismo día calendario (created_at::date = current_date)
+  const created = new Date(attempt.created_at);
+  const today = new Date();
+  const sameDay =
+    created.getFullYear() === today.getFullYear() &&
+    created.getMonth() === today.getMonth() &&
+    created.getDate() === today.getDate();
+  if (!sameDay)
+    throw { status: 409, message: 'Solo se pueden anular intentos registrados en el día actual.' };
+
+  await queries.markVoided(id, requestingUser.id);
+  return queries.findById(id);
+};
+
+module.exports = { create, getAll, getById, voidAttempt };
