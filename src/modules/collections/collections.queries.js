@@ -129,7 +129,13 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
        END                   AS inclusion_criteria,
        la.antecedent_type,
        la.antecedent_date,
-       la.antecedent_notes
+       la.antecedent_notes,
+       EXISTS (
+         SELECT 1 FROM payments p
+         WHERE p.installment_id = i.id
+           AND p.status = 'PENDING'
+           AND p.is_reversal = FALSE
+       )                     AS has_pending_payment
      FROM installments i
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
@@ -256,16 +262,21 @@ const findById = async (id) => {
   if (!sheetRes.rows.length) return null;
   const sheet = sheetRes.rows[0];
 
-  // Trae next_visit_date actualizado vía CTE (último registro en payments o collection_attempts).
-  // El criterio de inclusión inicial quedó snapshoteado en csd.inclusion_criteria al generar la planilla.
+  // antecedent_* viene de latest_antecedent (CTE), NO del snapshot guardado en csd:
+  // así el admin/cobrador ve siempre la última gestión real, incluso si se registró
+  // después de generar la planilla. El snapshot csd.antecedent_* sigue persistido
+  // en DB intacto, por si en el futuro se quiere auditar el estado al momento de
+  // generación. next_visit_date también sale del CTE para reflejar lo actual.
   const detailsRes = await pool.query(
-    `WITH ${CTE_LATEST_NEXT_VISIT}
+    `WITH
+      ${CTE_LATEST_NEXT_VISIT},
+      ${CTE_LATEST_ANTECEDENT}
      SELECT csd.order_number,
             csd.planned_amount::float8,
             csd.inclusion_criteria,
-            csd.antecedent_type,
-            csd.antecedent_date,
-            csd.antecedent_notes,
+            la.antecedent_type,
+            la.antecedent_date,
+            la.antecedent_notes,
             csd.management_status,
             i.id AS installment_id,
             i.installment_number,
@@ -279,12 +290,19 @@ const findById = async (id) => {
             cu.full_name AS customer_name,
             cu.phone AS customer_phone,
             cu.address AS customer_address,
-            lnv.next_visit_date
+            lnv.next_visit_date,
+            EXISTS (
+              SELECT 1 FROM payments p
+              WHERE p.installment_id = i.id
+                AND p.status = 'PENDING'
+                AND p.is_reversal = FALSE
+            ) AS has_pending_payment
      FROM collection_sheet_details csd
      JOIN installments i ON i.id  = csd.installment_id
      JOIN credits c      ON c.id  = i.credit_id
      JOIN customers cu   ON cu.id = c.customer_id
      LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
+     LEFT JOIN latest_antecedent la  ON la.installment_id  = i.id
      WHERE csd.sheet_id = $1
      ORDER BY csd.order_number`,
     [id]

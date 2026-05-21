@@ -1,3 +1,4 @@
+const pool            = require('../../config/db');
 const queries         = require('./installments.queries');
 const paymentsQueries = require('../payments/payments.queries');
 const { getValue }    = require('../systemConfig/systemConfig.queries');
@@ -70,4 +71,32 @@ const earlyPay = async (id, paymentMethod, transferReference, adminId) => {
   };
 };
 
-module.exports = { getAll, getById, applyPenalty, waivePenalty, earlyPay };
+/**
+ * Devuelve el log cronológico de gestiones (cobros + intentos) sobre una cuota.
+ * COLLECTOR/SELLER_COLLECTOR solo pueden ver cuotas de clientes asignados a ellos;
+ * ADMIN accede a cualquier cuota.
+ *
+ * @param {string} id - ID de la cuota.
+ * @param {object} requestingUser - Usuario autenticado.
+ */
+const getManagementLog = async (id, requestingUser) => {
+  const ownerRes = await pool.query(
+    `SELECT cu.assigned_collector_id
+     FROM installments i
+     JOIN credits c    ON c.id  = i.credit_id
+     JOIN customers cu ON cu.id = c.customer_id
+     WHERE i.id = $1`,
+    [id]
+  );
+  if (!ownerRes.rows.length)
+    throw { status: 404, message: 'Cuota no encontrada.' };
+
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role)) {
+    if (ownerRes.rows[0].assigned_collector_id !== requestingUser.id)
+      throw { status: 403, message: 'No tenés acceso a esta cuota.' };
+  }
+
+  return queries.findManagementLog(id);
+};
+
+module.exports = { getAll, getById, applyPenalty, waivePenalty, earlyPay, getManagementLog };

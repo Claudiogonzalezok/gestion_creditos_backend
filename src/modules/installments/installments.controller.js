@@ -54,4 +54,14 @@ const earlyPay = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, applyPenalty, waivePenalty, earlyPay };
+const getManagementLog = async (req, res) => {
+  try {
+    return response.success(res, await service.getManagementLog(req.params.id, req.user));
+  } catch (err) {
+    if (err.status === 403) return response.forbidden(res, err.message);
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { getAll, getById, applyPenalty, waivePenalty, earlyPay, getManagementLog };

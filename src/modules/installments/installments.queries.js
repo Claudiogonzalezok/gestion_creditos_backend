@@ -90,4 +90,58 @@ const earlyPay = async (client, id, adminId, paymentMethod, transferReference) =
   return inst;
 };
 
-module.exports = { findAll, findById, applyPenalty, waivePenalty, earlyPay };
+/**
+ * Devuelve el log cronológico de gestiones sobre una cuota:
+ *  - Cobros (payments) con su estado y monto
+ *  - Intentos de cobranza (collection_attempts) — NO_PAYMENT / NOT_FOUND
+ *
+ * Ordenado por created_at DESC (más reciente primero) para mostrar
+ * la actividad reciente al admin/cobrador en la UI.
+ *
+ * @param {string} installmentId
+ * @returns {Promise<Array>}
+ */
+const findManagementLog = async (installmentId) => {
+  const r = await pool.query(
+    `SELECT
+        'PAYMENT'              AS event_type,
+        p.id                   AS event_id,
+        p.created_at,
+        p.next_visit_date,
+        NULL                   AS reason,
+        p.notes,
+        p.amount_received::float8 AS amount,
+        p.status               AS payment_status,
+        p.payment_method,
+        p.is_reversal,
+        p.admin_direct,
+        p.rejection_reason,
+        u.full_name            AS collector_name
+     FROM payments p
+     LEFT JOIN users u ON u.id = p.collector_id
+     WHERE p.installment_id = $1
+     UNION ALL
+     SELECT
+        ca.attempt_type        AS event_type,
+        ca.id                  AS event_id,
+        ca.created_at,
+        ca.next_visit_date,
+        ca.reason,
+        ca.notes,
+        NULL                   AS amount,
+        NULL                   AS payment_status,
+        NULL                   AS payment_method,
+        FALSE                  AS is_reversal,
+        FALSE                  AS admin_direct,
+        NULL                   AS rejection_reason,
+        u.full_name            AS collector_name
+     FROM collection_attempts ca
+     LEFT JOIN users u ON u.id = ca.collector_id
+     WHERE ca.installment_id = $1
+     ORDER BY created_at DESC`,
+    [installmentId]
+  );
+  return r.rows;
+};
+
+module.exports = { findAll, findById, applyPenalty, waivePenalty, earlyPay, findManagementLog };
