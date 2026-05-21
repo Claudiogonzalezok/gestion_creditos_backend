@@ -365,6 +365,7 @@ const payments = {
       .isLength({ max: 100 }).withMessage('La referencia de transferencia no puede superar los 100 caracteres.'),
     body('notes').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
+    isDate('next_visit_date', 'La fecha de próxima visita', false),
   ],
   reject: [
     isUUIDParam('id', 'El ID de cobro'),
@@ -580,6 +581,20 @@ const commissions = {
   ],
 };
 
+// ── COLLECTION ATTEMPTS (intentos de cobranza) ───────────────
+const collectionAttempts = {
+  create: [
+    isUUID('installment_id', 'La cuota'),
+    isEnum('attempt_type', 'El tipo de intento', ['NO_PAYMENT', 'NOT_FOUND']),
+    body('reason').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('El motivo no puede superar los 500 caracteres.'),
+    isDate('next_visit_date', 'La fecha de próxima visita', false),
+    body('notes').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
+  ],
+  id: [ isUUIDParam('id', 'El ID de intento de cobranza') ],
+};
+
 // ── HOLIDAYS (feriados) ───────────────────────────────────────
 const holidays = {
   create: [
@@ -625,6 +640,7 @@ module.exports = {
   cashRegister,
   penalties,
   collections,
+  collectionAttempts,
   commissions,
   holidays,
   expenses,

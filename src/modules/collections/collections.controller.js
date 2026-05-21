@@ -4,19 +4,22 @@ const response = require('../../utils/response');
 const generate = async (req, res) => {
   try {
     const result = await service.generate(req.body, req.user.id);
-    return response.created(res, result, 'Planilla de cobro generada correctamente.');
+    return res.status(201).json({ ok: true, message: 'Planilla de cobro generada correctamente.', data: result });
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);
   }
-
 };
 
 const getAll = async (req, res) => {
   try {
-    const { collector_id, date } = req.query;
-    return response.success(res, await service.getAll({ collectorId: collector_id, date }, req.user));
+    const { collector_id, date, include_regenerated } = req.query;
+    const includeRegenerated = include_regenerated === 'true';
+    return response.success(
+      res,
+      await service.getAll({ collectorId: collector_id, date, includeRegenerated }, req.user),
+    );
   } catch (err) { return response.serverError(res, err); }
 };
 

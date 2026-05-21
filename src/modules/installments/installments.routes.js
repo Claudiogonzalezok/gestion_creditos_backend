@@ -23,6 +23,12 @@ router.get('/',
 );
 router.get('/:id', authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'), v.penalties.id, validate, controller.getById);
 
+router.get('/:id/management-log',
+  authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'),
+  v.penalties.id, validate,
+  controller.getManagementLog
+);
+
 router.patch('/:id/apply-penalty',
   authorize('ADMIN'), v.penalties.apply,    validate, controller.applyPenalty
 );
