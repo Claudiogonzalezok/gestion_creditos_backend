@@ -281,6 +281,7 @@ const findAll = async ({ collectorId, date, includeRegenerated } = {}) => {
     : `cs.status = 'ACTIVE'`;
   let q = `
     SELECT cs.id, cs.sheet_date, cs.filter_used, cs.status, cs.created_at,
+           cs.collector_id,
            u.full_name AS collector_name,
            COUNT(csd.id)::int AS total_items
     FROM collection_sheets cs
@@ -292,6 +293,34 @@ const findAll = async ({ collectorId, date, includeRegenerated } = {}) => {
   if (date)        { params.push(date);        q += ` AND cs.sheet_date::date = $${params.length}::date`; }
   q += ` GROUP BY cs.id, u.full_name ORDER BY cs.created_at DESC`;
   return (await pool.query(q, params)).rows;
+};
+
+/**
+ * Busca la planilla ACTIVE para un cobrador en una fecha dada.
+ * Específicamente IGNORA las REGENERATED — solo cuenta como "conflicto" una
+ * planilla vigente, no histórico de regeneraciones previas.
+ * Se usa para el modo skip_if_exists del service.generate y para informar al
+ * admin antes de regenerar.
+ * @param {string} collectorId
+ * @param {string} date - YYYY-MM-DD
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
+ * @returns {Promise<{ id, sheet_date, created_at, generated_by_name }|null>}
+ */
+const findActiveByCollectorAndDate = async (collectorId, date, db = pool) => {
+  const r = await db.query(
+    `SELECT cs.id,
+            cs.sheet_date,
+            cs.created_at,
+            adm.full_name AS generated_by_name
+     FROM collection_sheets cs
+     JOIN users adm ON adm.id = cs.generated_by
+     WHERE cs.collector_id = $1
+       AND cs.sheet_date::date = $2::date
+       AND cs.status = 'ACTIVE'
+     LIMIT 1`,
+    [collectorId, date],
+  );
+  return r.rows[0] || null;
 };
 
 /**
@@ -391,6 +420,7 @@ module.exports = {
   createDetails,
   markSheetAsRegenerated,
   findAll,
+  findActiveByCollectorAndDate,
   findById,
   findUnassignedCustomersWithPending,
 };

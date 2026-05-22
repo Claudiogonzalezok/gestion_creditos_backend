@@ -476,6 +476,7 @@ const collections = {
     isDate('date', 'La fecha de cobro'),
     isEnum('filter', 'El filtro de cuotas',
       ['TODAY','OVERDUE','TODAY_AND_OVERDUE','ALL_PENDING'], false),
+    isBool('skip_if_exists', 'La opción de no regenerar si ya existe', false),
   ],
   id: [ isUUIDParam('id', 'El ID de planilla') ],
 };
