@@ -23,7 +23,7 @@ const lockSheetGeneration = async (client, collectorId, date) => {
  * @returns {Promise<{ sheet: object, alerts: object }>} Planilla generada más alertas del sistema.
  */
 const generate = async (data, adminId) => {
-  const { collector_id, date, filter } = data;
+  const { collector_id, date, filter, skip_if_exists } = data;
   const selectedFilter = filter || 'ALL_PENDING';
 
   // No se permiten planillas para fechas pasadas — no aportan valor operativo y
@@ -32,6 +32,12 @@ const generate = async (data, adminId) => {
   if (date < today)
     throw { status: 400, message: 'No se puede generar una planilla para una fecha pasada.' };
 
+  // skip_if_exists = generación idempotente: si ya hay ACTIVE para
+  // (collector, date) devolvemos { skipped: true, existing_sheet } sin
+  // tocar nada. Esto cubre el caso del batch "generar para todos" cuando
+  // el admin NO quiere regenerar las existentes, y también cualquier
+  // race condition entre múltiples admins/tabs.
+  // REGENERATED no cuenta como conflicto: la query filtra solo ACTIVE.
   const result = await withTransaction(async (client) => {
     await lockSheetGeneration(client, collector_id, date);
 
@@ -42,6 +48,13 @@ const generate = async (data, adminId) => {
     );
     if (!collectorCheck.rows.length)
       throw { status: 404, message: 'Cobrador no encontrado o inactivo.' };
+
+    if (skip_if_exists) {
+      const active = await queries.findActiveByCollectorAndDate(collector_id, date, client);
+      if (active) {
+        return { skipped: true, existing_sheet: active };
+      }
+    }
 
     // Soft-delete: planillas ACTIVE existentes pasan a REGENERATED para preservar historial
     const existing = await client.query(
@@ -69,6 +82,12 @@ const generate = async (data, adminId) => {
 
     return { sheetId: sheet.id, items };
   });
+
+  // skip_if_exists devolvió un atajo sin crear nada nuevo: el controller
+  // se entera por el shape { skipped: true, existing_sheet }.
+  if (result.skipped) {
+    return { skipped: true, existing_sheet: result.existing_sheet };
+  }
 
   // La transacción ya cerró; leemos detalle completo con JOINs
   const full = await queries.findById(result.sheetId);
