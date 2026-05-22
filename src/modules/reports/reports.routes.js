@@ -26,6 +26,7 @@ router.get('/collection', dateRangeRules, validate, controller.getCollectionRepo
 router.get('/portfolio',  controller.getPortfolioReport);
 router.get('/overdue',    controller.getOverdueReport);
 router.get('/collectors', dateRangeRules, validate, controller.getCollectorsReport);
+router.get('/sellers',    dateRangeRules, validate, controller.getSellersReport);
 
 router.get('/products',
   [
@@ -51,5 +52,7 @@ router.get('/upcoming',
   validate,
   controller.getUpcomingReport
 );
+
+router.get('/alerts/overdue-48h', controller.getPaymentsOverdue48h);
 
 module.exports = router;

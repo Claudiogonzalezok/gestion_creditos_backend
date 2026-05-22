@@ -129,4 +129,21 @@ const earlySettlement = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, getSimulateOptions, getSimulateProducts, simulate, simulateAll, approve, reject, earlySettlement };
+const refinance = async (req, res) => {
+  try {
+    const { installments_count, payment_frequency, reason, extra_charges, notes } = req.body;
+    const result = await service.refinance(
+      req.params.id,
+      { installments_count, payment_frequency, reason, extra_charges, notes },
+      req.user.id,
+    );
+    return response.created(res, result, result.message);
+  } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { getAll, getById, create, getSimulateOptions, getSimulateProducts, simulate, simulateAll, approve, reject, earlySettlement, refinance };

@@ -31,6 +31,15 @@ const getCollectorsReport = async (req, res) => {
   }
 };
 
+const getSellersReport = async (req, res) => {
+  try {
+    return response.success(res, await service.getSellersReport(req.query.date_from, req.query.date_to));
+  } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const getProductsReport = async (req, res) => {
   try {
     const threshold = req.query.stock_threshold !== undefined
@@ -53,12 +62,20 @@ const getSummaryReport = async (req, res) => {
   } catch (err) { return response.serverError(res, err); }
 };
 
+const getPaymentsOverdue48h = async (req, res) => {
+  try {
+    return response.success(res, await service.getPaymentsOverdue48h());
+  } catch (err) { return response.serverError(res, err); }
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
   getOverdueReport,
   getCollectorsReport,
+  getSellersReport,
   getProductsReport,
   getUpcomingReport,
   getSummaryReport,
+  getPaymentsOverdue48h,
 };

@@ -91,8 +91,9 @@ app.use('/api/interest-rates',require('./modules/interestRates/interestRates.rou
 app.use('/api/product-rates', require('./modules/productRates/productRates.routes'));
 app.use('/api/credits',      require('./modules/credits/credits.routes'));
 app.use('/api/installments', require('./modules/installments/installments.routes'));
-app.use('/api/payments',     require('./modules/payments/payments.routes'));
-app.use('/api/collections',  require('./modules/collections/collections.routes'));
+app.use('/api/payments',             require('./modules/payments/payments.routes'));
+app.use('/api/collection-attempts', require('./modules/collectionAttempts/collectionAttempts.routes'));
+app.use('/api/collections',         require('./modules/collections/collections.routes'));
 app.use('/api/commissions',  require('./modules/commissions/commissions.routes'));
 app.use('/api/cash-register',require('./modules/cashRegister/cashRegister.routes'));
 app.use('/api/expenses',          require('./modules/expenses/expenses.routes'));
@@ -120,19 +121,20 @@ app.use((err, req, res, next) => {
   res.status(500).json({ ok: false, message: 'Error interno del servidor.' });
 });
 
-// ── Iniciar servidor ──────────────────────────────────────────
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`📋  Ambiente: ${process.env.NODE_ENV || 'development'}`);
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
+    console.log(`📋  Ambiente: ${process.env.NODE_ENV || 'development'}`);
 
-  // Iniciar cron jobs solo fuera del entorno de tests
-  if (process.env.NODE_ENV !== 'test') {
-    require('./jobs/overdueInstallments.job').start();
-    require('./jobs/creditExpiry.job').start();
-    require('./jobs/weeklyCommissionCycle.job').start();
-    require('./jobs/tokenCleanup.job').start();
-  }
-});
+    // Iniciar cron jobs solo fuera del entorno de tests
+    if (process.env.NODE_ENV !== 'test') {
+      require('./jobs/overdueInstallments.job').start();
+      require('./jobs/creditExpiry.job').start();
+      require('./jobs/weeklyCommissionCycle.job').start();
+      require('./jobs/tokenCleanup.job').start();
+    }
+  });
+}
 
 module.exports = app;

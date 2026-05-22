@@ -10,24 +10,16 @@ const pool = require("../../config/db");
  * @returns {Promise<object>} Resumen y detalle diario de recaudación.
  */
 const getCollectionReport = async (dateFrom, dateTo) => {
-  const daily = await pool.query(
-    `SELECT
-       day,
-       SUM(total)::float8               AS total,
-       SUM(total_cash)::float8           AS total_cash,
-       SUM(total_transfer)::float8       AS total_transfer,
-       SUM(installments_count)::int      AS installments_count,
-       SUM(down_payments_total)::float8  AS down_payments_total,
-       SUM(down_payments_count)::int     AS down_payments_count
-     FROM (
+  const result = await pool.query(
+    `WITH collection_data AS (
        SELECT
          p.approved_at::date                                                            AS day,
          COALESCE(SUM(p.amount_received), 0)                                           AS total,
          COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
          COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
-         COUNT(*)                                                                       AS installments_count,
+         COUNT(*)::int                                                                  AS installments_count,
          0::numeric                                                                     AS down_payments_total,
-         0                                                                              AS down_payments_count
+         0::int                                                                         AS down_payments_count
        FROM payments p
        WHERE p.status = 'APPROVED'
          AND p.approved_at::date BETWEEN $1 AND $2
@@ -40,56 +32,55 @@ const getCollectionReport = async (dateFrom, dateTo) => {
          COALESCE(SUM(cdp.amount), 0)                                                  AS total,
          COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0)   AS total_cash,
          COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0)   AS total_transfer,
-         0                                                                              AS installments_count,
+         0::int                                                                         AS installments_count,
          COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
-         COUNT(*)                                                                       AS down_payments_count
-        FROM credit_down_payments cdp
-        WHERE cdp.created_at::date BETWEEN $1 AND $2
-          AND cdp.payment_type = 'DOWN_PAYMENT'
-        GROUP BY cdp.created_at::date
-      ) sub
-     GROUP BY day
-     ORDER BY day`,
+         COUNT(*)::int                                                                  AS down_payments_count
+       FROM credit_down_payments cdp
+       WHERE cdp.created_at::date BETWEEN $1 AND $2
+         AND cdp.payment_type = 'DOWN_PAYMENT'
+       GROUP BY cdp.created_at::date
+     ),
+     daily_aggregated AS (
+       SELECT
+         day,
+         SUM(total)::float8               AS total,
+         SUM(total_cash)::float8          AS total_cash,
+         SUM(total_transfer)::float8      AS total_transfer,
+         SUM(installments_count)::int     AS installments_count,
+         SUM(down_payments_total)::float8 AS down_payments_total,
+         SUM(down_payments_count)::int    AS down_payments_count
+       FROM collection_data
+       GROUP BY day
+       ORDER BY day
+     )
+     SELECT
+       'daily' AS result_type,
+       row_number() OVER (ORDER BY day)::text AS row_order,
+       to_jsonb(d) AS data
+     FROM daily_aggregated d
+
+     UNION ALL
+
+     SELECT
+       'summary' AS result_type,
+       '0' AS row_order,
+       jsonb_build_object(
+         'grand_total', COALESCE(SUM(total), 0),
+         'total_cash', COALESCE(SUM(total_cash), 0),
+         'total_transfer', COALESCE(SUM(total_transfer), 0),
+         'installments_count', COALESCE(SUM(installments_count), 0),
+         'down_payments_total', COALESCE(SUM(down_payments_total), 0),
+         'down_payments_count', COALESCE(SUM(down_payments_count), 0)
+       ) AS data
+     FROM daily_aggregated`,
     [dateFrom, dateTo],
   );
 
-  const summary = await pool.query(
-    `SELECT
-       SUM(total)::float8               AS grand_total,
-       SUM(total_cash)::float8           AS total_cash,
-       SUM(total_transfer)::float8       AS total_transfer,
-       SUM(installments_count)::int      AS installments_count,
-       SUM(down_payments_total)::float8  AS down_payments_total,
-       SUM(down_payments_count)::int     AS down_payments_count
-     FROM (
-       SELECT
-         COALESCE(SUM(p.amount_received), 0)                                           AS total,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
-         COUNT(*)                                                                       AS installments_count,
-         0::numeric                                                                     AS down_payments_total,
-         0                                                                              AS down_payments_count
-       FROM payments p
-       WHERE p.status = 'APPROVED'
-         AND p.approved_at::date BETWEEN $1 AND $2
+  const rows = result.rows;
+  const daily = rows.filter(r => r.result_type === 'daily').map(r => r.data);
+  const summary = rows.find(r => r.result_type === 'summary')?.data || {};
 
-       UNION ALL
-
-       SELECT
-         COALESCE(SUM(cdp.amount), 0)                                                  AS total,
-         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0)   AS total_cash,
-         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0)   AS total_transfer,
-         0                                                                              AS installments_count,
-         COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
-         COUNT(*)                                                                       AS down_payments_count
-        FROM credit_down_payments cdp
-        WHERE cdp.created_at::date BETWEEN $1 AND $2
-          AND cdp.payment_type = 'DOWN_PAYMENT'
-      ) sub`,
-    [dateFrom, dateTo],
-  );
-
-  return { summary: summary.rows[0], daily: daily.rows };
+  return { summary, daily };
 };
 
 // ── 2. Reporte de cartera ─────────────────────────────────────
@@ -214,8 +205,9 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
      FROM users u
      LEFT JOIN payments p
        ON p.collector_id = u.id
-       AND p.created_at::date BETWEEN $1 AND $2
-     WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR') AND u.status = 'ACTIVE'
+       AND p.approved_at::date BETWEEN $1 AND $2
+       AND p.status = 'APPROVED'
+     WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
      ORDER BY total_collected DESC`,
     [dateFrom, dateTo],
@@ -338,6 +330,8 @@ const getSummaryReport = async () => {
       today_down_payments AS (
         SELECT
           COALESCE(SUM(amount), 0)::float8 AS total,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0)::float8 AS cash,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0)::float8 AS transfer,
           COUNT(*)::int                    AS count
         FROM credit_down_payments
         WHERE created_at::date = CURRENT_DATE
@@ -371,12 +365,26 @@ const getSummaryReport = async () => {
        WHERE c.status = 'ACTIVE'
          AND i.status = 'PENDING'
          AND i.due_date BETWEEN CURRENT_DATE AND CURRENT_DATE + 6
+     ),
+     active_credits AS (
+       SELECT COUNT(*)::int AS count
+       FROM credits
+       WHERE status = 'ACTIVE'
+     ),
+     refinanced_month AS (
+       SELECT
+         COUNT(*)::int                                AS count,
+         COALESCE(SUM(total_amount), 0)::float8       AS amount
+       FROM credits
+       WHERE refinanced_from_credit_id IS NOT NULL
+         AND created_at >= date_trunc('month', CURRENT_DATE)
+         AND created_at <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
      )
      SELECT
        CURRENT_DATE                          AS report_date,
        tp.collected                          AS today_collected,
-       tp.cash                               AS today_cash,
-       tp.transfer                           AS today_transfer,
+       (tp.cash + tdp.cash)                  AS today_cash,
+       (tp.transfer + tdp.transfer)          AS today_transfer,
        tp.count                              AS today_payments_count,
        tdp.total                             AS today_down_payments,
        tdp.count                             AS today_down_payments_count,
@@ -384,19 +392,79 @@ const getSummaryReport = async () => {
        pp.count                              AS pending_payments_count,
        pc.count                              AS pending_credits_count,
        po.balance                            AS active_portfolio_balance,
+       ac.count                              AS active_credits_count,
        ov.count                              AS overdue_count,
        ov.amount                             AS overdue_amount,
        up.count                              AS upcoming_7d_count,
-       up.amount                             AS upcoming_7d_amount
+       up.amount                             AS upcoming_7d_amount,
+       rm.count                              AS refinanced_month_count,
+       rm.amount                             AS refinanced_month_amount
      FROM today_payments tp,
           today_down_payments tdp,
           pending_payments pp,
           pending_credits pc,
           portfolio po,
+          active_credits ac,
           overdue ov,
-          upcoming up`,
+          upcoming up,
+          refinanced_month rm`,
   );
   return r.rows[0];
+};
+
+// ── 8. Reporte de vendedores ────────────────────────────────
+
+/**
+ * Obtiene el reporte de vendedores agrupando por créditos creados en el rango de fechas.
+ * Incluye roles SELLER, SELLER_COLLECTOR y ADMIN.
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<array>} Lista de vendedores con estadísticas de créditos creados.
+ */
+const getSellersReport = async (dateFrom, dateTo) => {
+  const r = await pool.query(
+    `SELECT
+       u.id                                                                      AS seller_id,
+       u.full_name                                                               AS seller_name,
+       u.role,
+       COUNT(c.id)::int                                                          AS total_credits,
+       COALESCE(SUM(c.total_amount), 0)::float8                                 AS total_amount
+     FROM users u
+     LEFT JOIN credits c
+       ON c.created_by = u.id
+       AND c.created_at::date BETWEEN $1 AND $2
+     WHERE u.role IN ('SELLER','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
+     GROUP BY u.id, u.full_name, u.role
+     ORDER BY total_amount DESC`,
+    [dateFrom, dateTo],
+  );
+  return r.rows;
+};
+
+// ── 9. Alertas: Pagos pendientes vencidos (>48h) ────────────────
+
+/**
+ * Obtiene los pagos pendientes que tienen más de 48 horas sin aprobar.
+ * Filtra en el backend para reducir la transferencia de datos.
+ * @returns {Promise<array>} Lista de pagos pendientes con >48 horas.
+ */
+const getPaymentsOverdue48h = async () => {
+  const r = await pool.query(
+    `SELECT
+       p.id,
+       p.customer_id,
+       c.full_name                                        AS customer_name,
+       p.amount_received,
+       p.payment_method,
+       p.created_at,
+       EXTRACT(EPOCH FROM (NOW() - p.created_at)) / 3600 AS hours_pending
+     FROM payments p
+     LEFT JOIN customers c ON c.id = p.customer_id
+     WHERE p.status = 'PENDING'
+       AND NOW() - p.created_at > INTERVAL '48 hours'
+     ORDER BY p.created_at ASC`,
+  );
+  return r.rows;
 };
 
 module.exports = {
@@ -407,4 +475,6 @@ module.exports = {
   getProductsReport,
   getUpcomingReport,
   getSummaryReport,
+  getSellersReport,
+  getPaymentsOverdue48h,
 };

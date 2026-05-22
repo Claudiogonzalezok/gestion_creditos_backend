@@ -7,6 +7,12 @@ const getDashboard = async (req, res) => {
   } catch (err) { return response.serverError(res, err); }
 };
 
+const getPreClose = async (req, res) => {
+  try {
+    return response.success(res, await service.getPreClose(req.query.date || null));
+  } catch (err) { return response.serverError(res, err); }
+};
+
 const close = async (req, res) => {
   try {
     const result = await service.close(req.body, req.user.id);
@@ -35,4 +41,4 @@ const getById = async (req, res) => {
   }
 };
 
-module.exports = { getDashboard, close, getAll, getById };
+module.exports = { getDashboard, getPreClose, close, getAll, getById };

@@ -5,9 +5,13 @@ const { localDate } = require('../../utils/date');
 const getDashboard = async (date) => {
   const today = localDate();
   const target = date || today;
-  const data  = await queries.getDashboard(target);
+  const [data, closed] = await Promise.all([
+    queries.getDashboard(target),
+    queries.findByDate(target),
+  ]);
   return {
     date:                target,
+    is_closed:           !!closed,
     cash_amount:         data.cash_amount,
     transfer_amount:     data.transfer_amount,
     total_collected:     data.total_collected,
@@ -42,13 +46,13 @@ const close = async (data, adminId) => {
       throw { status: 409, message: `Hay ${pending.count} pre-carga(s) pendiente(s) de aprobación por $${pending.amount}. Aprobá o rechazá antes de cerrar, o enviá force: true para cerrar igual.`, pending_payments: pending };
   }
 
-  const totals       = await queries.getDailyTotals(registerDate);
-  const cashAmount   = totals.cash_amount;
-  const transferAmount = totals.transfer_amount;
-  const totalCollected = cashAmount + transferAmount;
-  const totalOutflows = totals.total_outflows;
-  const declaredCash = parseFloat(data.declared_cash);
-  const difference   = declaredCash - cashAmount;
+  const totals         = await queries.getDailyTotals(registerDate);
+  const cashAmount     = totals.cash_amount;        // neto: ingresos_efec - egresos_efec
+  const transferAmount = totals.transfer_amount;    // neto: ingresos_transf - egresos_transf
+  const totalCollected = totals.gross_cash + totals.gross_transfer; // ingresos brutos (dato contable)
+  const totalOutflows  = totals.total_outflows;
+  const declaredCash   = parseFloat(data.declared_cash);
+  const difference     = declaredCash - cashAmount; // arqueo real sobre efectivo neto
 
   let differenceStatus = 'EXACT';
   if (difference > 0)  differenceStatus = 'SURPLUS';
@@ -84,6 +88,39 @@ const close = async (data, adminId) => {
   }
 };
 
+const getPreClose = async (date) => {
+  const today  = localDate();
+  const target = date || today;
+  const data   = await queries.getPreClose(target);
+  return {
+    date: target,
+    ingresos: {
+      cobros_efectivo:        data.cobros_efectivo,
+      cobros_transferencia:   data.cobros_transferencia,
+      enganches_efectivo:     data.enganches_efectivo,
+      enganches_transferencia: data.enganches_transferencia,
+      total_bruto:            data.total_bruto,
+    },
+    egresos: {
+      gastos_efectivo:        data.gastos_efectivo,
+      gastos_transferencia:   data.gastos_transferencia,
+      comisiones_efectivo:    data.comisiones_efectivo,
+      comisiones_transferencia: data.comisiones_transferencia,
+      total:                  data.total_egresos,
+    },
+    efectivo: {
+      esperado: data.efectivo_esperado,
+    },
+    transferencias: {
+      esperado: data.transferencia_esperada,
+    },
+    pendientes: {
+      count:  data.pendientes_count,
+      amount: data.pendientes_amount,
+    },
+  };
+};
+
 const getAll = async (filters) => queries.findAll(filters);
 
 const getById = async (id) => {
@@ -92,4 +129,4 @@ const getById = async (id) => {
   return register;
 };
 
-module.exports = { getDashboard, close, getAll, getById };
+module.exports = { getDashboard, getPreClose, close, getAll, getById };

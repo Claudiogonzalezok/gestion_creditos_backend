@@ -1,6 +1,21 @@
 const { localDate } = require('./date');
 
 /**
+ * Convierte un input de fecha YYYY-MM-DD a Date local sin sesgo UTC.
+ * @param {string|Date|null} value - Fecha recibida desde API o UI.
+ * @returns {Date|null} Instancia local lista para cálculos de calendario.
+ */
+const parseLocalDateInput = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return new Date(value);
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map(Number);
+    return new Date(year, month - 1, day);
+  }
+  return new Date(value);
+};
+
+/**
  * Aplica el avance de período para una frecuencia de pago sobre una fecha base.
  * @param {Date} baseDate - Fecha desde la cual se aplica el desplazamiento.
  * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
@@ -44,7 +59,8 @@ const getInstallmentAmount = (totalAmount, coefficient, installmentsCount) => {
   const coef   = parseFloat(coefficient);
   const count  = parseInt(installmentsCount);
   const totalWithInterest = amount * (1 + coef);
-  return Math.ceil((totalWithInterest / count) / 1000) * 1000;
+  const rawInstallment = Math.round((totalWithInterest / count) * 100) / 100;
+  return Math.ceil(rawInstallment / 1000) * 1000;
 };
 
 /**
@@ -95,7 +111,7 @@ const getDueDatesFromFirstPayment = (firstPaymentDate, installmentsCount, freque
   }
 
   const dates = [];
-  const base = new Date(firstPaymentDate);
+  const base = parseLocalDateInput(firstPaymentDate);
   base.setHours(12, 0, 0, 0);
 
   for (let i = 0; i < installmentsCount; i++) {

@@ -5,6 +5,7 @@ const prQueries   = require('../productRates/productRates.queries');
 const puQueries   = require('../productUnits/productUnits.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
 const { withTransaction } = require('../../utils/transaction');
+const { localDate } = require('../../utils/date');
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -48,7 +49,7 @@ const decorateSaleCredit = (credit) => {
  * @param {Date} date - Fecha a serializar.
  * @returns {string} Fecha local simplificada.
  */
-const toApiDate = (date) => date.toISOString().slice(0, 10);
+const toApiDate = (date) => localDate(date);
 
 /**
  * Ajusta fechas de vencimiento al próximo día hábil según feriados activos y fines de semana.
@@ -193,6 +194,8 @@ const getAll = async (filters, requestingUser) => {
 const getById = async (id) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
+  const chain = await queries.getRefinancingChain(id);
+  credit.refinancing_chain = chain;
   return sanitizeCredit(credit);
 };
 
@@ -623,6 +626,24 @@ const reject = async (id, rejectionReason, adminId) => {
        WHERE id = $3`,
       [rejectionReason, adminId, id]
     );
+    // Si es una refinanciación rechazada, revertir el crédito original a ACTIVE
+    if (credit.refinanced_from_credit_id) {
+      const rejectedNote = `Refinanciación rechazada (${new Date().toLocaleDateString('es-AR')}): ${rejectionReason}`;
+      await client.query(
+        `UPDATE credits
+         SET status            = 'ACTIVE',
+             refinanced_at     = NULL,
+             refinanced_by     = NULL,
+             refinanced_reason = NULL,
+             notes = CASE
+               WHEN notes IS NULL THEN $2
+               ELSE notes || ' | ' || $2
+             END,
+             updated_at = NOW()
+         WHERE id = $1 AND status = 'REFINANCED'`,
+        [credit.refinanced_from_credit_id, rejectedNote]
+      );
+    }
   });
 };
 
@@ -636,33 +657,57 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
   if (!pendingInstallments.length)
     throw { status: 409, message: 'Este crédito no tiene cuotas pendientes.' };
 
+  // Validar que no haya pagos pendientes de aprobación
+  const pendingPaymentsResult = await pool.query(
+    `SELECT COUNT(*)::int AS count FROM payments p
+     JOIN installments i ON i.id = p.installment_id
+     WHERE i.credit_id = $1 AND p.status = 'PENDING'`,
+    [id]
+  );
+  if (pendingPaymentsResult.rows[0].count > 0)
+    throw {
+      status: 409,
+      message: 'El crédito tiene pagos pendientes de aprobación. Apruébalos o rechazalos antes de cancelar anticipadamente.',
+    };
+
   const settlementAmount = Math.round(
     pendingInstallments.reduce((sum, inst) => sum + inst.amount_due - inst.amount_paid, 0) * 100
   ) / 100;
 
   return withTransaction(async (client) => {
-    await queries.settleAllInstallments(client, id);
-
     // Un payment por cuota para mantener trazabilidad completa en reportes y auditoría
+    // Se crean en PENDING status para requerir aprobación explícita (doble aprobación)
+    const paymentIds = [];
     for (const inst of pendingInstallments) {
       const instAmount = Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
-      await client.query(
+      const paymentResult = await client.query(
         `INSERT INTO payments
            (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-            status, approved_by, approved_at, notes)
-         VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Cancelación anticipada')`,
+            status, notes)
+         VALUES ($1, $2, $3, $4, $5, 'PENDING', 'Cancelación anticipada')
+         RETURNING id`,
         [inst.id, adminId, instAmount, paymentMethod, transferReference || null]
       );
+      paymentIds.push(paymentResult.rows[0].id);
     }
 
+    // Store settlement info but keep credit ACTIVE until payments are approved
+    // Once all payments are APPROVED, credit will be SETTLED via a separate process
     await client.query(
       `UPDATE credits
-       SET status = 'SETTLED', settled_at = NOW(),
-           settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION', updated_at = NOW()
+       SET settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION',
+           updated_at = NOW()
        WHERE id = $2`,
       [settlementAmount, id]
     );
-    return { credit_id: id, settlement_amount: settlementAmount, payment_method: paymentMethod };
+
+    return {
+      credit_id: id,
+      settlement_amount: settlementAmount,
+      payment_method: paymentMethod,
+      payment_ids: paymentIds,
+      message: 'Cancelación anticipada creada. Los pagos están pendientes de aprobación.'
+    };
   });
 };
 
@@ -723,4 +768,99 @@ const simulateAll = async ({ type, total_amount, products }) => {
   return results;
 };
 
-module.exports = { getAll, getById, create, simulate, simulateAll, approve, reject, earlySettlement };
+/**
+ * Refinancia un crédito ACTIVE creando un nuevo crédito LOAN que absorbe el saldo pendiente.
+ * El crédito original pasa a REFINANCED (deuda trasladada, no cancelada).
+ *
+ * Flujo atómico dentro de una transacción con FOR UPDATE:
+ *   1. Lock del crédito original e installments
+ *   2. Validaciones (estado, pagos pendientes, saldo)
+ *   3. Crea nuevo crédito LOAN en PENDING_APPROVAL
+ *   4. Marca original como REFINANCED
+ *   5. Inserta registro en credit_refinancings
+ *
+ * El nuevo crédito debe ser aprobado normalmente mediante POST /credits/:id/approve.
+ *
+ * @param {string} creditId - ID del crédito a refinanciar.
+ * @param {object} data - Parámetros de la refinanciación.
+ * @param {number}  data.installments_count - Cantidad de cuotas del nuevo crédito.
+ * @param {string}  data.payment_frequency  - Frecuencia del nuevo crédito.
+ * @param {string}  data.reason             - Motivo obligatorio (mín. 5 caracteres).
+ * @param {number}  [data.extra_charges]    - Cargos adicionales a sumar al saldo (default 0).
+ * @param {string}  [data.notes]            - Notas opcionales para el nuevo crédito.
+ * @param {string} adminId - ID del admin que ejecuta la operación.
+ * @returns {Promise<object>} Nuevo crédito en PENDING_APPROVAL + info de la operación.
+ */
+const refinance = async (creditId, data, adminId) => {
+  return withTransaction(async (client) => {
+    // ── 1. Lock exclusivo: impide doble refinanciación y race conditions ─────
+    const credit = await queries.lockCredit(client, creditId);
+    if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
+    if (credit.status !== 'ACTIVE')
+      throw { status: 409, message: 'Solo se pueden refinanciar créditos en estado ACTIVO.' };
+
+    // ── 2. Lock de cuotas + validación de saldo ──────────────────────────────
+    const installments = await queries.lockInstallments(client, creditId);
+
+    const pendingInstallments = installments.filter(
+      (i) => ['PENDING', 'PARTIAL', 'OVERDUE'].includes(i.status),
+    );
+    if (!pendingInstallments.length)
+      throw { status: 409, message: 'El crédito no tiene saldo pendiente para refinanciar.' };
+
+    const pendingBalance = Math.round(
+      pendingInstallments.reduce((sum, i) => sum + (i.amount_due - i.amount_paid), 0) * 100,
+    ) / 100;
+
+    // ── 3. Validación de pagos PENDING (cobros sin confirmar) ────────────────
+    const hasPending = await queries.hasPendingPayments(client, creditId);
+    if (hasPending)
+      throw {
+        status: 409,
+        message: 'El crédito tiene cobros pendientes de aprobación. Resolvalos antes de refinanciar.',
+      };
+
+    // ── 4. Calcular monto total trasladado ───────────────────────────────────
+    const extraCharges = Math.round(parseFloat(data.extra_charges || 0) * 100) / 100;
+    if (extraCharges < 0) throw { status: 400, message: 'Los cargos adicionales no pueden ser negativos.' };
+    const totalTransferred = Math.round((pendingBalance + extraCharges) * 100) / 100;
+
+    // ── 5. Crear nuevo crédito LOAN en PENDING_APPROVAL ──────────────────────
+    const newCredit = await queries.createRefinancing(client, {
+      customer_id:              credit.customer_id,
+      created_by:               adminId,
+      total_amount:             totalTransferred,
+      installments_count:       data.installments_count,
+      payment_frequency:        data.payment_frequency,
+      refinanced_from_credit_id: creditId,
+      notes:                    data.notes || null,
+    });
+
+    // ── 6. Marcar crédito original como REFINANCED ───────────────────────────
+    await queries.markAsRefinanced(client, creditId, adminId, data.reason);
+
+    // ── 7. Registrar trazabilidad en credit_refinancings ────────────────────
+    await queries.createRefinancingRecord(client, {
+      original_credit_id: creditId,
+      new_credit_id:      newCredit.id,
+      pending_balance:    pendingBalance,
+      extra_charges:      extraCharges,
+      total_transferred:  totalTransferred,
+      refinancing_type:   'STANDARD',
+      reason:             data.reason,
+      notes:              data.notes || null,
+      executed_by:        adminId,
+    });
+
+    return {
+      original_credit_id: creditId,
+      new_credit:         newCredit,
+      pending_balance:    pendingBalance,
+      extra_charges:      extraCharges,
+      total_transferred:  totalTransferred,
+      message:            'Refinanciación creada. El nuevo crédito está pendiente de aprobación.',
+    };
+  });
+};
+
+module.exports = { getAll, getById, create, simulate, simulateAll, approve, reject, earlySettlement, refinance };

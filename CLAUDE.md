@@ -1,7 +1,18 @@
 # Contexto del Proyecto — Sistema de Gestión de Préstamos y Créditos
 
+## ⚠️ INSTRUCCIONES DE CONTEXTO — LEER PRIMERO
+- Leer **SOLO** los archivos mencionados explícitamente en cada prompt.
+- **NO** indexar ni explorar el proyecto completo al iniciar sesión.
+- **NO** leer directorios: `node_modules/`, `dist/`, `.angular/`, `coverage/`, `.git/`.
+- **NO** leer archivos: `*.lock`, `*.log`, `*.map`, `package-lock.json`.
+- Ante una tarea nueva: preguntar qué archivos son relevantes antes de explorar.
+- Leer un archivo a la vez. No leer carpetas completas salvo que se indique.
+
+---
+
 ## Stack tecnológico
 - **Backend:** Node.js + Express · **BD:** PostgreSQL · **Auth:** JWT · **Arch:** MVC estricta
+- **Frontend:** Angular + PrimeNG + Tailwind CSS
 
 ## Convenciones de código
 - Comentarios en **español**. Documentación JSDoc en español justo sobre la firma:
@@ -90,6 +101,7 @@ src/
 - No permitir que roles distintos de Admin accedan a aprobaciones o recuperación de contraseñas.
 - No exponer datos sensibles innecesariamente en respuestas de API.
 - No eliminar registros físicamente (siempre baja lógica: `status = 'INACTIVE'`/`'REJECTED'`).
+- **No leer el proyecto completo al iniciar. Leer solo lo necesario.**
 
 ## Referencia completa
 Ver `docs/casos-de-uso.md` para especificaciones detalladas de los 16 casos de uso y el DER.
