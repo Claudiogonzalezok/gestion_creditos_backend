@@ -489,12 +489,36 @@ const productVariants = {
     isString('size',     'El talle',    { min: 1, max: 50,  required: false }),
     isString('capacity', 'La capacidad',{ min: 1, max: 50,  required: false }),
     isPositiveNumber('current_price', 'El precio', { min: 0.01, max: 99999999 }),
+    body('initial_units').optional({ nullable: true })
+      .isInt({ min: 0, max: 10000 }).withMessage('initial_units debe ser un entero entre 0 y 10000.'),
     body().custom((_, { req }) => {
       const { color, size, capacity } = req.body;
       if (!color && !size && !capacity)
         throw new Error('La variante debe tener al menos un atributo: color, talle o capacidad.');
       return true;
     }),
+  ],
+  bulkCreate: [
+    isUUID('product_id', 'El ID de producto'),
+    body('rows')
+      .isArray({ min: 1, max: 100 })
+      .withMessage('Debés enviar entre 1 y 100 filas.'),
+    body('rows.*.color').optional({ nullable: true }).isString().trim()
+      .isLength({ min: 1, max: 50 }).withMessage('El color debe tener entre 1 y 50 caracteres.'),
+    body('rows.*.size').optional({ nullable: true }).isString().trim()
+      .isLength({ min: 1, max: 50 }).withMessage('El talle debe tener entre 1 y 50 caracteres.'),
+    body('rows.*.capacity').optional({ nullable: true }).isString().trim()
+      .isLength({ min: 1, max: 50 }).withMessage('La capacidad debe tener entre 1 y 50 caracteres.'),
+    body('rows.*.current_price').optional({ nullable: true }).custom((val) => {
+      if (val === '' || val === null || val === undefined) return true;
+      const num = Number(val);
+      if (Number.isNaN(num) || num < 0.01 || num > 99999999) {
+        throw new Error('El precio debe ser mayor a 0 y menor a 99.999.999.');
+      }
+      return true;
+    }),
+    body('rows.*.initial_units').optional({ nullable: true })
+      .isInt({ min: 0, max: 10000 }).withMessage('initial_units debe ser un entero entre 0 y 10000.'),
   ],
   update: [
     isUUIDParam('id', 'El ID de variante'),
@@ -549,7 +573,17 @@ const expenses = {
     isString('description', 'La descripción', { min: 2, max: 500 }),
     isDate('expense_date', 'La fecha del gasto'),
     isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
-    isUUID('category_id', 'El ID de categoría', false),
+    isUUID('category_id', 'El ID de categoría', true),
+    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia no puede superar los 100 caracteres.'),
+  ],
+  update: [
+    isUUIDParam('id', 'El ID de gasto'),
+    isPositiveNumber('amount', 'El monto', { min: 0.01, max: 99999999 }),
+    isString('description', 'La descripción', { min: 2, max: 500 }),
+    isDate('expense_date', 'La fecha del gasto'),
+    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
+    isUUID('category_id', 'El ID de categoría', true),
     body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 100 }).withMessage('La referencia no puede superar los 100 caracteres.'),
   ],
