@@ -27,6 +27,24 @@ const create = async (req, res) => {
   }
 };
 
+/**
+ * Actualiza un gasto existente.
+ * @param {import('express').Request} req
+ * @param {import('express').Response} res
+ * @returns {Promise<import('express').Response>}
+ */
+const update = async (req, res) => {
+  try {
+    const result = await service.update(req.params.id, req.body);
+    return response.success(res, result, 'Gasto actualizado correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const remove = async (req, res) => {
   try {
     await service.remove(req.params.id);
@@ -38,4 +56,4 @@ const remove = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, remove };
+module.exports = { getAll, getById, create, update, remove };

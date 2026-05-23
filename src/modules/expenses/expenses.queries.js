@@ -71,6 +71,22 @@ const create = async ({ amount, description, expenseDate, paymentMethod, transfe
   return r.rows[0];
 };
 
+const update = async ({ id, amount, description, expenseDate, paymentMethod, transferReference, categoryId }) => {
+  const r = await pool.query(
+    `UPDATE expenses
+     SET amount = $2,
+         description = $3,
+         expense_date = $4,
+         payment_method = $5,
+         transfer_reference = $6,
+         category_id = $7
+     WHERE id = $1
+     RETURNING id, amount::float8, description, expense_date, payment_method, transfer_reference, category_id, created_at`,
+    [id, amount, description, expenseDate, paymentMethod, transferReference || null, categoryId || null]
+  );
+  return r.rows[0] || null;
+};
+
 const remove = async (id) => {
   const r = await pool.query(
     `DELETE FROM expenses WHERE id = $1 RETURNING id`,
@@ -79,4 +95,4 @@ const remove = async (id) => {
   return r.rowCount > 0;
 };
 
-module.exports = { findAll, findById, findActiveCategoryById, hasCashRegister, create, remove };
+module.exports = { findAll, findById, findActiveCategoryById, hasCashRegister, create, update, remove };
