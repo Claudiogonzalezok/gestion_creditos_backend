@@ -44,7 +44,8 @@ const update = async (req, res) => {
 
 const deactivate = async (req, res) => {
   try {
-    await service.deactivate(req.params.id);
+    const force = req.body?.force === true;
+    await service.deactivate(req.params.id, force);
     return response.success(res, null, 'Producto desactivado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

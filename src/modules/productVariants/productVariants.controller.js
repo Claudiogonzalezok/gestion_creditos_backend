@@ -19,12 +19,28 @@ const getById = async (req, res) => {
 
 const create = async (req, res) => {
   try {
-    const { product_id, color, size, capacity, current_price } = req.body;
-    const variant = await service.create({ product_id, color, size, capacity, current_price });
+    const { product_id, color, size, capacity, current_price, initial_units } = req.body;
+    const variant = await service.create({ product_id, color, size, capacity, current_price, initial_units });
     return response.created(res, variant, 'Variante registrada correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+/**
+ * Crea múltiples variantes en un solo request y devuelve errores por fila.
+ */
+const createBulk = async (req, res) => {
+  try {
+    const { product_id, rows } = req.body;
+    const result = await service.createBulk({ product_id, rows });
+    return response.created(res, result, 'Variantes registradas correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, err.data || null);
+    if (err.status === 400) return response.badRequest(res, err.message, err.errors || null);
     return response.serverError(res, err);
   }
 };
@@ -62,4 +78,4 @@ const activate = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, deactivate, activate };
+module.exports = { getAll, getById, create, createBulk, update, deactivate, activate };
