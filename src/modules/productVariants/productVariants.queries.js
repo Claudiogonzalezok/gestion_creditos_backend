@@ -86,6 +86,22 @@ const create = async ({ productId, color, size, capacity, currentPrice }) => {
   return r.rows[0];
 };
 
+/**
+ * Crea una variante usando un cliente transaccional.
+ * @param {object} client - Cliente de PostgreSQL.
+ * @param {{productId:string,color:string|null,size:string|null,capacity:string|null,currentPrice:number}} payload
+ * @returns {Promise<object>} Variante creada.
+ */
+const createWithClient = async (client, { productId, color, size, capacity, currentPrice }) => {
+  const r = await client.query(
+    `INSERT INTO product_variants (product_id, color, size, capacity, current_price)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, product_id, color, size, capacity, current_price::float8, status, created_at, updated_at`,
+    [productId, color || null, size || null, capacity || null, currentPrice]
+  );
+  return r.rows[0];
+};
+
 const update = async (id, fields) => {
   const sets  = [];
   const params = [];
@@ -153,6 +169,6 @@ const findDuplicate = async (productId, color, size, capacity, excludeId = null)
 
 module.exports = {
   findAll, findById, findByProductId,
-  create, update, deactivate, activate,
+  create, createWithClient, update, deactivate, activate,
   hasActiveUnits, findActiveProductById, findDuplicate,
 };

@@ -14,6 +14,12 @@
 - **Backend:** Node.js + Express · **BD:** PostgreSQL · **Auth:** JWT · **Arch:** MVC estricta
 - **Frontend:** Angular + PrimeNG + Tailwind CSS
 
+## Regla transversal Frontend (moneda)
+- En formularios de monto con PrimeNG `p-inputNumber` y `mode="currency"`, usar siempre `appCurrencyAmountInput`.
+- Objetivo: evitar el autocompletado fijo de `,00` que dificulta edición/borrado y mantener UX consistente en toda la app.
+- Evitar `minFractionDigits="2"` en inputs monetarios editables por usuario (salvo requisito de negocio explícito).
+- Referencia de implementación: `frontend/gestion-creditos-f/src/app/shared/directives/currency-amount-input.directive.ts`.
+
 ## Convenciones de código
 - Comentarios en **español**. Documentación JSDoc en español justo sobre la firma:
   ```js

@@ -117,11 +117,29 @@ const findByTitle = async (title) => {
   return r.rows[0] || null;
 };
 
+/**
+ * Devuelve true si el producto tiene unidades RESERVED o SOLD (bloqueo por defecto).
+ */
 const hasActiveCredits = async (id) => {
   const r = await pool.query(
     `SELECT pu.id FROM product_units pu
      JOIN product_variants pv ON pv.id = pu.variant_id
-     WHERE pv.product_id = $1 AND pu.status IN ('RESERVED')
+     WHERE pv.product_id = $1 AND pu.status IN ('RESERVED', 'SOLD')
+     LIMIT 1`,
+    [id]
+  );
+  return r.rows.length > 0;
+};
+
+/**
+ * Devuelve true si el producto tiene unidades RESERVED (créditos pendientes activos).
+ * Usado en modo force=true para bloquear solo casos críticos.
+ */
+const hasReservedUnits = async (id) => {
+  const r = await pool.query(
+    `SELECT pu.id FROM product_units pu
+     JOIN product_variants pv ON pv.id = pu.variant_id
+     WHERE pv.product_id = $1 AND pu.status = 'RESERVED'
      LIMIT 1`,
     [id]
   );
@@ -183,5 +201,5 @@ const activate = async (id) => {
 module.exports = {
   findAll, findById, findByTitle,
   findActiveCategoryById, findActiveBrandById,
-  hasActiveCredits, create, update, deactivate, activate,
+  hasActiveCredits, hasReservedUnits, create, update, deactivate, activate,
 };

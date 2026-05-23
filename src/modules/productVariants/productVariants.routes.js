@@ -29,6 +29,12 @@ router.post('/',
   controller.create
 );
 
+router.post('/bulk',
+  authorize('ADMIN'),
+  v.productVariants.bulkCreate, validate,
+  controller.createBulk
+);
+
 router.put('/:id',
   authorize('ADMIN'),
   v.productVariants.update, validate,

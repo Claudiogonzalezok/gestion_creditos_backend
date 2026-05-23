@@ -31,6 +31,12 @@ router.post('/',
   controller.create
 );
 
+router.put('/:id',
+  authorize('ADMIN'),
+  v.expenses.update, validate,
+  controller.update
+);
+
 router.delete('/:id',
   authorize('ADMIN'),
   v.expenses.id, validate,
