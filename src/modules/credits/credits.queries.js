@@ -607,7 +607,12 @@ const getRefinancingChain = async (creditId) => {
   const chain = r.rows;
   const current = chain.find((n) => n.depth === 0);
   const predecessor = chain.find((n) => n.depth === -1) || null;
-  const successor = chain.find((n) => n.depth === 1) || null;
+  // Puede haber varios a depth=1 si hubo intentos rechazados antes del actual.
+  // Se prioriza el no-rechazado (PENDING_APPROVAL o ACTIVE) sobre REJECTED.
+  const successor =
+    chain.find((n) => n.depth === 1 && n.status !== 'REJECTED') ||
+    chain.find((n) => n.depth === 1) ||
+    null;
 
   return {
     predecessor_id:  predecessor?.id || null,
