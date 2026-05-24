@@ -497,7 +497,8 @@ const createRefinancing = async (
 };
 
 /**
- * Marca un crédito como REFINANCED y guarda la auditoría de la operación.
+ * Marca un crédito como REFINANCED y sus cuotas abiertas como REFINANCED.
+ * Ambas operaciones ocurren en la misma transacción del llamador.
  * @param {object} client - Cliente de transacción.
  * @param {string} id - ID del crédito original.
  * @param {string} adminId - Usuario que ejecutó la refinanciación.
@@ -513,6 +514,15 @@ const markAsRefinanced = async (client, id, adminId, reason) => {
          updated_at        = NOW()
      WHERE id = $3`,
     [adminId, reason, id],
+  );
+  // Cierra las cuotas abiertas para que no sean procesadas por el job de mora,
+  // la generación de planillas ni ningún reporte de saldo pendiente.
+  await client.query(
+    `UPDATE installments
+     SET status = 'REFINANCED', updated_at = NOW()
+     WHERE credit_id = $1
+       AND status IN ('PENDING', 'PARTIAL', 'OVERDUE')`,
+    [id],
   );
 };
 
