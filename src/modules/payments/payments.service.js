@@ -2,6 +2,7 @@ const pool                  = require('../../config/db');
 const queries               = require('./payments.queries');
 const cashMovementsQueries  = require('./cash_movements.queries');
 const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
+const { getValue }          = require('../systemConfig/systemConfig.queries');
 const { withTransaction }   = require('../../utils/transaction');
 const { localDate }         = require('../../utils/date');
 
@@ -36,12 +37,11 @@ const _validateCajaOpen = async (date) => {
  * @param {object} payment         - Registro del payment con datos de la cuota y crédito.
  * @param {number} amountToApply   - Monto total a distribuir.
  * @param {string} adminId         - ID del usuario que aprueba (para cuotas adelantadas).
+ * @param {string|null} paymentId  - ID del cobro principal (para vincular sub-pagos vía parent_payment_id).
+ * @param {number} graceDays       - Días de gracia para recálculo de status (de system_config).
  * @returns {Promise<void>}
  */
-/**
- * @param {string|null} paymentId - ID del cobro principal (para vincular sub-pagos vía parent_payment_id).
- */
-const _applyPaymentToInstallments = async (client, payment, amountToApply, adminId, paymentId = null) => {
+const _applyPaymentToInstallments = async (client, payment, amountToApply, adminId, paymentId = null, graceDays = 0) => {
   const amountDue   = parseFloat(payment.amount_due);
   const amountPaid  = parseFloat(payment.amount_paid);
 
@@ -53,7 +53,8 @@ const _applyPaymentToInstallments = async (client, payment, amountToApply, admin
     payment.installment_id,
     amountToApply,
     amountDue,
-    amountPaid
+    amountPaid,
+    graceDays
   );
 
   const round = (n) => Math.round(n * 100) / 100;
@@ -90,7 +91,8 @@ const _applyPaymentToInstallments = async (client, payment, amountToApply, admin
           inst.id,
           remaining,
           parseFloat(inst.amount_due),
-          parseFloat(inst.amount_paid)
+          parseFloat(inst.amount_paid),
+          graceDays
         );
         remaining = 0;
       }
@@ -244,6 +246,9 @@ const approve = async (id, adminId) => {
   // Validar caja ANTES de iniciar la transacción (operación de solo lectura)
   await _validateCajaOpen(today);
 
+  // Días de gracia para el recálculo de status post-aplicación del pago
+  const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
+
   await withTransaction(async (client) => {
     // Lock exclusivo sobre el payment para serializar aprobaciones concurrentes
     const payment = await queries.lockAndGetPayment(client, id);
@@ -261,7 +266,7 @@ const approve = async (id, adminId) => {
     await queries.approve(client, id, adminId);
 
     // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
-    await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId, id);
+    await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId, id, graceDays);
 
     // 3. Registrar movimiento contable en caja
     await _registerCashMovement(client, {
@@ -319,6 +324,9 @@ const adminDirect = async (data, adminId) => {
   const today = localDate();
   await _validateCajaOpen(today);
 
+  // Días de gracia para el recálculo de status post-aplicación del pago
+  const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
+
   // Validar cuota
   const instCheck = await pool.query(
     `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id,
@@ -375,7 +383,7 @@ const adminDirect = async (data, adminId) => {
       transfer_reference: data.transfer_reference || null,
     };
 
-    await _applyPaymentToInstallments(client, paymentCtx, amountReceived, adminId, newPaymentId);
+    await _applyPaymentToInstallments(client, paymentCtx, amountReceived, adminId, newPaymentId, graceDays);
 
     await _registerCashMovement(client, {
       paymentId:     newPaymentId,
@@ -411,6 +419,9 @@ const reverse = async (id, reason, adminId) => {
 
   // Validación 1: la caja de HOY debe estar abierta (check rápido antes de la transacción)
   await _validateCajaOpen(today);
+
+  // Días de gracia para el recálculo de status tras restaurar amount_paid
+  const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
   await withTransaction(async (client) => {
     const payment = await queries.lockAndGetPayment(client, id);
@@ -464,7 +475,7 @@ const reverse = async (id, reason, adminId) => {
         originalPaymentId: p.id,
       });
 
-      await queries.restoreInstallmentFromReversal(client, p.installment_id, p.amount_received);
+      await queries.restoreInstallmentFromReversal(client, p.installment_id, p.amount_received, graceDays);
 
       await _registerCashMovement(client, {
         paymentId:     reversal.id,

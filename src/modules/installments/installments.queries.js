@@ -51,43 +51,74 @@ const applyPenalty = async (id, penaltyAmount) => {
   return r.rows[0] || null;
 };
 
-const waivePenalty = async (id) => {
+/**
+ * Condona la mora aplicada y recalcula el status según due_date + grace_days
+ * y los pagos parciales acumulados. Tras la condonación, amount_due vuelve a
+ * coincidir con original_amount (la invariante amount_due = original + penalty
+ * se mantiene con penalty = 0).
+ *
+ * @param {string} id
+ * @param {number} graceDays - Días de gracia del system_config.
+ */
+const waivePenalty = async (id, graceDays) => {
   const r = await pool.query(
     `UPDATE installments
-     SET amount_due     = amount_due - penalty_amount,
+     SET amount_due     = original_amount,
          penalty_amount = 0,
+         status         = CASE
+                            WHEN amount_paid >= original_amount                                  THEN 'PAID'
+                            WHEN due_date < (CURRENT_DATE - ($2)::int * INTERVAL '1 day')       THEN 'OVERDUE'
+                            WHEN amount_paid > 0                                                  THEN 'PARTIAL'
+                            ELSE 'PENDING'
+                          END,
          updated_at     = NOW()
      WHERE id = $1
      RETURNING id, amount_due::float8, penalty_amount::float8, status`,
-    [id]
+    [id, graceDays]
   );
   return r.rows[0] || null;
 };
 
 // Pago anticipado directo de una cuota (sin flujo de pre-carga)
+/**
+ * Cancela el saldo pendiente real de una cuota: marca PAID, lleva amount_paid
+ * a amount_due, y registra un payment APPROVED por la diferencia realmente
+ * recibida (no por amount_due completo — esto respeta pagos parciales previos
+ * para que la cobranza histórica del crédito no se infle).
+ */
 const earlyPay = async (client, id, adminId, paymentMethod, transferReference) => {
-  // Marca la cuota como PAID con el saldo restante
-  const instRes = await client.query(
+  // 1. Capturar el estado actual de la cuota con lock para evitar race conditions
+  const before = await client.query(
+    `SELECT id, credit_id, amount_due::float8, amount_paid::float8, installment_number
+     FROM installments
+     WHERE id = $1
+     FOR UPDATE`,
+    [id]
+  );
+  if (!before.rows.length) return null;
+  const inst = before.rows[0];
+  const amountToReceive = Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
+
+  // 2. Marcar la cuota como pagada totalmente
+  await client.query(
     `UPDATE installments
      SET status      = 'PAID',
          amount_paid = amount_due,
          updated_at  = NOW()
-     WHERE id = $1
-     RETURNING id, credit_id, amount_due::float8, installment_number`,
+     WHERE id = $1`,
     [id]
   );
-  const inst = instRes.rows[0];
 
-  // Registra el pago directamente aprobado
+  // 3. Registrar el payment APPROVED por el saldo real recibido
   await client.query(
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, payment_method, transfer_reference,
         status, approved_by, approved_at, notes)
      VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Pago anticipado de cuota')`,
-    [inst.id, adminId, inst.amount_due, paymentMethod, transferReference || null]
+    [inst.id, adminId, amountToReceive, paymentMethod, transferReference || null]
   );
 
-  return inst;
+  return { ...inst, amount_paid: inst.amount_due };
 };
 
 /**

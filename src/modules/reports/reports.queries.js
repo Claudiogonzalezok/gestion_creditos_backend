@@ -1,4 +1,5 @@
 const pool = require("../../config/db");
+const { IS_OVERDUE_DERIVED } = require("../../utils/installmentSql");
 
 // ── 1. Reporte de recaudación ─────────────────────────────────
 
@@ -85,7 +86,7 @@ const getCollectionReport = async (dateFrom, dateTo) => {
 
 // ── 2. Reporte de cartera ─────────────────────────────────────
 
-const getPortfolioReport = async () => {
+const getPortfolioReport = async (graceDays) => {
   const byStatusType = await pool.query(
     `SELECT
        c.status,
@@ -101,7 +102,7 @@ const getPortfolioReport = async () => {
     `SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS pending_balance
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
-     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID')`,
+     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED')`,
   );
 
   const topCustomers = await pool.query(
@@ -112,14 +113,15 @@ const getPortfolioReport = async () => {
        u.full_name                                                        AS assigned_collector,
        COUNT(DISTINCT c.id)::int                                          AS active_credits,
        COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8            AS pending_balance,
-       COUNT(i.id) FILTER (WHERE i.status = 'OVERDUE')::int              AS overdue_installments
+       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED('i', '$1')})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
-     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID')
+     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED')
      LEFT JOIN users u   ON u.id = cu.assigned_collector_id
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY pending_balance DESC
      LIMIT 10`,
+    [graceDays],
   );
 
   return {
@@ -131,7 +133,7 @@ const getPortfolioReport = async () => {
 
 // ── 3. Reporte de mora ────────────────────────────────────────
 
-const getOverdueReport = async () => {
+const getOverdueReport = async (graceDays) => {
   const summary = await pool.query(
     `SELECT
        COUNT(*)::int                                                                    AS overdue_installments,
@@ -151,7 +153,8 @@ const getOverdueReport = async () => {
        COALESCE(SUM(i.amount_due - i.amount_paid)
                       FILTER (WHERE (CURRENT_DATE - i.due_date) > 90), 0)::float8      AS bucket_90plus_amount
      FROM installments i
-     WHERE i.status = 'OVERDUE'`,
+     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}`,
+    [graceDays],
   );
 
   const byCustomer = await pool.query(
@@ -174,9 +177,10 @@ const getOverdueReport = async () => {
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
      LEFT JOIN users u ON u.id  = cu.assigned_collector_id
-     WHERE i.status = 'OVERDUE'
+     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY total_overdue DESC`,
+    [graceDays],
   );
 
   return { summary: summary.rows[0], by_customer: byCustomer.rows };
@@ -315,7 +319,7 @@ const getUpcomingReport = async (days = 30) => {
  * Suma los enganches reales del día junto con la cobranza aprobada.
  * @returns {Promise<object>} Métricas diarias clave del negocio.
  */
-const getSummaryReport = async () => {
+const getSummaryReport = async (graceDays) => {
   const r = await pool.query(
     `WITH
      today_payments AS (
@@ -347,14 +351,14 @@ const getSummaryReport = async () => {
        SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS balance
        FROM installments i
        JOIN credits c ON c.id = i.credit_id
-       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID')
+       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED')
      ),
      overdue AS (
        SELECT
          COUNT(*)::int                                         AS count,
          COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS amount
        FROM installments i
-       WHERE i.status = 'OVERDUE'
+       WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
      ),
      upcoming AS (
        SELECT
@@ -408,6 +412,7 @@ const getSummaryReport = async () => {
           overdue ov,
           upcoming up,
           refinanced_month rm`,
+    [graceDays],
   );
   return r.rows[0];
 };
@@ -449,18 +454,24 @@ const getSellersReport = async (dateFrom, dateTo) => {
  * @returns {Promise<array>} Lista de pagos pendientes con >48 horas.
  */
 const getPaymentsOverdue48h = async () => {
+  // payments NO tiene customer_id: hay que llegar a customers vía
+  // installments → credits. Además excluimos reversiones (no son cobros
+  // pendientes reales).
   const r = await pool.query(
     `SELECT
        p.id,
-       p.customer_id,
-       c.full_name                                        AS customer_name,
-       p.amount_received,
+       cu.id                                              AS customer_id,
+       cu.full_name                                       AS customer_name,
+       p.amount_received::float8,
        p.payment_method,
        p.created_at,
        EXTRACT(EPOCH FROM (NOW() - p.created_at)) / 3600 AS hours_pending
      FROM payments p
-     LEFT JOIN customers c ON c.id = p.customer_id
-     WHERE p.status = 'PENDING'
+     JOIN installments i ON i.id  = p.installment_id
+     JOIN credits     c  ON c.id  = i.credit_id
+     JOIN customers   cu ON cu.id = c.customer_id
+     WHERE p.status      = 'PENDING'
+       AND p.is_reversal = FALSE
        AND NOW() - p.created_at > INTERVAL '48 hours'
      ORDER BY p.created_at ASC`,
   );

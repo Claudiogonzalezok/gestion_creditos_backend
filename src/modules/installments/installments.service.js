@@ -39,7 +39,8 @@ const waivePenalty = async (id) => {
   if (!inst) throw { status: 404, message: 'Cuota no encontrada.' };
   if (parseFloat(inst.penalty_amount) === 0)
     throw { status: 409, message: 'Esta cuota no tiene mora aplicada.' };
-  return queries.waivePenalty(id);
+  const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
+  return queries.waivePenalty(id, graceDays);
 };
 
 const earlyPay = async (id, paymentMethod, transferReference, adminId) => {
