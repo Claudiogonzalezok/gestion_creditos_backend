@@ -14,35 +14,40 @@ const markOverdueAndApplyPenalty = async () => {
     const maxRate    = parseFloat(await getValue('penalty_max_rate')  || '0.50');
     const dailyRate  = parseFloat(await getValue('penalty_rate_daily')|| '0.005');
 
-    // 1. Pasar PENDING/PARTIAL → OVERDUE cuando la fecha venció + días de gracia
+    // 1. Pasar PENDING/PARTIAL → OVERDUE cuando la fecha venció + días de gracia.
+    //    Solo sobre créditos ACTIVE: excluye REFINANCED, SETTLED y EXPIRED.
     const overdueResult = await client.query(
-      `UPDATE installments
+      `UPDATE installments i
        SET status = 'OVERDUE', updated_at = NOW()
-       WHERE status IN ('PENDING', 'PARTIAL')
-         AND due_date < (CURRENT_DATE - $1 * INTERVAL '1 day')
-       RETURNING id, amount_due, penalty_amount`,
+       FROM credits c
+       WHERE i.credit_id = c.id
+         AND c.status = 'ACTIVE'
+         AND i.status IN ('PENDING', 'PARTIAL')
+         AND i.due_date < (CURRENT_DATE - $1 * INTERVAL '1 day')
+       RETURNING i.id, i.amount_due, i.penalty_amount`,
       [graceDays]
     );
 
-    // 2. Aplicar mora diaria a todas las cuotas ya OVERDUE
-    //    Se ejecuta siempre, independientemente de si hubo nuevas cuotas vencidas hoy
-    {
-      await client.query(
-        `UPDATE installments i
-         SET penalty_amount = LEAST(
-               penalty_amount + ((i.amount_due - i.penalty_amount) * $1),
-               (i.amount_due - i.penalty_amount) * $2
-             ),
-             amount_due = i.amount_due + LEAST(
-               (i.amount_due - i.penalty_amount) * $1,
-               GREATEST((i.amount_due - i.penalty_amount) * $2 - i.penalty_amount, 0)
-             ),
-             updated_at = NOW()
-         WHERE i.status = 'OVERDUE'
-           AND i.penalty_amount < (i.amount_due - i.penalty_amount) * $2`,
-        [dailyRate, maxRate]
-      );
-    }
+    // 2. Aplicar mora diaria a todas las cuotas ya OVERDUE.
+    //    Solo sobre créditos ACTIVE: misma restricción que el paso 1.
+    await client.query(
+      `UPDATE installments i
+       SET penalty_amount = LEAST(
+             i.penalty_amount + ((i.amount_due - i.penalty_amount) * $1),
+             (i.amount_due - i.penalty_amount) * $2
+           ),
+           amount_due = i.amount_due + LEAST(
+             (i.amount_due - i.penalty_amount) * $1,
+             GREATEST((i.amount_due - i.penalty_amount) * $2 - i.penalty_amount, 0)
+           ),
+           updated_at = NOW()
+       FROM credits c
+       WHERE i.credit_id = c.id
+         AND c.status = 'ACTIVE'
+         AND i.status = 'OVERDUE'
+         AND i.penalty_amount < (i.amount_due - i.penalty_amount) * $2`,
+      [dailyRate, maxRate]
+    );
 
     await client.query('COMMIT');
 
