@@ -16,7 +16,8 @@
     "migration:run": "node src/scripts/migration.run.js",
     "db:setup": "npm run migration:run && npm run seed",
     "db:reset": "node src/scripts/db.reset.js && npm run seed",
-    "db:studio": "node src/scripts/db.studio.js"
+    "db:studio": "node src/scripts/db.studio.js",
+    "cron:run": "node src/scripts/run-cron.js"
   },
   "keywords": [],
   "author": "",
