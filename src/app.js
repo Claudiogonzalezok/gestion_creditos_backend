@@ -101,6 +101,7 @@ app.use('/api/expense-categories',  require('./modules/expenseCategories/expense
 app.use('/api/product-categories',  require('./modules/productCategories/productCategories.routes'));
 app.use('/api/reports',      require('./modules/reports/reports.routes'));
 app.use('/api/portal',       require('./modules/portal/portal.routes'));
+app.use('/api/admin/cron-logs', require('./modules/cronLogs/cronLogs.routes'));
 
 // ── 404 ───────────────────────────────────────────────────────
 app.use((req, res) => {
