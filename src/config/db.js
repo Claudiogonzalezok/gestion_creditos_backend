@@ -17,7 +17,7 @@ const pool = new Pool({
   user:     process.env.DB_USER     || 'postgres',
   password: process.env.DB_PASSWORD || '',
   max:      parseInt(process.env.DB_MAX_CONNECTIONS || '10'),
-  idleTimeoutMillis:       30000,
+  idleTimeoutMillis:       parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000'),
   connectionTimeoutMillis: 5000,
   options:                 `-c TimeZone=${TIME_ZONE}`,
 });
