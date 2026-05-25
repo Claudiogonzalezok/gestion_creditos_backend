@@ -105,19 +105,10 @@ describe('E — REMAINING_CAPITAL', () => {
     expect(capital_pendiente).toBeCloseTo(0, 2);
   });
 
-  it('nunca devuelve negativo (GREATEST con 0)', async () => {
-    // Caso defensivo: paid > amount_due (overpay raro)
-    const inst = await createInstallmentFixture({
-      original_amount: 1000,
-      penalty_amount:  100,
-      amount_due:      1100,
-      amount_paid:     1500,    // overpay
-      status:          'PAID',
-    });
-    const { capital_pendiente } = await readHelpers(inst.id);
-    expect(capital_pendiente).toBeGreaterThanOrEqual(0);
-    expect(capital_pendiente).toBeCloseTo(0, 2);
-  });
+  // El GREATEST(..., 0) defensivo del helper REMAINING_CAPITAL solo importa
+  // si amount_paid > amount_due (overpay). La DB lo bloquea con
+  // CHECK (amount_paid <= amount_due) — el escenario es inalcanzable, así
+  // que el GREATEST queda como defensa silenciosa sin escenario testeable.
 });
 
 describe('E — IS_OVERDUE_DERIVED', () => {

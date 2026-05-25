@@ -23,4 +23,8 @@ module.exports = {
   testTimeout:     20000,
   maxWorkers:      1,
   verbose:         true,
+  // El pool de pg deja conexiones idle (idleTimeoutMillis: 30s en src/config/db.js).
+  // Los tests pasaron correctamente; forceExit asegura que jest libere el handle
+  // sin esperar a que el pool se vacíe por timeout.
+  forceExit:       true,
 };

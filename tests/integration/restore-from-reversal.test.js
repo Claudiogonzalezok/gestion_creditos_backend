@@ -119,23 +119,7 @@ describe('C — restoreInstallmentFromReversal', () => {
     expect(after.status).toBe('PARTIAL');
   });
 
-  it('reversión que aún cubre amount_due deja PAID (raro pero posible con overpay)', async () => {
-    // Edge: cuota con paid > amount_due (no debería ocurrir, pero defensivo).
-    // Si tras revertir aún paid >= amount_due, sigue PAID.
-    const inst = await createInstallmentFixture({
-      due_date:        today(),
-      original_amount: 1000,
-      amount_paid:     1500,
-      amount_due:      1000,    // override explícito para forzar paid > due
-      status:          'PAID',
-    });
-
-    await withTestClient((client) =>
-      restoreInstallmentFromReversal(client, inst.id, 300, GRACE)
-    );
-
-    const after = await reloadInstallment(inst.id);
-    expect(after.amount_paid).toBeCloseTo(1200, 2);
-    expect(after.status).toBe('PAID');     // 1200 >= 1000
-  });
+  // El estado "amount_paid > amount_due" (overpay) lo bloquea la DB vía
+  // CHECK constraint installments_amount_paid_check. No es posible armar la
+  // fixture, por lo tanto no hay caso de test para reversión sobre overpay.
 });

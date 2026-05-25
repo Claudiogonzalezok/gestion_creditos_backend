@@ -70,25 +70,11 @@ describe('D — waivePenalty (query SQL)', () => {
     expect(after.status).toBe('OVERDUE');
   });
 
-  it('condona mora cuando pago cubre original → PAID', async () => {
-    // Cliente pagó capital + mora (1100). Si admin condona, queda overpay
-    // pero status correcto = PAID (amount_paid >= original_amount).
-    const inst = await createInstallmentFixture({
-      due_date:        today(),
-      original_amount: 1000,
-      penalty_amount:  100,
-      amount_due:      1100,
-      amount_paid:     1100,
-      status:          'PAID',
-    });
-
-    await installmentsQueries.waivePenalty(inst.id, GRACE);
-
-    const after = await reloadInstallment(inst.id);
-    expect(after.penalty_amount).toBe(0);
-    expect(after.amount_due).toBeCloseTo(1000, 2);
-    expect(after.status).toBe('PAID');
-  });
+  // NOTA: el escenario "cuota PAID con mora pendiente, admin condona" está
+  // doblemente bloqueado: el service (waivePenalty) rechaza con 409 si status
+  // es PAID, y la DB tiene CHECK (amount_paid <= amount_due) que prevendría
+  // el estado resultante (paid quedaría > amount_due tras bajar a original).
+  // No hay test acá porque la operación es inalcanzable.
 
   it('respeta grace_days en el recálculo: cuota vencida 2 días con grace=3 → PENDING', async () => {
     const inst = await createInstallmentFixture({
