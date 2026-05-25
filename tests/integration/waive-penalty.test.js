@@ -5,10 +5,15 @@
 //   · La política defensiva del service rechaza condonar cuotas PAID.
 
 const { pool, setupTestSuite } = require('./helpers/db');
-const { createInstallmentFixture, reloadInstallment } = require('./helpers/fixtures');
+const {
+  createInstallmentFixture,
+  reloadInstallment,
+  seedCronLogSuccess,
+} = require('./helpers/fixtures');
 const { today, daysAgo, daysFromNow } = require('./helpers/dates');
 const installmentsQueries = require('../../src/modules/installments/installments.queries');
 const installmentsService = require('../../src/modules/installments/installments.service');
+const { markOverdueAndApplyPenalty } = require('../../src/jobs/overdueInstallments.job');
 
 setupTestSuite();
 
@@ -164,5 +169,71 @@ describe('D — waivePenalty (service: política defensiva)', () => {
     const result = await installmentsService.waivePenalty(inst.id);
     expect(result.penalty_amount).toBe(0);
     expect(result.amount_due).toBeCloseTo(1000, 2);
+  });
+});
+
+describe('D — waivePenalty + cron catch-up (interacción crítica)', () => {
+  it('tras condonar mora, last_penalty_applied_at queda en hoy (evita re-cobro)', async () => {
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(20),
+      original_amount:         1000,
+      penalty_amount:          50,
+      amount_due:              1050,
+      last_penalty_applied_at: daysAgo(5),       // procesada por cron hace 5 días
+      status:                  'OVERDUE',
+    });
+
+    await installmentsQueries.waivePenalty(inst.id, GRACE);
+
+    const after = await reloadInstallment(inst.id);
+    expect(after.penalty_amount).toBe(0);
+    // Crítico: el marcador avanza a hoy, no se queda en hace 5 días.
+    expect(after.last_penalty_applied_at).toBe(today());
+  });
+
+  it('cron post-condonación arranca catch-up desde mañana (no re-cobra días condonados)', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(20),
+      original_amount:         1000,
+      penalty_amount:          100,
+      amount_due:              1100,
+      last_penalty_applied_at: daysAgo(5),
+      status:                  'OVERDUE',
+    });
+
+    // Admin condona hoy
+    await installmentsQueries.waivePenalty(inst.id, GRACE);
+    const afterWaive = await reloadInstallment(inst.id);
+    expect(afterWaive.penalty_amount).toBe(0);
+    expect(afterWaive.last_penalty_applied_at).toBe(today());
+
+    // Cron corre el mismo día tras la condonación → debe ser no-op (M=0)
+    await markOverdueAndApplyPenalty();
+    const afterCron = await reloadInstallment(inst.id);
+    expect(afterCron.penalty_amount).toBe(0);     // sin re-cobro
+    expect(afterCron.amount_due).toBeCloseTo(1000, 2);
+  });
+
+  it('applyPenalty manual marca last_penalty_applied_at = hoy (evita double-charge del cron)', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(10),
+      original_amount:         1000,
+      penalty_amount:          0,
+      last_penalty_applied_at: daysAgo(1),
+      status:                  'OVERDUE',
+    });
+
+    // Admin aplica $25 de mora manual hoy
+    await installmentsQueries.applyPenalty(inst.id, 25);
+    const afterManual = await reloadInstallment(inst.id);
+    expect(afterManual.penalty_amount).toBeCloseTo(25, 2);
+    expect(afterManual.last_penalty_applied_at).toBe(today());
+
+    // Cron corre el mismo día tras el manual → no debe sumar más mora
+    await markOverdueAndApplyPenalty();
+    const afterCron = await reloadInstallment(inst.id);
+    expect(afterCron.penalty_amount).toBeCloseTo(25, 2);  // sin double-charge
   });
 });

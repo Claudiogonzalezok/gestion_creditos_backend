@@ -38,12 +38,16 @@ const findById = async (id) => {
 };
 
 const applyPenalty = async (id, penaltyAmount) => {
+  // Marca last_penalty_applied_at = CURRENT_DATE: la operación manual del admin
+  // "cubre" la mora hasta hoy. Sin esto, el cron al correr podría sumar más
+  // mora "del día" sobre el surcharge manual del admin → double-charging.
   const r = await pool.query(
     `UPDATE installments
-     SET penalty_amount = penalty_amount + $1,
-         amount_due     = amount_due + $1,
-         status         = 'OVERDUE',
-         updated_at     = NOW()
+     SET penalty_amount          = penalty_amount + $1,
+         amount_due              = amount_due + $1,
+         status                  = 'OVERDUE',
+         last_penalty_applied_at = CURRENT_DATE,
+         updated_at              = NOW()
      WHERE id = $2
      RETURNING id, amount_due::float8, penalty_amount::float8, status`,
     [penaltyAmount, id]
@@ -61,17 +65,22 @@ const applyPenalty = async (id, penaltyAmount) => {
  * @param {number} graceDays - Días de gracia del system_config.
  */
 const waivePenalty = async (id, graceDays) => {
+  // Marca last_penalty_applied_at = CURRENT_DATE: la condonación "consume" los
+  // días hasta hoy. Sin esto, el próximo cron arrancaría su catch-up desde el
+  // last_penalty_applied_at viejo (anterior a la condonación) y re-aplicaría
+  // mora sobre días que ya fueron condonados.
   const r = await pool.query(
     `UPDATE installments
-     SET amount_due     = original_amount,
-         penalty_amount = 0,
-         status         = CASE
-                            WHEN amount_paid >= original_amount                                  THEN 'PAID'
-                            WHEN due_date < (CURRENT_DATE - ($2)::int * INTERVAL '1 day')       THEN 'OVERDUE'
-                            WHEN amount_paid > 0                                                  THEN 'PARTIAL'
-                            ELSE 'PENDING'
-                          END,
-         updated_at     = NOW()
+     SET amount_due              = original_amount,
+         penalty_amount          = 0,
+         status                  = CASE
+                                     WHEN amount_paid >= original_amount                                  THEN 'PAID'
+                                     WHEN due_date < (CURRENT_DATE - ($2)::int * INTERVAL '1 day')       THEN 'OVERDUE'
+                                     WHEN amount_paid > 0                                                  THEN 'PARTIAL'
+                                     ELSE 'PENDING'
+                                   END,
+         last_penalty_applied_at = CURRENT_DATE,
+         updated_at              = NOW()
      WHERE id = $1
      RETURNING id, amount_due::float8, penalty_amount::float8, status`,
     [id, graceDays]
