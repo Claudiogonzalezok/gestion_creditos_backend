@@ -1,0 +1,30 @@
+# Postgres aislado para tests de integración.
+# Se levanta con: npm run test:db:up
+# Se baja con:    npm run test:db:down
+#
+# Puerto 5433 (no 5432) para no chocar con la DB de desarrollo.
+# Volumen efímero — los datos se descartan al hacer `down -v`.
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: gestion_creditos_test_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       gestion_creditos_test
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres_test
+      TZ:                America/Argentina/Buenos_Aires
+      PGTZ:              America/Argentina/Buenos_Aires
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U postgres -d gestion_creditos_test"]
+      interval: 2s
+      timeout:  3s
+      retries:  10
+
+volumes:
+  postgres-test-data:
