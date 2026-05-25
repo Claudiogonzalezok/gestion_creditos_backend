@@ -9,12 +9,13 @@ modificar lógica de cobranza, mora, reportes o reversión.
 ## 1. Tabla `installments` — campos clave
 
 ```
-original_amount   NUMERIC(12,2)  NOT NULL   CHECK > 0      → capital original, INMUTABLE
-penalty_amount    NUMERIC(12,2)  NOT NULL   DEFAULT 0      → mora acumulada
-amount_due        NUMERIC(12,2)  NOT NULL                  → deuda viva
-amount_paid       NUMERIC(12,2)  NOT NULL   DEFAULT 0
-status            VARCHAR(20)    NOT NULL   DEFAULT 'PENDING'
-due_date          DATE           NOT NULL
+original_amount         NUMERIC(12,2)  NOT NULL   CHECK > 0      → capital original, INMUTABLE
+penalty_amount          NUMERIC(12,2)  NOT NULL   DEFAULT 0      → mora acumulada
+amount_due              NUMERIC(12,2)  NOT NULL                  → deuda viva
+amount_paid             NUMERIC(12,2)  NOT NULL   DEFAULT 0
+status                  VARCHAR(20)    NOT NULL   DEFAULT 'PENDING'
+due_date                DATE           NOT NULL
+last_penalty_applied_at DATE           NULL                      → último día en que el cron aplicó mora (catch-up)
 ```
 
 ### Invariantes (deben mantenerse SIEMPRE)
@@ -206,26 +207,88 @@ vencida, vuelve a OVERDUE (no degrada a PENDING o PARTIAL).
 
 ---
 
-## 6. Cron de mora — rol y observabilidad
+## 6. Cron de mora — rol, catch-up y observabilidad
 
 ### `src/jobs/overdueInstallments.job.js`
 
-Corre todos los días a las 02:00 ART. Dos pasos atómicos en una transacción:
+Corre todos los días a las 02:00 ART. **Una sola operación atómica** (CTE
++ UPDATE) que marca OVERDUE y aplica mora en el mismo statement.
 
-1. **Marcado de snapshot operativo**: `PENDING/PARTIAL → OVERDUE` cuando
-   `due_date + grace_days < CURRENT_DATE`.
-2. **Aplicación de mora diaria**: aplica Fórmula B sobre `status='OVERDUE'`
-   con `saldo > 0` y `penalty < cap`, manteniendo la invariante.
+### Fuente de verdad: `installments.last_penalty_applied_at`
+
+El campo `last_penalty_applied_at` (migration 018) registra el último día en
+que **esa cuota** recibió mora. Es la base del cálculo de catch-up:
+
+```
+mora_start = GREATEST(
+  COALESCE(last_penalty_applied_at, due_date + grace_days) + 1,
+  due_date + grace_days + 1
+)
+M = effective_today - mora_start + 1
+```
+
+Si `M > 0`, se aplica Fórmula B compuesta cerrada en una sola operación:
+
+```sql
+penalty_new = LEAST(
+  penalty + saldo × (POWER(1 + r, M) − 1),
+  original_amount × max_rate
+)
+amount_due              = original_amount + penalty_new
+last_penalty_applied_at = effective_today    -- ← SOLO si M > 0
+```
+
+### Invariante crítica: actualizar `last_penalty_applied_at` SOLO si M > 0
+
+Si una cuota dentro de gracia (M=0) quedara marcada como "procesada hoy",
+perdería días legítimos de mora al salir de gracia (el próximo cálculo
+arrancaría desde hoy en lugar de desde `due_date + grace_days + 1`).
+
+El SQL del job filtra explícitamente `WHERE days_to_apply > 0` antes del
+UPDATE — las cuotas en gracia, ya pagadas, REFINANCED o con cap alcanzado
+**no se tocan** en absoluto.
+
+### Catch-up de N días en una sola corrida
+
+Si el cron estuvo caído 5 días, la próxima corrida exitosa aplica los 5 días
+de mora compuesta en una sola operación atómica. La fórmula closed-form es
+matemáticamente equivalente al loop diario:
+
+```
+saldo_n     = saldo_0 × (1 + r)^n
+delta_total = saldo_0 × ((1 + r)^N − 1)
+```
+
+### Saldo actual, no histórico
+
+El catch-up usa el **saldo de HOY** (no reconstruido día por día). Si hubo
+pagos durante el downtime, el saldo actual es menor y se sub-aplica mora —
+favorece al cliente. Decisión consciente y defensible.
+
+### Primera corrida del sistema
+
+Si `cron_execution_log` no tiene registro previo exitoso, el job limita
+`M = 1` para evitar "big bang" al bootstrap. La corrida queda registrada,
+y desde la siguiente el catch-up real opera con M correcto.
+
+### Congelamiento de `effective_today`
+
+`CURRENT_DATE` se captura **una sola vez** al inicio del job y se pasa como
+parámetro. Protege contra cambios de reloj/NTP/timezone durante la ejecución.
+
+### Atomicidad
+
+Todo el job corre dentro de `BEGIN/COMMIT`. Si algo falla → `ROLLBACK` →
+ninguna `last_penalty_applied_at` se mueve → el próximo run reaplica el
+catch-up correctamente. Idempotente y resiliente incluso si `cron_execution_log`
+se corrompe o se pierde — la verdad financiera vive en la propia cuota.
 
 ### Importante
 
 - El cron **no es la fuente de verdad** de vencimiento. La lógica crítica usa
-  `IS_OVERDUE_DERIVED`. Si el cron se cae 3 días, las cuotas que se hayan
+  `IS_OVERDUE_DERIVED`. Si el cron se cae N días, las cuotas que se hayan
   vencido en ese tiempo igual son detectadas correctamente por reportes y
-  saldos.
-- El cron aplica **un día de mora por corrida**, independientemente de cuántos
-  días pasaron desde la última. Recuperación de mora perdida (catch-up) es
-  un feature pendiente, no implementado.
+  saldos — y al volver, el cron las pone al día con catch-up automático.
 
 ### Observabilidad
 

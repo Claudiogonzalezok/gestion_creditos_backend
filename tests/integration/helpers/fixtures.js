@@ -92,15 +92,16 @@ const createInstallmentFixture = async (overrides = {}) => {
   const creditId = overrides.credit_id || (await createCreditFixture()).id;
 
   const data = {
-    installment_number: 1,
-    due_date:           today(),
-    payment_frequency:  'WEEKLY',
-    original_amount:    1000,
-    penalty_amount:     0,
-    amount_paid:        0,
-    status:             'PENDING',
+    installment_number:       1,
+    due_date:                 today(),
+    payment_frequency:        'WEEKLY',
+    original_amount:          1000,
+    penalty_amount:           0,
+    amount_paid:              0,
+    status:                   'PENDING',
+    last_penalty_applied_at:  null,
     ...overrides,
-    credit_id:          creditId,
+    credit_id:                creditId,
   };
 
   // Invariante: amount_due se deriva de original + penalty.
@@ -112,15 +113,34 @@ const createInstallmentFixture = async (overrides = {}) => {
   const r = await pool.query(
     `INSERT INTO installments
        (credit_id, installment_number, due_date, payment_frequency,
-        original_amount, penalty_amount, amount_due, amount_paid, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        original_amount, penalty_amount, amount_due, amount_paid, status,
+        last_penalty_applied_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id, credit_id, installment_number, due_date,
                original_amount::float8, penalty_amount::float8,
-               amount_due::float8, amount_paid::float8, status`,
+               amount_due::float8, amount_paid::float8, status,
+               last_penalty_applied_at`,
     [data.credit_id, data.installment_number, data.due_date, data.payment_frequency,
-     data.original_amount, data.penalty_amount, amountDue, data.amount_paid, data.status]
+     data.original_amount, data.penalty_amount, amountDue, data.amount_paid, data.status,
+     data.last_penalty_applied_at]
   );
   return r.rows[0];
+};
+
+/**
+ * Marca un registro en cron_execution_log como si el job ya hubiera corrido
+ * con éxito un día específico. Útil para tests de catch-up que necesitan que
+ * NO sea "primera corrida".
+ * @param {string} jobName
+ * @param {string} finishedDate - 'YYYY-MM-DD' del día de la corrida.
+ */
+const seedCronLogSuccess = async (jobName, finishedDate) => {
+  await pool.query(
+    `INSERT INTO cron_execution_log
+       (job_name, started_at, finished_at, success, affected_rows)
+     VALUES ($1, ($2::date)::timestamptz, ($2::date)::timestamptz, TRUE, 0)`,
+    [jobName, finishedDate]
+  );
 };
 
 /**
@@ -132,7 +152,8 @@ const reloadInstallment = async (id) => {
   const r = await pool.query(
     `SELECT id, credit_id, installment_number, due_date,
             original_amount::float8, penalty_amount::float8,
-            amount_due::float8, amount_paid::float8, status, updated_at
+            amount_due::float8, amount_paid::float8, status, updated_at,
+            last_penalty_applied_at
      FROM installments
      WHERE id = $1`,
     [id]
@@ -144,5 +165,6 @@ module.exports = {
   createCustomerFixture,
   createCreditFixture,
   createInstallmentFixture,
+  seedCronLogSuccess,
   reloadInstallment,
 };

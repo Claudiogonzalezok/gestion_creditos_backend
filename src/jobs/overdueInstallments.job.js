@@ -1,35 +1,67 @@
 // ══════════════════════════════════════════════════════════════════════════════
-// Job nocturno de mora.
+// Job nocturno de mora con catch-up per-cuota.
 // Se ejecuta todos los días a las 02:00 hs (zona horaria del servidor).
 //
-// Responsabilidades:
-//   1. Marcar cuotas vencidas (snapshot operativo) PENDING/PARTIAL → OVERDUE
-//      cuando due_date + grace_days < CURRENT_DATE.
-//   2. Acumular mora diaria sobre las cuotas vencidas con saldo > 0,
-//      usando la fórmula oficial (Fórmula B):
+// MODELO:
+//   La fuente de verdad NO es cron_execution_log sino la columna
+//   installments.last_penalty_applied_at. Cada cuota sabe hasta qué día se le
+//   procesó mora. El cron es un "reconciliador" — no un "ejecutor diario".
 //
-//          saldo_pendiente_real = (original_amount + penalty_amount) - amount_paid
-//          mora_delta_diaria   = saldo_pendiente_real × daily_rate
-//          nueva_mora          = LEAST(penalty_amount + mora_delta, cap)
-//          cap                 = original_amount × max_rate
-//          amount_due          = original_amount + nueva_mora   ← invariante
+// FÓRMULA (catch-up de M días en una sola operación):
+//   Por cuota:
+//     mora_start = GREATEST(
+//                    COALESCE(last_penalty_applied_at, due_date + grace_days) + 1,
+//                    due_date + grace_days + 1
+//                  )
+//     M          = effective_today - mora_start + 1
 //
-// Notas:
-//   · El cron NO es la fuente de verdad de "vencida": la lógica financiera
-//     usa una condición derivada (ver IS_OVERDUE_DERIVED). El status OVERDUE
-//     queda como snapshot visual/operativo.
-//   · El cron aplica un (1) día de mora por corrida, independientemente de
-//     cuántos días pasaron desde la última ejecución. La recuperación de mora
-//     perdida por caídas del cron es un tema separado (no resuelto en esta
-//     etapa).
-//   · Las cuotas REFINANCED están excluidas por el filtro de status, lo que
-//     evita acumular mora sobre deuda ya absorbida en una refinanciación.
+//   Si M > 0 — aplicar Fórmula B compuesta cerrada:
+//     saldo_0      = amount_due − amount_paid             (saldo ACTUAL)
+//     delta_total  = saldo_0 × ((1 + r)^M − 1)
+//     penalty_new  = LEAST(penalty + delta_total, original × max_rate)
+//     amount_due   = original_amount + penalty_new        ← invariante
+//     last_penalty_applied_at = effective_today           ← SOLO si M > 0
+//
+// PRECISIÓN:
+//   Se usa el SALDO ACTUAL para el catch-up retroactivo, no el saldo histórico
+//   día por día. Si hubo pagos durante un downtime del cron, el saldo actual
+//   es MENOR que durante la ventana → se sub-aplica mora (favorece al cliente).
+//   Decisión consciente y documentada — "cliente-friendly" y defensible.
+//
+// ATOMICIDAD:
+//   Todo el cálculo + UPDATE se hace en un único statement SQL con CTE dentro
+//   de BEGIN/COMMIT. Si algo falla, ROLLBACK deja la DB intacta y ninguna
+//   last_penalty_applied_at se mueve. El próximo run reaplica el catch-up
+//   correctamente.
+//
+// CONGELAMIENTO DE FECHA:
+//   effective_today se captura una sola vez al inicio del job y se pasa como
+//   parámetro a todas las queries — protege contra cambios de reloj/NTP/TZ
+//   durante la ejecución.
+//
+// PRIMERA CORRIDA:
+//   Si nunca corrió antes (cron_execution_log vacío para este job), aplica
+//   comportamiento legacy: limitar M a 1 para evitar "big bang" inicial.
 // ══════════════════════════════════════════════════════════════════════════════
 
 const cron = require('node-cron');
 const pool = require('../config/db');
 const { getValue } = require('../modules/systemConfig/systemConfig.queries');
 const { runWithLogging } = require('../utils/cronLogger');
+
+/**
+ * Devuelve la fecha de la última corrida exitosa de este job, o null si nunca corrió.
+ * Usa finished_at::date — el started_at puede caer en el día anterior si la
+ * corrida cruza medianoche.
+ */
+const getLastSuccessfulRunDate = async (client) => {
+  const r = await client.query(
+    `SELECT MAX(finished_at::date) AS last_date
+     FROM cron_execution_log
+     WHERE job_name = 'overdueInstallments' AND success = TRUE`
+  );
+  return r.rows[0].last_date || null;
+};
 
 const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', async () => {
   const client = await pool.connect();
@@ -40,63 +72,101 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
     const maxRate   = parseFloat(await getValue('penalty_max_rate')  || '0.50');
     const dailyRate = parseFloat(await getValue('penalty_rate_daily')|| '0.005');
 
-    // 1. Snapshot operativo: PENDING/PARTIAL → OVERDUE cuando el vencimiento
-    //    superó el período de gracia. REFINANCED/PAID quedan fuera por el filtro.
-    const overdueResult = await client.query(
-      `UPDATE installments
-       SET status = 'OVERDUE', updated_at = NOW()
-       WHERE status IN ('PENDING', 'PARTIAL')
-         AND due_date < (CURRENT_DATE - $1::int * INTERVAL '1 day')
-       RETURNING id`,
-      [graceDays]
-    );
+    // Congelar la fecha de referencia para toda la corrida.
+    const todayRes = await client.query('SELECT CURRENT_DATE AS today');
+    const effectiveToday = todayRes.rows[0].today;
 
-    // 2. Mora diaria sobre saldo pendiente real (Fórmula B).
-    //    Condiciones defensivas (no se confía solo en status='OVERDUE'):
-    //      · due_date + grace_days < CURRENT_DATE
-    //      · saldo_pendiente_real > 0
-    //      · penalty_amount < cap (queda margen antes del tope)
-    //
-    //    Se usa una CTE para calcular la nueva mora una sola vez y mantener
-    //    la invariante amount_due = original_amount + penalty_amount.
-    const penaltyResult = await client.query(
-      `WITH computed AS (
+    // Primera corrida del sistema: limitar M a 1 para evitar big bang inicial.
+    const lastRun = await getLastSuccessfulRunDate(client);
+    const isFirstRun = lastRun === null;
+
+    // Single UPDATE con CTE — atómico.
+    // En to_update filtramos days_to_apply > 0: las cuotas en gracia o ya
+    // procesadas hoy quedan FUERA y last_penalty_applied_at no se mueve para
+    // ellas. Esto es CRÍTICO: si una cuota en gracia quedara marcada como
+    // "procesada hoy", perdería días legítimos de mora al salir de gracia.
+    const result = await client.query(
+      `WITH params AS (
+         SELECT $1::date    AS effective_today,
+                $2::int     AS grace_days,
+                $3::numeric AS daily_rate,
+                $4::numeric AS max_rate,
+                $5::bool    AS is_first_run
+       ),
+       candidates AS (
          SELECT
-           id,
-           LEAST(
-             penalty_amount + ((amount_due - amount_paid) * $1),
-             original_amount * $2
-           ) AS new_penalty
-         FROM installments
-         WHERE status = 'OVERDUE'
-           AND due_date < (CURRENT_DATE - $3::int * INTERVAL '1 day')
-           AND (amount_due - amount_paid) > 0
-           AND penalty_amount < (original_amount * $2)
+           i.id,
+           i.original_amount,
+           i.penalty_amount,
+           i.amount_due,
+           i.amount_paid,
+           i.status,
+           p.effective_today,
+           p.daily_rate,
+           p.max_rate,
+           GREATEST(
+             COALESCE(i.last_penalty_applied_at, i.due_date + p.grace_days) + 1,
+             i.due_date + p.grace_days + 1
+           ) AS mora_start
+         FROM installments i, params p
+         WHERE i.status IN ('PENDING','PARTIAL','OVERDUE')
+           AND (i.amount_due - i.amount_paid) > 0
+           AND i.penalty_amount < i.original_amount * p.max_rate
+       ),
+       to_update AS (
+         SELECT
+           c.*,
+           CASE
+             WHEN (SELECT is_first_run FROM params)
+               THEN LEAST(c.effective_today - c.mora_start + 1, 1)
+             ELSE       c.effective_today - c.mora_start + 1
+           END AS days_to_apply
+         FROM candidates c
        )
        UPDATE installments i
-       SET penalty_amount = c.new_penalty,
-           amount_due     = i.original_amount + c.new_penalty,
-           updated_at     = NOW()
-       FROM computed c
-       WHERE i.id = c.id
-       RETURNING i.id`,
-      [dailyRate, maxRate, graceDays]
+       SET
+         penalty_amount = LEAST(
+           t.penalty_amount + (t.amount_due - t.amount_paid)
+                              * (POWER(1 + t.daily_rate, t.days_to_apply) - 1),
+           t.original_amount * t.max_rate
+         ),
+         amount_due = t.original_amount + LEAST(
+           t.penalty_amount + (t.amount_due - t.amount_paid)
+                              * (POWER(1 + t.daily_rate, t.days_to_apply) - 1),
+           t.original_amount * t.max_rate
+         ),
+         status = CASE
+                    WHEN t.status IN ('PENDING','PARTIAL') THEN 'OVERDUE'
+                    ELSE t.status
+                  END,
+         last_penalty_applied_at = t.effective_today,
+         updated_at              = NOW()
+       FROM to_update t
+       WHERE i.id = t.id
+         AND t.days_to_apply > 0
+       RETURNING i.id, t.days_to_apply::int AS days_applied`,
+      [effectiveToday, graceDays, dailyRate, maxRate, isFirstRun]
     );
 
     await client.query('COMMIT');
 
-    const markedCount  = overdueResult.rows.length;
-    const penaltyCount = penaltyResult.rows.length;
+    const updatedCount = result.rows.length;
+    const totalDays    = result.rows.reduce((sum, r) => sum + r.days_applied, 0);
     console.log(
-      `[JOB overdueInstallments] Marcadas OVERDUE: ${markedCount} · ` +
-      `Mora aplicada: ${penaltyCount} cuota(s).`
+      `[JOB overdueInstallments] ` +
+      `${updatedCount} cuota(s) actualizada(s) — total ${totalDays} día(s) de mora aplicados ` +
+      `(effective_today=${effectiveToday}, last_run=${lastRun || 'NUNCA'}).`
     );
 
-    // affected_rows refleja la cantidad de cuotas con mora aplicada (acción
-    // financiera principal del job). Las marcadas como OVERDUE quedan en metadata.
     return {
-      affected_rows: penaltyCount,
-      metadata: { marked_overdue: markedCount, penalty_applied: penaltyCount },
+      affected_rows: updatedCount,
+      metadata: {
+        effective_today: effectiveToday,
+        last_successful_run: lastRun,
+        is_first_run: isFirstRun,
+        cuotas_updated: updatedCount,
+        total_days_applied: totalDays,
+      },
     };
   } catch (err) {
     await client.query('ROLLBACK');

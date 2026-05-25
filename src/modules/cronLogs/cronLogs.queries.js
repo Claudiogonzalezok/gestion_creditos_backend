@@ -34,9 +34,13 @@ const getList = async ({ jobName, since, limit }) => {
  * Estados (derivados):
  *   · RUNNING       — finished_at IS NULL (started_at presente).
  *   · ERROR         — success = FALSE.
- *   · NO_RUN_TODAY  — última corrida exitosa pero anterior a CURRENT_DATE
+ *   · NO_RUN_TODAY  — última corrida exitosa terminó antes de CURRENT_DATE
  *                     (incluye jobs que nunca corrieron).
- *   · OK            — última corrida exitosa hoy.
+ *   · OK            — última corrida exitosa terminó hoy.
+ *
+ * Nota: el estado se calcula con finished_at::date — un job que arrancó 23:59
+ * ayer pero terminó 00:03 hoy cuenta como "corrió hoy". Usar started_at acá
+ * marcaría NO_RUN_TODAY incorrectamente en ese caso borde.
  *
  * @param {string[]} knownJobs - Lista canónica de job_names del sistema.
  * @returns {Promise<object[]>}
@@ -64,8 +68,8 @@ const getSummary = async (knownJobs) => {
        CASE
          WHEN l.finished_at IS NULL AND l.started_at IS NOT NULL THEN 'RUNNING'
          WHEN l.success = FALSE                                  THEN 'ERROR'
-         WHEN l.started_at IS NULL                               THEN 'NO_RUN_TODAY'
-         WHEN l.started_at::date < CURRENT_DATE                  THEN 'NO_RUN_TODAY'
+         WHEN l.finished_at IS NULL                              THEN 'NO_RUN_TODAY'
+         WHEN l.finished_at::date < CURRENT_DATE                 THEN 'NO_RUN_TODAY'
          ELSE 'OK'
        END AS state,
        CASE
