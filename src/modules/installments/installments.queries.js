@@ -85,18 +85,34 @@ const waivePenalty = async (id, graceDays) => {
  * a amount_due, y registra un payment APPROVED por la diferencia realmente
  * recibida (no por amount_due completo — esto respeta pagos parciales previos
  * para que la cobranza histórica del crédito no se infle).
+ *
+ * Revalidación TOCTOU: el service valida status === 'PAID' FUERA de la
+ * transacción para fallar rápido; dentro de la transacción se vuelve a chequear
+ * sobre la fila ya bloqueada, eliminando la ventana de race donde otro flujo
+ * (cron, cobro concurrente) pudo haber liquidado la cuota entre ambos puntos.
+ *
+ * @throws {{ status: 404, message }} si la cuota no existe.
+ * @throws {{ status: 409, message }} si la cuota ya estaba PAID al tomar el lock.
  */
 const earlyPay = async (client, id, adminId, paymentMethod, transferReference) => {
-  // 1. Capturar el estado actual de la cuota con lock para evitar race conditions
+  // 1. Lock exclusivo + lectura del estado actual de la cuota.
   const before = await client.query(
-    `SELECT id, credit_id, amount_due::float8, amount_paid::float8, installment_number
+    `SELECT id, credit_id, amount_due::float8, amount_paid::float8,
+            installment_number, status
      FROM installments
      WHERE id = $1
      FOR UPDATE`,
     [id]
   );
-  if (!before.rows.length) return null;
+  if (!before.rows.length)
+    throw { status: 404, message: 'Cuota no encontrada.' };
   const inst = before.rows[0];
+
+  // 2. Revalidar status sobre la fila bloqueada. Si otro flujo la pagó entre
+  //    el check del service y este lock, abortamos antes de inflar la deuda.
+  if (inst.status === 'PAID')
+    throw { status: 409, message: 'Esta cuota ya fue pagada por otra operación concurrente.' };
+
   const amountToReceive = Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
 
   // 2. Marcar la cuota como pagada totalmente
