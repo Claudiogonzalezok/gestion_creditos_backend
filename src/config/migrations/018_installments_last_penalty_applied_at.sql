@@ -26,6 +26,6 @@ ALTER TABLE installments
 -- correspondiente — comportamiento aceptable porque preserva la corrección
 -- financiera hacia adelante.
 UPDATE installments
-SET last_penalty_applied_at = CURRENT_DATE - INTERVAL '1 day'
+SET last_penalty_applied_at = CURRENT_DATE - 1
 WHERE penalty_amount > 0
   AND status NOT IN ('PAID','REFINANCED');
