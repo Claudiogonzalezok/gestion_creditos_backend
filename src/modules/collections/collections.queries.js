@@ -305,6 +305,7 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
        cu.full_name          AS customer_name,
        cu.phone              AS customer_phone,
        cu.address            AS customer_address,
+       cu.dni                AS customer_dni,
        lnv.next_visit_date,
        s.reason              AS inclusion_reason,
        s.op_priority,
@@ -481,6 +482,7 @@ const findActiveByCollectorAndDate = async (collectorId, date, db = pool) => {
 const findById = async (id) => {
   const sheetRes = await pool.query(
     `SELECT cs.id, cs.sheet_date, cs.filter_used, cs.status, cs.created_at,
+            cs.sent_at, cs.sent_by,
             u.full_name AS collector_name, u.id AS collector_id,
             adm.full_name AS generated_by_name
      FROM collection_sheets cs
@@ -529,6 +531,7 @@ const findById = async (id) => {
             cu.full_name AS customer_name,
             cu.phone AS customer_phone,
             cu.address AS customer_address,
+            cu.dni AS customer_dni,
             lnv.next_visit_date,
             EXISTS (
               SELECT 1 FROM payments p
@@ -570,11 +573,29 @@ const findUnassignedCustomersWithPending = async () => {
   return r.rows;
 };
 
+/**
+ * Marca una planilla como enviada al cobrador.
+ * @param {string} id - ID de la planilla.
+ * @param {string} adminId - ID del admin que realiza el envío.
+ * @returns {Promise<{ id, sent_at }|null>} Fila actualizada o null si no existe/no es ACTIVE.
+ */
+const markAsSent = async (id, adminId) => {
+  const r = await pool.query(
+    `UPDATE collection_sheets
+     SET sent_at = NOW(), sent_by = $2
+     WHERE id = $1 AND status = 'ACTIVE'
+     RETURNING id, sent_at`,
+    [id, adminId],
+  );
+  return r.rows[0] || null;
+};
+
 module.exports = {
   findInstallmentsForSheet,
   create,
   createDetails,
   markSheetAsRegenerated,
+  markAsSent,
   findAll,
   findActiveByCollectorAndDate,
   findById,

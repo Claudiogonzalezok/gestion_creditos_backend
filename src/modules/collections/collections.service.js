@@ -143,4 +143,23 @@ const getById = async (id, requestingUser) => {
   return sheet;
 };
 
-module.exports = { generate, getAll, getById };
+/**
+ * Marca una planilla ACTIVE como enviada al cobrador.
+ * Solo el Admin puede realizar esta acción.
+ * @param {string} id - ID de la planilla.
+ * @param {{ id: string, role: string }} requestingUser - Usuario que realiza la acción.
+ * @returns {Promise<{ id, sent_at }>}
+ */
+const send = async (id, requestingUser) => {
+  const sheet = await queries.findById(id);
+  if (!sheet) throw { status: 404, message: 'Planilla no encontrada.' };
+  if (sheet.status !== 'ACTIVE')
+    throw { status: 409, message: 'Solo se puede marcar como enviada una planilla activa.' };
+  if (sheet.sent_at)
+    throw { status: 409, message: 'La planilla ya fue marcada como enviada.' };
+  const updated = await queries.markAsSent(id, requestingUser.id);
+  if (!updated) throw { status: 409, message: 'No se pudo marcar la planilla como enviada.' };
+  return updated;
+};
+
+module.exports = { generate, getAll, getById, send };

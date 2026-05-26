@@ -42,4 +42,15 @@ const getById = async (req, res) => {
   }
 };
 
-module.exports = { generate, getAll, getById };
+const send = async (req, res) => {
+  try {
+    const result = await service.send(req.params.id, req.user);
+    return response.success(res, result, 'Planilla marcada como enviada.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { generate, getAll, getById, send };
