@@ -40,17 +40,42 @@ const TRANSACTIONAL_TABLES = [
   'commissions',
   'credits',
   'customers',
+  // users entra acá porque las fixtures crean admins/cobradores. CASCADE
+  // limpia cualquier referencia desde otras tablas. No interfiere con seeds:
+  // el test DB solo corre migrations, no seeds, así que la tabla arranca vacía.
+  'users',
 ];
 
 /**
  * Limpia todas las tablas transaccionales. Reset de identity para que los
  * SERIAL arranquen siempre en 1 (útil para cron_execution_log que tiene
  * SERIAL PRIMARY KEY).
+ *
+ * Nota: truncar users con CASCADE también limpia system_config (que tiene FK
+ * updated_by → users). Re-seedea las claves críticas para que los tests no
+ * fallen al leer parámetros financieros.
  */
 const truncateAll = async () => {
   await pool.query(
     `TRUNCATE TABLE ${TRANSACTIONAL_TABLES.join(', ')} RESTART IDENTITY CASCADE`
   );
+  await reseedSystemConfig();
+};
+
+/**
+ * Re-inserta las DEFAULT_VALUES de system_config tras un truncate cascade.
+ * Idempotente vía ON CONFLICT DO NOTHING.
+ */
+const reseedSystemConfig = async () => {
+  const { DEFAULT_VALUES } = require('../../../src/modules/systemConfig/systemConfig.queries');
+  for (const [key, def] of Object.entries(DEFAULT_VALUES)) {
+    await pool.query(
+      `INSERT INTO system_config (key, value, description)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (key) DO NOTHING`,
+      [key, def.value, def.description]
+    );
+  }
 };
 
 /**

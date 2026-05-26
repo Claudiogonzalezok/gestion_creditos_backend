@@ -53,6 +53,22 @@ describe('payments.service holiday-related behavior', () => {
     queries.findById.mockResolvedValue({ id: 'payment-1', status: 'APPROVED' });
   });
 
+  // Shape FRESH que devuelve lockAndGetInstallment. Tras el fix de race
+  // conditions, _applyPaymentToInstallments usa estos valores (no los del
+  // payment.amount_*), así que los mocks deben reflejarlos correctamente.
+  const freshInstShape = (overrides = {}) => ({
+    id:                 'inst-1',
+    credit_id:          'credit-1',
+    installment_number: 1,
+    due_date:           '2026-05-04',
+    amount_due:         1000,
+    amount_paid:        0,
+    penalty_amount:     0,
+    status:             'OVERDUE',
+    payment_frequency:  'WEEKLY',
+    ...overrides,
+  });
+
   it('aprueba un cobro aunque la fecha contable sea feriado, usando el due_date ya ajustado de la cuota', async () => {
     queries.lockAndGetPayment.mockResolvedValue({
       id: 'payment-1',
@@ -68,7 +84,7 @@ describe('payments.service holiday-related behavior', () => {
       credit_id: 'credit-1',
       payment_frequency: 'WEEKLY',
     });
-    queries.lockAndGetInstallment.mockResolvedValue({ id: 'inst-1' });
+    queries.lockAndGetInstallment.mockResolvedValue(freshInstShape());
     queries.updateInstallment.mockResolvedValue('PAID');
     queries.getPendingInstallmentsFrom.mockResolvedValue([]);
 
@@ -95,7 +111,7 @@ describe('payments.service holiday-related behavior', () => {
       credit_id: 'credit-1',
       payment_frequency: 'WEEKLY',
     });
-    queries.lockAndGetInstallment.mockResolvedValue({ id: 'inst-1' });
+    queries.lockAndGetInstallment.mockResolvedValue(freshInstShape());
     queries.updateInstallment.mockResolvedValue('PAID');
     queries.getPendingInstallmentsFrom.mockResolvedValue([
       { id: 'inst-2', amount_due: 1000, amount_paid: 0 },
