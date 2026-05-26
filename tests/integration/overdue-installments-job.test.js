@@ -17,6 +17,8 @@
 const { pool, setupTestSuite } = require('./helpers/db');
 const {
   createInstallmentFixture,
+  createPendingPaymentFixture,
+  createUserFixture,
   reloadInstallment,
   seedCronLogSuccess,
 } = require('./helpers/fixtures');
@@ -423,5 +425,137 @@ describe('A — overdueInstallments.job — catch-up de N días', () => {
       cuotas_updated:     expect.any(Number),
       total_days_applied: expect.any(Number),
     });
+  });
+});
+
+describe('A — overdueInstallments.job — respeto a pre-cargas PENDING', () => {
+  it('pre-carga PENDING que cubre el saldo total → NO aplica mora', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(10),
+      original_amount:         1000,
+      amount_paid:             0,
+      last_penalty_applied_at: daysAgo(1),
+      status:                  'OVERDUE',
+    });
+    const collector = await createUserFixture({ role: 'COLLECTOR' });
+    // Pre-carga PENDING por el total del saldo
+    await createPendingPaymentFixture({
+      installment_id:  inst.id,
+      collector_id:    collector.id,
+      amount_received: 1000,
+    });
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    expect(after.penalty_amount).toBe(0);
+    expect(after.amount_due).toBeCloseTo(1000, 2);
+    // last_penalty_applied_at NO avanza — si la pre-carga se rechazara mañana,
+    // el cron del día siguiente podrá aplicar la mora correspondiente.
+    expect(after.last_penalty_applied_at).toBe(daysAgo(1));
+  });
+
+  it('pre-carga PENDING parcial → aplica mora solo sobre saldo no comprometido', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(10),
+      original_amount:         1000,
+      amount_paid:             0,
+      last_penalty_applied_at: daysAgo(1),
+      status:                  'OVERDUE',
+    });
+    const collector = await createUserFixture({ role: 'COLLECTOR' });
+    // Pre-carga PENDING por $400 (de un saldo de $1000). Restante a cobrar: $600.
+    await createPendingPaymentFixture({
+      installment_id:  inst.id,
+      collector_id:    collector.id,
+      amount_received: 400,
+    });
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    // delta = 600 * 0.005 = 3 (M=1)
+    expect(after.penalty_amount).toBeCloseTo(3, 2);
+    expect(after.amount_due).toBeCloseTo(1003, 2);
+    expect(after.last_penalty_applied_at).toBe(today());
+  });
+
+  it('pre-carga con is_reversal=TRUE NO cuenta como compromiso', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(10),
+      original_amount:         1000,
+      amount_paid:             0,
+      last_penalty_applied_at: daysAgo(1),
+      status:                  'OVERDUE',
+    });
+    const collector = await createUserFixture({ role: 'COLLECTOR' });
+    // Pre-carga pero marcada is_reversal — no debería bloquear mora
+    const payment = await createPendingPaymentFixture({
+      installment_id:  inst.id,
+      collector_id:    collector.id,
+      amount_received: 1000,
+    });
+    await pool.query(
+      `UPDATE payments SET is_reversal = TRUE WHERE id = $1`,
+      [payment.id]
+    );
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    // Mora normal sobre saldo completo
+    expect(after.penalty_amount).toBeCloseTo(5, 2);
+  });
+
+  it('pre-carga REJECTED NO bloquea mora — se aplica normalmente', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(10),
+      original_amount:         1000,
+      amount_paid:             0,
+      last_penalty_applied_at: daysAgo(1),
+      status:                  'OVERDUE',
+    });
+    const collector = await createUserFixture({ role: 'COLLECTOR' });
+    const payment = await createPendingPaymentFixture({
+      installment_id:  inst.id,
+      collector_id:    collector.id,
+      amount_received: 1000,
+    });
+    // Admin rechazó la pre-carga
+    await pool.query(
+      `UPDATE payments SET status = 'REJECTED', rejection_reason = 'test' WHERE id = $1`,
+      [payment.id]
+    );
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    expect(after.penalty_amount).toBeCloseTo(5, 2);
+  });
+
+  it('múltiples pre-cargas PENDING se suman — si combinadas cubren saldo, no mora', async () => {
+    await seedCronLogSuccess('overdueInstallments', daysAgo(1));
+    const inst = await createInstallmentFixture({
+      due_date:                daysAgo(10),
+      original_amount:         1000,
+      amount_paid:             0,
+      last_penalty_applied_at: daysAgo(1),
+      status:                  'OVERDUE',
+    });
+    const collector = await createUserFixture({ role: 'COLLECTOR' });
+    // Tres pre-cargas: 300 + 400 + 300 = 1000 (cubre el total)
+    await createPendingPaymentFixture({ installment_id: inst.id, collector_id: collector.id, amount_received: 300 });
+    await createPendingPaymentFixture({ installment_id: inst.id, collector_id: collector.id, amount_received: 400 });
+    await createPendingPaymentFixture({ installment_id: inst.id, collector_id: collector.id, amount_received: 300 });
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    expect(after.penalty_amount).toBe(0);
+    expect(after.last_penalty_applied_at).toBe(daysAgo(1));
   });
 });
