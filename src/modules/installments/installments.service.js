@@ -37,9 +37,18 @@ const applyPenalty = async (id, penaltyAmount) => {
 const waivePenalty = async (id) => {
   const inst = await queries.findById(id);
   if (!inst) throw { status: 404, message: 'Cuota no encontrada.' };
+  // Política defensiva: si la cuota ya está cancelada, condonar mora generaría
+  // un saldo a favor del cliente que el modelo actual no soporta (no hay tabla
+  // de créditos a cliente / refund). Forzamos a usar reversión en su lugar.
+  if (inst.status === 'PAID')
+    throw {
+      status:  409,
+      message: 'La cuota ya fue cancelada. La condonación retroactiva generaría saldo a favor no soportado por el sistema.',
+    };
   if (parseFloat(inst.penalty_amount) === 0)
     throw { status: 409, message: 'Esta cuota no tiene mora aplicada.' };
-  return queries.waivePenalty(id);
+  const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
+  return queries.waivePenalty(id, graceDays);
 };
 
 const earlyPay = async (id, paymentMethod, transferReference, adminId) => {

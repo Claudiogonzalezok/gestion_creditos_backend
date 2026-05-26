@@ -6,46 +6,55 @@ const cron = require('node-cron');
 const pool = require('../config/db');
 const { getWeekBounds } = require('../utils/creditCalculator');
 const { getValue } = require('../modules/systemConfig/systemConfig.queries');
+const { runWithLogging } = require('../utils/cronLogger');
 
-const closeWeeklyCycle = async () => {
-  try {
-    // Leer el parámetro en cada ejecución para reflejar cambios del Admin sin reinicio
-    const closeDay = parseInt(await getValue('commission_week_close_day') || '6');
-    if (new Date().getDay() !== closeDay) return;
-
-    const { week_start, week_end } = getWeekBounds(new Date());
-
-    const r = await pool.query(
-      `SELECT
-         u.full_name,
-         COALESCE(SUM(cm.amount), 0)::float8 AS pending_total,
-         COUNT(cm.id)::int AS pending_count
-       FROM commissions cm
-       JOIN users u ON u.id = cm.user_id
-       WHERE cm.status = 'PENDING'
-         AND cm.week_start = $1
-         AND cm.week_end   = $2
-       GROUP BY u.full_name
-       ORDER BY u.full_name`,
-      [week_start, week_end]
-    );
-
-    if (r.rows.length === 0) {
-      console.log(`[JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end}: sin comisiones pendientes.`);
-      return;
-    }
-
-    const totalEgress = r.rows.reduce((sum, row) => sum + parseFloat(row.pending_total), 0);
-    console.log(`[JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end} cerrado.`);
-    console.log(`  Empleados con pendientes: ${r.rows.length}`);
-    console.log(`  Total a liquidar el lunes: $${totalEgress.toFixed(2)}`);
-    r.rows.forEach(row =>
-      console.log(`  - ${row.full_name}: $${parseFloat(row.pending_total).toFixed(2)} (${row.pending_count} comisiones)`)
-    );
-  } catch (err) {
-    console.error('[JOB weeklyCommissionCycle] Error:', err.message);
+const closeWeeklyCycle = () => runWithLogging('weeklyCommissionCycle', async () => {
+  // Leer el parámetro en cada ejecución para reflejar cambios del Admin sin reinicio
+  const closeDay = parseInt(await getValue('commission_week_close_day') || '6');
+  if (new Date().getDay() !== closeDay) {
+    return { affected_rows: 0, metadata: { skipped: 'not_close_day' } };
   }
-};
+
+  const { week_start, week_end } = getWeekBounds(new Date());
+
+  const r = await pool.query(
+    `SELECT
+       u.full_name,
+       COALESCE(SUM(cm.amount), 0)::float8 AS pending_total,
+       COUNT(cm.id)::int AS pending_count
+     FROM commissions cm
+     JOIN users u ON u.id = cm.user_id
+     WHERE cm.status = 'PENDING'
+       AND cm.week_start = $1
+       AND cm.week_end   = $2
+     GROUP BY u.full_name
+     ORDER BY u.full_name`,
+    [week_start, week_end]
+  );
+
+  if (r.rows.length === 0) {
+    console.log(`[JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end}: sin comisiones pendientes.`);
+    return { affected_rows: 0, metadata: { week_start, week_end, employees: 0 } };
+  }
+
+  const totalEgress = r.rows.reduce((sum, row) => sum + parseFloat(row.pending_total), 0);
+  const totalCount  = r.rows.reduce((sum, row) => sum + parseInt(row.pending_count), 0);
+  console.log(`[JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end} cerrado.`);
+  console.log(`  Empleados con pendientes: ${r.rows.length}`);
+  console.log(`  Total a liquidar el lunes: $${totalEgress.toFixed(2)}`);
+  r.rows.forEach(row =>
+    console.log(`  - ${row.full_name}: $${parseFloat(row.pending_total).toFixed(2)} (${row.pending_count} comisiones)`)
+  );
+
+  return {
+    affected_rows: totalCount,
+    metadata: {
+      week_start, week_end,
+      employees: r.rows.length,
+      total_pending: totalEgress,
+    },
+  };
+});
 
 const start = () => {
   // Corre todos los días a las 23:59; el día de cierre se evalúa dinámicamente

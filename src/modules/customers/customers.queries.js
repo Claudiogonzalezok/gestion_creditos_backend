@@ -1,6 +1,18 @@
 const pool = require('../../config/db');
+const { IS_OVERDUE_DERIVED } = require('../../utils/installmentSql');
 
-const findAll = async ({ status, search, collector_id, include_summary = false } = {}) => {
+const findAll = async ({ status, search, collector_id, include_summary = false, grace_days = 0 } = {}) => {
+  const params = [];
+  let graceDaysIdx = null;
+
+  // Si se pide el summary, el badge "con mora" usa la condición derivada que
+  // necesita grace_days. Se pushea PRIMERO para que las condiciones dinámicas
+  // ($2, $3, ...) sigan funcionando con params.length.
+  if (include_summary) {
+    params.push(grace_days);
+    graceDaysIdx = params.length; // = 1
+  }
+
   const summarySelect = include_summary
     ? `,
       COALESCE(cs.active_credits, 0) AS active_credits,
@@ -25,7 +37,7 @@ const findAll = async ({ status, search, collector_id, include_summary = false }
       SELECT cr.customer_id, COUNT(*)::int AS overdue_installments
       FROM installments i
       INNER JOIN credits cr ON cr.id = i.credit_id
-      WHERE i.status = 'OVERDUE'
+      WHERE ${IS_OVERDUE_DERIVED('i', `$${graceDaysIdx}`)}
       GROUP BY cr.customer_id
     ) ds ON ds.customer_id = c.id
     LEFT JOIN (
@@ -51,7 +63,6 @@ const findAll = async ({ status, search, collector_id, include_summary = false }
     LEFT JOIN users u ON u.id = c.assigned_collector_id
     ${summaryJoins}
     WHERE 1=1`;
-  const params = [];
 
   if (status) {
     params.push(status);
@@ -94,7 +105,7 @@ const findById = async (id) => {
  * @param {string} id
  * @returns {Promise<object | null>}
  */
-const findWizardSummaryById = async (id) => {
+const findWizardSummaryById = async (id, graceDays = 0) => {
   const [customerRes, creditsRes, statsRes] = await Promise.all([
     pool.query(
       `SELECT
@@ -159,12 +170,12 @@ const findWizardSummaryById = async (id) => {
       `SELECT
          COUNT(*) FILTER (WHERE i.status = 'PAID')::int AS paid_installments,
          COUNT(*) FILTER (WHERE i.status IN ('PENDING', 'PARTIAL'))::int AS pending_installments,
-         COUNT(*) FILTER (WHERE i.status = 'OVERDUE')::int AS overdue_installments
+         COUNT(*) FILTER (WHERE ${IS_OVERDUE_DERIVED('i', '$2')})::int AS overdue_installments
        FROM installments i
        INNER JOIN credits c ON c.id = i.credit_id
        WHERE c.customer_id = $1
          AND c.status IN ('ACTIVE', 'SETTLED')`,
-      [id]
+      [id, graceDays]
     ),
   ]);
 

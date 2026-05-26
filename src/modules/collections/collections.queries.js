@@ -125,46 +125,178 @@ const CTE_LATEST_ANTECEDENT = `
   )
 `;
 
+// =============================================================================
+// REGLAS OPERATIVAS DE INCLUSIÓN EN PLANILLA (referencia normativa)
+// =============================================================================
+// 1. Una cuota con próxima visita FUTURA queda fuera hasta la fecha pactada.
+//    La agenda comprometida pisa al vencimiento como criterio operativo.
+//
+// 2. Una visita VENCIDA (next_visit_date < target_date) deja automáticamente
+//    de actuar como agenda válida; la cuota vuelve al flujo de mora.
+//
+// 3. Las cuotas PARTIAL se consideran pendientes mientras exista saldo
+//    ((amount_due - amount_paid) > 0). El status NO es la fuente de verdad
+//    por sí solo — el cinturón financiero blinda contra cuotas "fantasma"
+//    con status colgando.
+//
+// 4. La vencidez se deriva de due_date < target_date, NO del status OVERDUE
+//    persistido. Esto evita inconsistencias si la cron no corrió.
+//
+// 5. Una cuota aparece UNA sola vez aunque cumpla múltiples razones de
+//    inclusión. Prioridad de inclusión (qué razón se reporta):
+//        OVERDUE / OVERDUE_UNSCHEDULED > DUE_TODAY > SCHEDULED_VISIT > ALL_PENDING
+//
+// 6. El ORDEN visual usa una prioridad DISTINTA (op_priority):
+//        1 = visita pactada · 2 = mora · 3 = vence hoy · 4 = resto
+//    Operativamente el cobrador resuelve compromisos primero, después mora.
+//
+// 7. inclusion_reason / op_priority / remaining_amount se PERSISTEN en
+//    collection_sheet_details como snapshot histórico — la planilla impresa
+//    no cambia aunque después se modifiquen visitas o pagos. En cambio
+//    next_visit_date y antecedente siguen vivos en findById porque el
+//    cobrador necesita ver la gestión más reciente.
+//
+// 8. La fuente de verdad de la última visita es created_at DESC (última
+//    gestión registrada), NO next_visit_date DESC (fecha más lejana). Esto
+//    permite que un cambio de agenda pise correctamente al anterior.
+// =============================================================================
+
 /**
- * Busca cuotas para incluir en una planilla de cobro.
- * Aplica lógica de próxima visita: excluye cuotas con visita futura,
- * incluye cuotas con visita vencida/hoy o sin visita registrada.
+ * Busca cuotas para incluir en una planilla, aplicando las reglas operativas.
  *
- * Parámetros siempre: $1 = collectorId, $2 = date.
- * Fuente de verdad del next_visit_date: último registro creado (created_at DESC), no la fecha más lejana.
+ * Implementación: CTEs semánticas por motivo de inclusión, combinadas según
+ * el filter, deduplicadas con ROW_NUMBER por prioridad explícita y ordenadas
+ * por prioridad operativa.
  *
  * @param {string} collectorId
- * @param {string} date - Fecha de la planilla (YYYY-MM-DD).
+ * @param {string} date - Fecha objetivo (YYYY-MM-DD).
  * @param {string} filter - TODAY | OVERDUE | TODAY_AND_OVERDUE | ALL_PENDING
  * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
  * @returns {Promise<Array>}
  */
 const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) => {
-  // $1 = collectorId, $2 = date — siempre presentes para la condición de next_visit_date
-  const params = [collectorId, date];
-
-  let statusFilter;
-  if (filter === 'TODAY') {
-    statusFilter = `i.status IN ('PENDING','PARTIAL') AND i.due_date::date = $2::date`;
-  } else if (filter === 'OVERDUE') {
-    statusFilter = `i.status = 'OVERDUE'`;
-  } else if (filter === 'TODAY_AND_OVERDUE') {
-    statusFilter = `(i.status = 'OVERDUE' OR (i.status IN ('PENDING','PARTIAL') AND i.due_date::date = $2::date))`;
-  } else {
-    // ALL_PENDING — incluye todo lo pendiente sin filtrar por fecha de vencimiento
-    statusFilter = `i.status IN ('PENDING','OVERDUE','PARTIAL')`;
-  }
+  const params = [collectorId, date, filter || 'ALL_PENDING'];
 
   const r = await db.query(
     `WITH
       ${CTE_LATEST_NEXT_VISIT},
-      ${CTE_LATEST_ANTECEDENT}
+      ${CTE_LATEST_ANTECEDENT},
+
+      -- Universo base: cuotas vigentes con saldo > 0 (regla 3).
+      candidates AS (
+        SELECT i.id                AS installment_id,
+               i.due_date,
+               i.amount_due,
+               i.amount_paid
+        FROM installments i
+        JOIN credits   c  ON c.id  = i.credit_id
+        JOIN customers cu ON cu.id = c.customer_id
+        WHERE c.status = 'ACTIVE'
+          AND cu.assigned_collector_id = $1
+          AND i.status IN ('PENDING','PARTIAL','OVERDUE')
+          AND (i.amount_due - i.amount_paid) > 0
+      ),
+
+      -- Razones de inclusión (cada una resuelve un "por qué entra")
+      -- scheduled_today: visita pactada exactamente para target_date.
+      scheduled_today AS (
+        SELECT c.installment_id
+        FROM candidates c
+        JOIN latest_next_visit lnv ON lnv.installment_id = c.installment_id
+        WHERE lnv.next_visit_date::date = $2::date
+      ),
+      -- due_today: vence hoy y NO hay agenda futura (regla 1).
+      due_today AS (
+        SELECT c.installment_id
+        FROM candidates c
+        LEFT JOIN latest_next_visit lnv ON lnv.installment_id = c.installment_id
+        WHERE c.due_date::date = $2::date
+          AND (lnv.next_visit_date IS NULL OR lnv.next_visit_date::date <= $2::date)
+      ),
+      -- overdue: vencida y sin agenda futura (incluye visita hoy o vencida).
+      overdue AS (
+        SELECT c.installment_id
+        FROM candidates c
+        LEFT JOIN latest_next_visit lnv ON lnv.installment_id = c.installment_id
+        WHERE c.due_date::date < $2::date
+          AND (lnv.next_visit_date IS NULL OR lnv.next_visit_date::date <= $2::date)
+      ),
+      -- overdue_unscheduled: vencida sin agenda vigente (regla 2).
+      -- Subconjunto de overdue que excluye visita = target_date (esa la trae
+      -- scheduled_today). Usado por filter_today.
+      overdue_unscheduled AS (
+        SELECT c.installment_id
+        FROM candidates c
+        LEFT JOIN latest_next_visit lnv ON lnv.installment_id = c.installment_id
+        WHERE c.due_date::date < $2::date
+          AND (lnv.next_visit_date IS NULL OR lnv.next_visit_date::date < $2::date)
+      ),
+
+      -- Composición por filter — incl_prio define qué razón gana en caso de
+      -- overlap (regla 5).
+      filter_overdue AS (
+        SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM overdue
+        UNION ALL
+        SELECT installment_id, 'SCHEDULED_VISIT' AS reason, 3 AS incl_prio FROM scheduled_today
+      ),
+      filter_today AS (
+        SELECT installment_id, 'OVERDUE_UNSCHEDULED' AS reason, 1 AS incl_prio FROM overdue_unscheduled
+        UNION ALL
+        SELECT installment_id, 'DUE_TODAY'           AS reason, 2 AS incl_prio FROM due_today
+        UNION ALL
+        SELECT installment_id, 'SCHEDULED_VISIT'     AS reason, 3 AS incl_prio FROM scheduled_today
+      ),
+      filter_today_overdue AS (
+        SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM overdue
+        UNION ALL
+        SELECT installment_id, 'DUE_TODAY'       AS reason, 2 AS incl_prio FROM due_today
+        UNION ALL
+        SELECT installment_id, 'SCHEDULED_VISIT' AS reason, 3 AS incl_prio FROM scheduled_today
+      ),
+      filter_all_pending AS (
+        SELECT installment_id, 'ALL_PENDING' AS reason, 4 AS incl_prio FROM candidates
+      ),
+
+      selected_raw AS (
+        SELECT * FROM filter_overdue       WHERE $3 = 'OVERDUE'
+        UNION ALL
+        SELECT * FROM filter_today         WHERE $3 = 'TODAY'
+        UNION ALL
+        SELECT * FROM filter_today_overdue WHERE $3 = 'TODAY_AND_OVERDUE'
+        UNION ALL
+        SELECT * FROM filter_all_pending   WHERE $3 = 'ALL_PENDING'
+      ),
+
+      -- Dedupe por incl_prio (regla 5) + op_priority derivada (regla 6).
+      -- op_priority se calcula sobre la cuota deduplicada considerando si
+      -- tiene visita hoy, independiente del reason ganador.
+      selected AS (
+        SELECT
+          s.installment_id,
+          s.reason,
+          CASE
+            WHEN EXISTS (SELECT 1 FROM scheduled_today st WHERE st.installment_id = s.installment_id) THEN 1
+            WHEN s.reason IN ('OVERDUE','OVERDUE_UNSCHEDULED') THEN 2
+            WHEN s.reason = 'DUE_TODAY' THEN 3
+            ELSE 4
+          END AS op_priority
+        FROM (
+          SELECT installment_id, reason, incl_prio,
+            ROW_NUMBER() OVER (
+              PARTITION BY installment_id ORDER BY incl_prio
+            ) AS rn
+          FROM selected_raw
+        ) s
+        WHERE s.rn = 1
+      )
+
      SELECT
        i.id                  AS installment_id,
        i.installment_number,
        i.due_date,
        i.amount_due::float8,
        i.amount_paid::float8,
+       (i.amount_due - i.amount_paid)::float8 AS remaining_amount,
        i.penalty_amount::float8,
        i.status              AS installment_status,
        c.id                  AS credit_id,
@@ -174,8 +306,10 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
        cu.phone              AS customer_phone,
        cu.address            AS customer_address,
        lnv.next_visit_date,
+       s.reason              AS inclusion_reason,
+       s.op_priority,
        CASE
-         WHEN lnv.next_visit_date = $2::date THEN 'VISIT_DATE'
+         WHEN s.reason = 'SCHEDULED_VISIT' THEN 'VISIT_DATE'
          ELSE 'DUE_DATE'
        END                   AS inclusion_criteria,
        la.antecedent_id,
@@ -189,21 +323,23 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
            AND p.is_reversal = FALSE
        )                     AS has_pending_payment,
        ${SELECT_COLLECTION_REFERENCE} AS collection_reference
-     FROM installments i
-     JOIN credits c    ON c.id  = i.credit_id
+     FROM selected s
+     JOIN installments i ON i.id = s.installment_id
+     JOIN credits   c  ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
      LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
      LEFT JOIN latest_antecedent la  ON la.installment_id  = i.id
-     WHERE c.status = 'ACTIVE'
-       AND cu.assigned_collector_id = $1
-       AND ${statusFilter}
-       AND (
-         lnv.next_visit_date IS NULL           -- sin compromiso: incluir por vencimiento
-         OR lnv.next_visit_date <= $2::date    -- compromiso hoy o ya vencido: incluir
-         -- next_visit_date > $2 → excluida hasta que llegue ese día
-       )
-     ORDER BY cu.full_name, i.due_date`,
-    params
+     -- Agrupación operativa: alfabético por cliente, luego por crédito, luego
+     -- por número de cuota. El cobrador resuelve un cliente UNA vez con todas
+     -- sus cuotas. cu.id desempata homónimos y c.id estabiliza el orden entre
+     -- créditos del mismo cliente.
+     ORDER BY
+       cu.full_name,
+       cu.id,
+       c.id,
+       i.installment_number,
+       i.due_date`,
+    params,
   );
   return r.rows;
 };
@@ -225,33 +361,45 @@ const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
 };
 
 /**
- * Inserta los detalles de una planilla con snapshot del monto y datos de antecedente.
+ * Inserta los detalles de una planilla persistiendo el snapshot histórico
+ * (planned_amount, inclusion_criteria, inclusion_reason, op_priority,
+ * remaining_amount_snapshot, antecedente).
+ *
+ * Los items ya vienen ordenados por findInstallmentsForSheet según
+ * op_priority + next_visit_date + due_date + customer_name. El order_number
+ * se asigna 1..N en ese orden y se respeta en cualquier lectura posterior.
+ *
  * @param {string} sheetId
- * @param {Array<object>} items - Items de findInstallmentsForSheet (incluyen los campos nuevos)
+ * @param {Array<object>} items
  * @param {import('pg').PoolClient} [db=pool]
  */
 const createDetails = async (sheetId, items, db = pool) => {
   if (!items.length) return;
+  const COLS_PER_ROW = 11;
   const values = items.map((_, i) => {
-    const b = i * 8;
-    return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6}, $${b+7}, $${b+8})`;
+    const b = i * COLS_PER_ROW;
+    return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6}, $${b+7}, $${b+8}, $${b+9}, $${b+10}, $${b+11})`;
   }).join(', ');
   const params = items.flatMap((item, i) => [
     sheetId,
     item.installment_id,
     i + 1,
-    item.amount_due,                       // planned_amount — snapshot al momento de emisión
+    item.amount_due,                                 // planned_amount
     item.inclusion_criteria || 'DUE_DATE',
     item.antecedent_type    || null,
     item.antecedent_date    || null,
     item.antecedent_notes   || null,
+    item.inclusion_reason   || null,                 // snapshot razón inclusión
+    item.op_priority        ?? null,                 // snapshot prioridad operativa
+    item.remaining_amount   ?? null,                 // snapshot saldo a cobrar
   ]);
   await db.query(
     `INSERT INTO collection_sheet_details
        (sheet_id, installment_id, order_number, planned_amount,
-        inclusion_criteria, antecedent_type, antecedent_date, antecedent_notes)
+        inclusion_criteria, antecedent_type, antecedent_date, antecedent_notes,
+        inclusion_reason, op_priority, remaining_amount_snapshot)
      VALUES ${values}`,
-    params
+    params,
   );
 };
 
@@ -344,11 +492,16 @@ const findById = async (id) => {
   if (!sheetRes.rows.length) return null;
   const sheet = sheetRes.rows[0];
 
-  // antecedent_* viene de latest_antecedent (CTE), NO del snapshot guardado en csd:
-  // así el admin/cobrador ve siempre la última gestión real, incluso si se registró
-  // después de generar la planilla. El snapshot csd.antecedent_* sigue persistido
-  // en DB intacto, por si en el futuro se quiere auditar el estado al momento de
-  // generación. next_visit_date también sale del CTE para reflejar lo actual.
+  // Distinción snapshot vs vivo (regla 7):
+  //   • SNAPSHOT (de csd) — inmutable, reflejan el momento de generación:
+  //       planned_amount, inclusion_criteria, inclusion_reason, op_priority,
+  //       remaining_amount_snapshot.
+  //   • VIVO (de CTEs) — refleja el estado actual para operatoria:
+  //       antecedent_*, next_visit_date, has_pending_payment, amounts/status
+  //       de la cuota (para mostrar mora aplicada después, p.ej.).
+  //   • collection_reference se recalcula porque depende de datos que pueden
+  //     cambiar (cantidad de cuotas, productos asociados, etc.) y no se
+  //     persiste — su shape es el mismo siempre.
   const detailsRes = await pool.query(
     `WITH
       ${CTE_LATEST_NEXT_VISIT},
@@ -356,6 +509,9 @@ const findById = async (id) => {
      SELECT csd.order_number,
             csd.planned_amount::float8,
             csd.inclusion_criteria,
+            csd.inclusion_reason,
+            csd.op_priority,
+            csd.remaining_amount_snapshot::float8 AS remaining_amount,
             la.antecedent_id,
             la.antecedent_type,
             la.antecedent_date,

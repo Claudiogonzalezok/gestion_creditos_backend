@@ -151,27 +151,51 @@ const approve = async (client, id, adminId) => {
   );
 };
 
-// Aplica el cobro sobre la cuota, sin exceder el saldo real pendiente
-const updateInstallment = async (client, installmentId, amountReceived, amountDue, currentAmountPaid) => {
-  const remaining   = amountDue - currentAmountPaid;
-  const toApply     = Math.min(amountReceived, remaining);
-  const newTotal    = currentAmountPaid + toApply;
-  const newStatus   = newTotal >= amountDue ? 'PAID' : 'PARTIAL';
-  await client.query(
+/**
+ * Aplica un cobro sobre la cuota sin exceder el saldo real pendiente.
+ * El nuevo status se deriva de tres ejes: saldo restante, due_date y grace_days,
+ * en lugar de colapsar todo a PARTIAL — así una cuota vencida con pago parcial
+ * mantiene su estado OVERDUE y no oscila a PARTIAL.
+ *
+ * Reglas de transición de status (en SQL, para evaluarse con el due_date real):
+ *   1. amount_paid_nuevo ≥ amount_due                       → PAID
+ *   2. due_date + grace_days < CURRENT_DATE                  → OVERDUE
+ *   3. amount_paid_nuevo > 0                                 → PARTIAL
+ *   4. caso restante                                         → PENDING
+ *
+ * @param {object} client      - Cliente de transacción pg.
+ * @param {string} installmentId
+ * @param {number} amountReceived - Monto recibido a aplicar.
+ * @param {number} amountDue      - amount_due actual de la cuota.
+ * @param {number} currentAmountPaid - amount_paid antes del cobro.
+ * @param {number} graceDays      - Días de gracia del system_config.
+ * @returns {Promise<string>} Status final de la cuota tras aplicar el pago.
+ */
+const updateInstallment = async (client, installmentId, amountReceived, amountDue, currentAmountPaid, graceDays) => {
+  const remaining = amountDue - currentAmountPaid;
+  const toApply   = Math.min(amountReceived, remaining);
+  const newTotal  = currentAmountPaid + toApply;
+  const r = await client.query(
     `UPDATE installments
-     SET status      = $1,
-         amount_paid = $2,
+     SET amount_paid = $1,
+         status      = CASE
+                         WHEN $1 >= amount_due                                          THEN 'PAID'
+                         WHEN due_date < (CURRENT_DATE - ($2)::int * INTERVAL '1 day') THEN 'OVERDUE'
+                         WHEN $1 > 0                                                    THEN 'PARTIAL'
+                         ELSE 'PENDING'
+                       END,
          updated_at  = NOW()
-     WHERE id = $3`,
-    [newStatus, newTotal, installmentId]
+     WHERE id = $3
+     RETURNING status`,
+    [newTotal, graceDays, installmentId]
   );
-  return newStatus;
+  return r.rows[0].status;
 };
 
 const countPendingInstallments = async (client, creditId) => {
   const r = await client.query(
     `SELECT COUNT(*) FROM installments
-     WHERE credit_id = $1 AND status NOT IN ('PAID')`,
+     WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED')`,
     [creditId]
   );
   return parseInt(r.rows[0].count);
@@ -209,7 +233,7 @@ const getTotalPendingBalance = async (creditId) => {
          ), 0)
      )::float8 AS total
      FROM installments i
-     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID')`,
+     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID','REFINANCED')`,
     [creditId]
   );
   return Math.max(r.rows[0].total, 0);
@@ -222,7 +246,7 @@ const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumbe
             amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments
      WHERE credit_id = $1
-       AND status NOT IN ('PAID')
+       AND status NOT IN ('PAID','REFINANCED')
        AND installment_number >= $2
      ORDER BY installment_number`,
     [creditId, fromInstallmentNumber]
@@ -255,7 +279,7 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
     `WITH ordered AS (
        SELECT id, ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
        FROM installments
-       WHERE credit_id = $1 AND status NOT IN ('PAID')
+       WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED')
      )
      UPDATE installments i
      SET original_due_date = COALESCE(i.original_due_date, i.due_date),
@@ -375,20 +399,28 @@ const findPaymentsByCredit = async (creditId) => {
 
 /**
  * Revierte una cuota a su estado anterior al cobro que se está reversando.
- * Resta el monto recibido de amount_paid y recalcula el status.
+ * Resta el monto recibido de amount_paid y recalcula el status considerando
+ * due_date + grace_days. Si tras la reversión la cuota sigue vencida, vuelve
+ * a OVERDUE (antes quedaba en PENDING o PARTIAL incorrectamente).
+ *
+ * @param {object} client - Cliente de transacción.
+ * @param {string} installmentId
+ * @param {number} amountToRestore - Monto del cobro original a deshacer.
+ * @param {number} graceDays - Días de gracia del system_config.
  */
-const restoreInstallmentFromReversal = async (client, installmentId, amountToRestore) => {
+const restoreInstallmentFromReversal = async (client, installmentId, amountToRestore, graceDays) => {
   await client.query(
     `UPDATE installments
      SET amount_paid = GREATEST(amount_paid - $1, 0),
          status      = CASE
-                         WHEN GREATEST(amount_paid - $1, 0) <= 0         THEN 'PENDING'
-                         WHEN GREATEST(amount_paid - $1, 0) < amount_due THEN 'PARTIAL'
-                         ELSE 'PAID'
+                         WHEN GREATEST(amount_paid - $1, 0) >= amount_due               THEN 'PAID'
+                         WHEN due_date < (CURRENT_DATE - ($3)::int * INTERVAL '1 day') THEN 'OVERDUE'
+                         WHEN GREATEST(amount_paid - $1, 0) > 0                         THEN 'PARTIAL'
+                         ELSE 'PENDING'
                        END,
          updated_at  = NOW()
      WHERE id = $2`,
-    [amountToRestore, installmentId]
+    [amountToRestore, installmentId, graceDays]
   );
 };
 

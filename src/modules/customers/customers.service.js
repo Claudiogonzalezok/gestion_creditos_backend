@@ -1,6 +1,15 @@
 const bcrypt  = require('bcryptjs');
 const queries = require('./customers.queries');
+const { getValue } = require('../systemConfig/systemConfig.queries');
 const { generateTempPassword } = require('../../utils/tempPassword');
+
+/**
+ * Días de gracia para considerar una cuota vencida en queries que usan la
+ * condición derivada (IS_OVERDUE_DERIVED).
+ * @returns {Promise<number>}
+ */
+const getGraceDays = async () =>
+  parseInt(await getValue('penalty_grace_days') || '3');
 
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10');
 
@@ -29,6 +38,9 @@ const getAll = async (filters, requestingUser) => {
   if (requestingUser.role === 'COLLECTOR') {
     normalizedFilters.collector_id = requestingUser.id;
   }
+  if (normalizedFilters.include_summary) {
+    normalizedFilters.grace_days = await getGraceDays();
+  }
   const results = await queries.findAll(normalizedFilters);
   return results.map(c => stripFieldsByRole(c, requestingUser));
 };
@@ -46,7 +58,7 @@ const getById = async (id, requestingUser) => {
  * @returns {Promise<object>}
  */
 const getWizardSummary = async (id, requestingUser) => {
-  const summary = await queries.findWizardSummaryById(id);
+  const summary = await queries.findWizardSummaryById(id, await getGraceDays());
   if (!summary) throw { status: 404, message: 'Cliente no encontrado.' };
 
   if (requestingUser.role === 'COLLECTOR' && summary.collector_id !== requestingUser.id) {

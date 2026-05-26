@@ -4,8 +4,9 @@
 const cron = require('node-cron');
 const pool = require('../config/db');
 const { getValue } = require('../modules/systemConfig/systemConfig.queries');
+const { runWithLogging } = require('../utils/cronLogger');
 
-const expireOldCredits = async () => {
+const expireOldCredits = () => runWithLogging('creditExpiry', async () => {
   const client = await pool.connect();
   try {
     const days = parseInt(await getValue('credit_expiry_days') || '7');
@@ -22,6 +23,7 @@ const expireOldCredits = async () => {
     );
 
     const expiredIds = r.rows.map((row) => row.id);
+    let freedCount = 0;
 
     if (expiredIds.length) {
       // Liberar unidades RESERVED vinculadas a créditos expirados
@@ -37,22 +39,28 @@ const expireOldCredits = async () => {
          RETURNING id`,
         [expiredIds]
       );
+      freedCount = freed.rows.length;
       console.log(
         `[JOB creditExpiry] ${expiredIds.length} crédito(s) expirado(s). ` +
-        `${freed.rows.length} unidad(es) liberada(s).`
+        `${freedCount} unidad(es) liberada(s).`
       );
     } else {
       console.log('[JOB creditExpiry] Sin créditos a expirar.');
     }
 
     await client.query('COMMIT');
+
+    return {
+      affected_rows: expiredIds.length,
+      metadata: { expired_credits: expiredIds.length, freed_units: freedCount },
+    };
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('[JOB creditExpiry] Error:', err.message);
+    throw err;
   } finally {
     client.release();
   }
-};
+});
 
 const start = () => {
   // Todos los días a las 03:00

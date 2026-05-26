@@ -23,6 +23,10 @@ jest.mock('../cashRegister/cashRegister.queries', () => ({
   findByDate: jest.fn(),
 }));
 
+jest.mock('../systemConfig/systemConfig.queries', () => ({
+  getValue: jest.fn().mockResolvedValue('3'),
+}));
+
 jest.mock('../../utils/transaction', () => ({
   withTransaction: jest.fn(),
 }));

@@ -627,6 +627,7 @@ const reject = async (id, rejectionReason, adminId) => {
       [rejectionReason, adminId, id]
     );
     // Si es una refinanciación rechazada, revertir el crédito original a ACTIVE
+    // y restaurar sus cuotas al estado correcto según vencimiento y pagos parciales.
     if (credit.refinanced_from_credit_id) {
       const rejectedNote = `Refinanciación rechazada (${new Date().toLocaleDateString('es-AR')}): ${rejectionReason}`;
       await client.query(
@@ -642,6 +643,19 @@ const reject = async (id, rejectionReason, adminId) => {
              updated_at = NOW()
          WHERE id = $1 AND status = 'REFINANCED'`,
         [credit.refinanced_from_credit_id, rejectedNote]
+      );
+      const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
+      await client.query(
+        `UPDATE installments
+         SET status = CASE
+               WHEN due_date < CURRENT_DATE - ($1 * INTERVAL '1 day') THEN 'OVERDUE'
+               WHEN amount_paid > 0                                    THEN 'PARTIAL'
+               ELSE 'PENDING'
+             END,
+             updated_at = NOW()
+         WHERE credit_id = $2
+           AND status = 'REFINANCED'`,
+        [graceDays, credit.refinanced_from_credit_id]
       );
     }
   });

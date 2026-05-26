@@ -3,18 +3,19 @@
 
 const cron = require('node-cron');
 const { cleanExpiredTokens, cleanExpiredRefreshTokens } = require('../modules/auth/auth.queries');
+const { runWithLogging } = require('../utils/cronLogger');
 
-const runCleanup = async () => {
-  try {
-    const [deletedBl, deletedRt] = await Promise.all([
-      cleanExpiredTokens(),
-      cleanExpiredRefreshTokens(),
-    ]);
-    console.log(`[JOB tokenCleanup] Blacklist: ${deletedBl} eliminado(s). RefreshTokens: ${deletedRt} eliminado(s).`);
-  } catch (err) {
-    console.error('[JOB tokenCleanup] Error:', err.message);
-  }
-};
+const runCleanup = () => runWithLogging('tokenCleanup', async () => {
+  const [deletedBl, deletedRt] = await Promise.all([
+    cleanExpiredTokens(),
+    cleanExpiredRefreshTokens(),
+  ]);
+  console.log(`[JOB tokenCleanup] Blacklist: ${deletedBl} eliminado(s). RefreshTokens: ${deletedRt} eliminado(s).`);
+  return {
+    affected_rows: deletedBl + deletedRt,
+    metadata: { blacklist: deletedBl, refresh_tokens: deletedRt },
+  };
+});
 
 const start = () => {
   cron.schedule('0 4 * * *', runCleanup, {
