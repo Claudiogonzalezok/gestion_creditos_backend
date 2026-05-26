@@ -152,6 +152,43 @@ describe('F — fixes de concurrencia en pagos', () => {
     });
   });
 
+  describe('BUG #4 — getById filtra por collector_id para no-admins', () => {
+    it('admin puede leer cualquier cobro', async () => {
+      const admin     = await createUserFixture({ role: 'ADMIN' });
+      const collector = await createUserFixture({ role: 'COLLECTOR' });
+      const payment   = await createPendingPaymentFixture({ collector_id: collector.id });
+
+      const result = await paymentsService.getById(payment.id, admin);
+      expect(result.id).toBe(payment.id);
+    });
+
+    it('cobrador puede leer su propio cobro', async () => {
+      const collector = await createUserFixture({ role: 'COLLECTOR' });
+      const payment   = await createPendingPaymentFixture({ collector_id: collector.id });
+
+      const result = await paymentsService.getById(payment.id, collector);
+      expect(result.id).toBe(payment.id);
+    });
+
+    it('cobrador NO puede leer cobros de otro cobrador (404, no 403, para no filtrar existencia)', async () => {
+      const collectorA = await createUserFixture({ role: 'COLLECTOR' });
+      const collectorB = await createUserFixture({ role: 'COLLECTOR' });
+      const payment    = await createPendingPaymentFixture({ collector_id: collectorA.id });
+
+      await expect(paymentsService.getById(payment.id, collectorB))
+        .rejects.toMatchObject({ status: 404 });
+    });
+
+    it('SELLER_COLLECTOR aplica el mismo filtro que COLLECTOR', async () => {
+      const collectorA = await createUserFixture({ role: 'COLLECTOR' });
+      const sellerCol  = await createUserFixture({ role: 'SELLER_COLLECTOR' });
+      const payment    = await createPendingPaymentFixture({ collector_id: collectorA.id });
+
+      await expect(paymentsService.getById(payment.id, sellerCol))
+        .rejects.toMatchObject({ status: 404 });
+    });
+  });
+
   describe('BUG #3 — reject con SQL guard contra race con approve', () => {
     it('falla con 409 si el payment ya está APPROVED (simula race con approve concurrente)', async () => {
       const admin = await createUserFixture({ role: 'ADMIN' });

@@ -184,9 +184,23 @@ const getAll = async (filters, requestingUser) => {
   return queries.findAll(filters);
 };
 
-const getById = async (id) => {
+/**
+ * Devuelve un cobro por ID. Para cobradores (no admin), solo retorna cobros
+ * propios — alinea el comportamiento con getAll (que también filtra por
+ * collector_id). Sin este filtro, un cobrador podía leer cobros ajenos
+ * conociendo el UUID, lo que filtraba info de clientes de otros cobradores.
+ *
+ * Retorna 404 si el cobro pertenece a otro cobrador, para no filtrar la
+ * existencia del recurso.
+ */
+const getById = async (id, requestingUser) => {
   const payment = await queries.findById(id);
   if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
+
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role)
+      && payment.collector_id !== requestingUser.id) {
+    throw { status: 404, message: 'Cobro no encontrado.' };
+  }
   return payment;
 };
 
