@@ -10,7 +10,7 @@ const getAll = async (req, res) => {
 
 const getById = async (req, res) => {
   try {
-    return response.success(res, await service.getById(req.params.id));
+    return response.success(res, await service.getById(req.params.id, req.user));
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     return response.serverError(res, err);

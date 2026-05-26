@@ -34,19 +34,40 @@ const _validateCajaOpen = async (date) => {
  * Requiere un client con transacción activa.
  *
  * @param {object} client          - Cliente de transacción pg.
- * @param {object} payment         - Registro del payment con datos de la cuota y crédito.
+ * @param {object} payment         - Registro del payment con datos del cobro (installment_id,
+ *                                   credit_id, payment_method, transfer_reference).
+ *                                   Los campos amount_due/amount_paid/due_date que vengan acá
+ *                                   son IGNORADOS — siempre se releen frescos bajo lock.
  * @param {number} amountToApply   - Monto total a distribuir.
  * @param {string} adminId         - ID del usuario que aprueba (para cuotas adelantadas).
  * @param {string|null} paymentId  - ID del cobro principal (para vincular sub-pagos vía parent_payment_id).
  * @param {number} graceDays       - Días de gracia para recálculo de status (de system_config).
  * @returns {Promise<void>}
+ *
+ * @throws {{ status: 409 }} si la cuota cambió de estado bajo lock (REFINANCED, PAID por
+ *                            otro flujo concurrente). Defensa contra race conditions.
  */
 const _applyPaymentToInstallments = async (client, payment, amountToApply, adminId, paymentId = null, graceDays = 0) => {
-  const amountDue   = parseFloat(payment.amount_due);
-  const amountPaid  = parseFloat(payment.amount_paid);
+  // Lock + lectura FRESH de la cuota. Crítico: no confiar en payment.amount_due/paid
+  // del JOIN previo en lockAndGetPayment — ese SELECT NO lockea la fila de installments,
+  // y otra transacción concurrente puede haber modificado amount_paid entre el JOIN y
+  // este punto. Releer bajo lock cierra esa race window.
+  const freshInst = await queries.lockAndGetInstallment(client, payment.installment_id);
+  if (!freshInst)
+    throw { status: 404, message: 'Cuota no encontrada.' };
 
-  // Lock exclusivo sobre la cuota principal antes de modificarla
-  await queries.lockAndGetInstallment(client, payment.installment_id);
+  // Defensa contra race conditions: la cuota pudo haber cambiado de estado
+  // entre la creación de la pre-carga y este lock.
+  if (freshInst.status === 'REFINANCED')
+    throw { status: 409, message: 'La cuota fue absorbida en una refinanciación. La pre-carga ya no es válida.' };
+  if (freshInst.status === 'PAID')
+    throw { status: 409, message: 'Esta cuota ya fue cancelada por otra operación concurrente.' };
+
+  const amountDue  = parseFloat(freshInst.amount_due);
+  const amountPaid = parseFloat(freshInst.amount_paid);
+
+  if (amountPaid >= amountDue)
+    throw { status: 409, message: 'Esta cuota ya fue cancelada por otra operación concurrente.' };
 
   const newInstStatus = await queries.updateInstallment(
     client,
@@ -65,8 +86,8 @@ const _applyPaymentToInstallments = async (client, payment, amountToApply, admin
   if (remaining > 0 && newInstStatus === 'PAID') {
     const nextInstallments = await queries.getPendingInstallmentsFrom(
       client,
-      payment.credit_id,
-      payment.installment_number + 1
+      freshInst.credit_id,
+      freshInst.installment_number + 1
     );
 
     for (const inst of nextInstallments) {
@@ -99,13 +120,15 @@ const _applyPaymentToInstallments = async (client, payment, amountToApply, admin
     }
   }
 
-  // Si se adelantaron cuotas completas, recorrer vencimientos de las restantes
+  // Si se adelantaron cuotas completas, recorrer vencimientos de las restantes.
+  // Usamos freshInst.due_date — refleja cualquier shift previo dentro de esta misma
+  // transacción si lo hubo.
   if (paidCount > 0) {
     await queries.shiftInstallmentDates(
       client,
-      payment.credit_id,
-      payment.payment_frequency,
-      payment.due_date
+      freshInst.credit_id,
+      freshInst.payment_frequency,
+      freshInst.due_date
     );
   }
 };
@@ -161,9 +184,23 @@ const getAll = async (filters, requestingUser) => {
   return queries.findAll(filters);
 };
 
-const getById = async (id) => {
+/**
+ * Devuelve un cobro por ID. Para cobradores (no admin), solo retorna cobros
+ * propios — alinea el comportamiento con getAll (que también filtra por
+ * collector_id). Sin este filtro, un cobrador podía leer cobros ajenos
+ * conociendo el UUID, lo que filtraba info de clientes de otros cobradores.
+ *
+ * Retorna 404 si el cobro pertenece a otro cobrador, para no filtrar la
+ * existencia del recurso.
+ */
+const getById = async (id, requestingUser) => {
   const payment = await queries.findById(id);
   if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
+
+  if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role)
+      && payment.collector_id !== requestingUser.id) {
+    throw { status: 404, message: 'Cobro no encontrado.' };
+  }
   return payment;
 };
 
@@ -287,16 +324,29 @@ const approve = async (id, adminId) => {
 
 /**
  * Rechaza una pre-carga. No genera movimiento de caja.
+ *
+ * Usa lockAndGetPayment + SQL guard en el UPDATE para evitar la race con un
+ * approve concurrente: si entre el check inicial y el UPDATE otro admin
+ * aprobó el mismo cobro, el guard (WHERE status='PENDING') previene que
+ * se sobrescriba el APPROVED a REJECTED.
+ *
  * @param {string} id              - ID de la pre-carga.
  * @param {string} rejectionReason - Motivo del rechazo.
  * @param {string} adminId         - Admin que rechaza.
  */
 const reject = async (id, rejectionReason, adminId) => {
-  const payment = await queries.findById(id);
-  if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
-  if (payment.status !== 'PENDING')
-    throw { status: 409, message: 'Solo se pueden rechazar cobros en estado PENDIENTE.' };
-  await queries.reject(id, rejectionReason, adminId);
+  await withTransaction(async (client) => {
+    const payment = await queries.lockAndGetPayment(client, id);
+    if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
+    if (payment.status !== 'PENDING')
+      throw { status: 409, message: 'Solo se pueden rechazar cobros en estado PENDIENTE.' };
+
+    const rejected = await queries.reject(client, id, rejectionReason, adminId);
+    // Defensa adicional: si el SQL guard no actualizó (status cambió bajo lock,
+    // caso teóricamente imposible con el lock pero defensivo), lanzamos 409.
+    if (!rejected)
+      throw { status: 409, message: 'El cobro cambió de estado durante la operación. Reintentá.' };
+  });
 };
 
 /**

@@ -211,13 +211,27 @@ const settleCredit = async (client, creditId) => {
   );
 };
 
-const reject = async (id, rejectionReason, adminId) => {
-  await pool.query(
+/**
+ * Marca una pre-carga como RECHAZADA. Debe ejecutarse DENTRO de una transacción
+ * con el payment ya lockeado vía lockAndGetPayment, y con guard SQL adicional
+ * sobre status='PENDING' para defensa contra races entre approve y reject
+ * concurrentes.
+ *
+ * @param {object} client - Cliente de transacción pg con el payment ya lockeado.
+ * @param {string} id
+ * @param {string} rejectionReason
+ * @param {string} adminId
+ * @returns {Promise<boolean>} true si se rechazó (status era PENDING), false si no.
+ */
+const reject = async (client, id, rejectionReason, adminId) => {
+  const r = await client.query(
     `UPDATE payments
      SET status = 'REJECTED', rejection_reason = $1, approved_by = $2, approved_at = NOW()
-     WHERE id = $3`,
+     WHERE id = $3 AND status = 'PENDING'
+     RETURNING id`,
     [rejectionReason, adminId, id]
   );
+  return r.rowCount > 0;
 };
 
 // Saldo pendiente total de todas las cuotas no pagadas del crédito

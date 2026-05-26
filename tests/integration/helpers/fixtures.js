@@ -161,10 +161,74 @@ const reloadInstallment = async (id) => {
   return r.rows[0] || null;
 };
 
+/**
+ * Crea un usuario interno mínimo (admin/cobrador) para tests que necesitan
+ * un user_id válido (ej. payments.collector_id, payments.approved_by).
+ * @param {object} overrides
+ * @returns {Promise<object>} { id, role, full_name, dni }
+ */
+const createUserFixture = async (overrides = {}) => {
+  const data = {
+    full_name:        'Test User',
+    dni:              nextDni().slice(0, 9),  // VARCHAR(9) en users
+    password_hash:    '$2a$04$placeholderhashfortestsonly',
+    role:             'ADMIN',
+    status:           'ACTIVE',
+    is_temp_password: false,
+    ...overrides,
+  };
+  const r = await pool.query(
+    `INSERT INTO users (full_name, dni, password_hash, role, status, is_temp_password)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, full_name, dni, role, status`,
+    [data.full_name, data.dni, data.password_hash, data.role, data.status, data.is_temp_password]
+  );
+  return r.rows[0];
+};
+
+/**
+ * Crea una pre-carga (payment PENDING) directamente en DB. Auto-crea cuota
+ * y cobrador si no se pasan.
+ * @param {object} overrides
+ * @returns {Promise<object>} fila completa del payment insertado
+ */
+const createPendingPaymentFixture = async (overrides = {}) => {
+  const installmentId = overrides.installment_id ||
+    (await createInstallmentFixture(overrides._installmentOverrides || {})).id;
+  const collectorId   = overrides.collector_id ||
+    (await createUserFixture({ role: 'COLLECTOR' })).id;
+
+  const data = {
+    amount_received:    100,
+    payment_method:     'CASH',
+    transfer_reference: null,
+    notes:              null,
+    next_visit_date:    null,
+    status:             'PENDING',
+    ...overrides,
+    installment_id:     installmentId,
+    collector_id:       collectorId,
+  };
+
+  const r = await pool.query(
+    `INSERT INTO payments
+       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+        notes, next_visit_date, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, installment_id, collector_id, amount_received::float8,
+               payment_method, status, created_at`,
+    [data.installment_id, data.collector_id, data.amount_received, data.payment_method,
+     data.transfer_reference, data.notes, data.next_visit_date, data.status]
+  );
+  return r.rows[0];
+};
+
 module.exports = {
   createCustomerFixture,
   createCreditFixture,
   createInstallmentFixture,
+  createUserFixture,
+  createPendingPaymentFixture,
   seedCronLogSuccess,
   reloadInstallment,
 };
