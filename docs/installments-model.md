@@ -461,6 +461,26 @@ Estado de gestión por fila de la planilla (¿el cobrador la visitó? ¿qué pas
 - **Editable solo si**: `sheet.status = 'ACTIVE'` Y `sheet.sheet_date = CURRENT_DATE`.
 - Tras cerrar el día (o tras CLOSED/CANCELLED/REGENERATED): **read-only absoluto**.
 
+#### Hook automático desde gestiones operativas
+
+El estado NO se edita a mano desde la UI. Se actualiza automáticamente cuando
+el cobrador (o el admin sobre datos del cobrador) ejecuta una gestión:
+
+| Evento operativo                          | management_status resultante  |
+|-------------------------------------------|-------------------------------|
+| `collectionAttempts.create` NO_PAYMENT    | `NO_PAYMENT`                  |
+| `collectionAttempts.create` NOT_FOUND     | `NOT_FOUND`                   |
+| `payments.create` (pre-carga PENDING)     | `VISITED`                     |
+| `payments.approve` → cuota PAID           | `PAID`                        |
+| `payments.approve` → cuota PARTIAL        | `VISITED`                     |
+| `payments.reverse`                        | `VISITED`                     |
+
+Implementado por `collectionsQueries.updateManagementStatusForActiveTodaySheet`,
+que filtra por `sheet.status='ACTIVE' AND sheet.sheet_date=CURRENT_DATE` —
+fuera de ese scope es no-op silencioso (planilla CLOSED, planilla de otro día,
+o cuotas sin planilla generada). El trigger DB es defensa en profundidad
+contra races concurrentes.
+
 ### Defensa en profundidad
 
 A nivel DB:

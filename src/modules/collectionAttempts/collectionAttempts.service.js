@@ -1,5 +1,6 @@
 const pool   = require('../../config/db');
-const queries = require('./collectionAttempts.queries');
+const queries          = require('./collectionAttempts.queries');
+const collectionsQueries = require('../collections/collections.queries');
 
 /**
  * Registra un intento de cobranza (NO_PAYMENT o NOT_FOUND).
@@ -48,7 +49,7 @@ const create = async (data, requestingUser) => {
       throw { status: 422, message: 'La fecha de próxima visita es obligatoria para intentos de tipo NO_PAYMENT.' };
   }
 
-  return queries.create({
+  const attempt = await queries.create({
     installmentId:  data.installment_id,
     collectorId:    requestingUser.id,
     createdBy:      requestingUser.id,
@@ -57,6 +58,15 @@ const create = async (data, requestingUser) => {
     nextVisitDate:  data.attempt_type === 'NOT_FOUND' ? null : data.next_visit_date,
     notes:          data.notes,
   });
+
+  // Hook: reflejar el intento en la planilla activa del día del cobrador.
+  // No falla si no hay planilla del día (no-op silencioso).
+  const newStatus = data.attempt_type === 'NOT_FOUND' ? 'NOT_FOUND' : 'NO_PAYMENT';
+  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+    requestingUser.id, data.installment_id, newStatus,
+  );
+
+  return attempt;
 };
 
 /**

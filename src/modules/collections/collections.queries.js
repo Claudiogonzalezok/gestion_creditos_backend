@@ -726,6 +726,49 @@ const markAsSent = async (id, adminId) => {
   return r.rows[0] || null;
 };
 
+/**
+ * Hook de gestión: actualiza management_status de la fila de planilla
+ * activa de HOY para (collector, installment).
+ *
+ * Filosofía: cada vez que el cobrador hace algo operativo sobre una cuota
+ * (registra un attempt, hace una pre-carga, el admin aprueba/revierte un
+ * pago), el management_status de su planilla del día refleja el resultado.
+ *
+ * Guarda combinada con el trigger trg_csd_immutability:
+ *   · WHERE filtra a planillas ACTIVE del día actual (sin esto, no haríamos
+ *     no-op silencioso para planillas viejas o cerradas).
+ *   · El trigger DB también valida ACTIVE + sheet_date=CURRENT_DATE como
+ *     defense-in-depth — si por race el sheet pasó a CLOSED entre planner
+ *     y execution, el trigger lanza RAISE y la transacción rollback.
+ *
+ * NO falla si no hay planilla del día — el cobrador puede operar sobre
+ * cuotas sin planilla generada (caso edge: cobrador sin planilla pero con
+ * cuotas asignadas, o cuota no incluida en el filtro de la planilla).
+ *
+ * @param {string} collectorId
+ * @param {string} installmentId
+ * @param {'VISITED'|'NO_PAYMENT'|'NOT_FOUND'|'PAID'} newStatus
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
+ * @returns {Promise<boolean>} true si actualizó la fila de planilla.
+ */
+const updateManagementStatusForActiveTodaySheet = async (
+  collectorId, installmentId, newStatus, db = pool,
+) => {
+  if (!collectorId || !installmentId || !newStatus) return false;
+  const r = await db.query(
+    `UPDATE collection_sheet_details csd
+     SET management_status = $3
+     FROM collection_sheets cs
+     WHERE csd.sheet_id = cs.id
+       AND cs.collector_id = $1
+       AND csd.installment_id = $2
+       AND cs.status = 'ACTIVE'
+       AND cs.sheet_date = CURRENT_DATE`,
+    [collectorId, installmentId, newStatus],
+  );
+  return r.rowCount > 0;
+};
+
 module.exports = {
   findInstallmentsForSheet,
   create,
@@ -738,4 +781,5 @@ module.exports = {
   findActiveByCollectorAndDate,
   findById,
   findUnassignedCustomersWithPending,
+  updateManagementStatusForActiveTodaySheet,
 };
