@@ -259,6 +259,37 @@ saldo_n     = saldo_0 × (1 + r)^n
 delta_total = saldo_0 × ((1 + r)^N − 1)
 ```
 
+### Respeto a pre-cargas PENDING
+
+Si una cuota tiene pre-cargas de cobro **PENDING** (cobrador registró el
+pago pero el admin aún no aprobó), el cron descuenta esos montos del saldo
+antes de calcular mora:
+
+```
+pending_committed = SUM(payments.amount_received WHERE
+                         installment_id = i.id
+                         AND status      = 'PENDING'
+                         AND is_reversal = FALSE)
+saldo_0 = amount_due − amount_paid − pending_committed
+```
+
+- Si `saldo_0 <= 0` → el cron **no aplica mora** (cuota cubierta por
+  pre-cargas pendientes).
+- Si `saldo_0 > 0` → aplica mora solo sobre la porción no comprometida.
+
+**Casos especiales**:
+- Pre-cargas con `is_reversal=TRUE`: NO cuentan (son compensaciones de reversión).
+- Pre-cargas REJECTED: NO cuentan. El próximo cron aplica mora normal.
+
+**Por qué importa**: si un cobrador registra el pago tarde el día N (después
+de las 02:00 no, antes), y el admin no llega a aprobar antes del cron del
+día N+1, sin este descuento la cuota quedaría con un residuo de mora aunque
+el cliente pagó. El descuento por pending_committed evita ese efecto injusto.
+
+Cuando `saldo_0 <= 0` el cron tampoco actualiza `last_penalty_applied_at`,
+así que si la pre-carga se rechaza después, el cron del día siguiente
+calculará M correctamente desde donde quedó.
+
 ### Saldo actual, no histórico
 
 El catch-up usa el **saldo de HOY** (no reconstruido día por día). Si hubo

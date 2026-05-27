@@ -15,12 +15,25 @@
 //                  )
 //     M          = effective_today - mora_start + 1
 //
-//   Si M > 0 — aplicar Fórmula B compuesta cerrada:
-//     saldo_0      = amount_due − amount_paid             (saldo ACTUAL)
-//     delta_total  = saldo_0 × ((1 + r)^M − 1)
-//     penalty_new  = LEAST(penalty + delta_total, original × max_rate)
-//     amount_due   = original_amount + penalty_new        ← invariante
-//     last_penalty_applied_at = effective_today           ← SOLO si M > 0
+//   Si M > 0 — aplicar Fórmula B compuesta cerrada SOBRE saldo ajustado:
+//     pending_committed = SUM(payments PENDING no-reversal sobre esta cuota)
+//     saldo_0           = amount_due − amount_paid − pending_committed
+//     delta_total       = saldo_0 × ((1 + r)^M − 1)
+//     penalty_new       = LEAST(penalty + delta_total, original × max_rate)
+//     amount_due        = original_amount + penalty_new   ← invariante
+//     last_penalty_applied_at = effective_today           ← SOLO si saldo_0 > 0 y M > 0
+//
+// PRE-CARGAS PENDIENTES (clave):
+//   Si una cuota tiene pre-cargas PENDING que cubren su saldo (total o parcial),
+//   el cron NO aplica mora sobre la porción ya comprometida. Esto evita que
+//   un cliente quede con saldo residual cuando pagó pero el admin no llegó a
+//   aprobar antes de las 02:00.
+//
+//   · Pre-cargas con is_reversal=TRUE NO cuentan (son compensaciones de
+//     reversión, no compromisos de pago).
+//   · Pre-cargas REJECTED no cuentan (el "compromiso" se rompió).
+//   · Si la pre-carga se rechaza después, el cron del día siguiente verá
+//     pending_committed=0 y aplicará mora normalmente desde ese día.
 //
 // PRECISIÓN:
 //   Se usa el SALDO ACTUAL para el catch-up retroactivo, no el saldo histórico
@@ -81,10 +94,14 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
     const isFirstRun = lastRun === null;
 
     // Single UPDATE con CTE — atómico.
-    // En to_update filtramos days_to_apply > 0: las cuotas en gracia o ya
-    // procesadas hoy quedan FUERA y last_penalty_applied_at no se mueve para
-    // ellas. Esto es CRÍTICO: si una cuota en gracia quedara marcada como
-    // "procesada hoy", perdería días legítimos de mora al salir de gracia.
+    // En to_update filtramos days_to_apply > 0 Y pending_adjusted_balance > 0:
+    //   · Cuotas en gracia → days_to_apply <= 0 → FUERA, no mueven last.
+    //   · Cuotas con pre-carga PENDING cubriendo saldo total → balance <= 0 →
+    //     FUERA, no mueven last (la pre-carga "protege" del cobro de mora).
+    //   · Cuotas con pre-carga PARCIAL → balance reducido, mora sobre la
+    //     parte aún no comprometida.
+    // CRÍTICO: si una cuota cubierta quedara marcada como "procesada hoy",
+    // perdería días legítimos de mora si la pre-carga se rechazara después.
     const result = await client.query(
       `WITH params AS (
          SELECT $1::date    AS effective_today,
@@ -104,6 +121,16 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
            p.effective_today,
            p.daily_rate,
            p.max_rate,
+           -- Pre-cargas PENDING (no-reversal) que ya están comprometidas sobre
+           -- esta cuota. Si suman lo suficiente, la cuota queda "cubierta" y
+           -- el cron no le aplica mora.
+           COALESCE((
+             SELECT SUM(pay.amount_received)
+             FROM payments pay
+             WHERE pay.installment_id = i.id
+               AND pay.status         = 'PENDING'
+               AND pay.is_reversal    = FALSE
+           ), 0) AS pending_committed,
            GREATEST(
              COALESCE(i.last_penalty_applied_at, i.due_date + p.grace_days) + 1,
              i.due_date + p.grace_days + 1
@@ -116,6 +143,7 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
        to_update AS (
          SELECT
            c.*,
+           (c.amount_due - c.amount_paid - c.pending_committed) AS pending_adjusted_balance,
            CASE
              WHEN (SELECT is_first_run FROM params)
                THEN LEAST(c.effective_today - c.mora_start + 1, 1)
@@ -126,12 +154,12 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
        UPDATE installments i
        SET
          penalty_amount = LEAST(
-           t.penalty_amount + (t.amount_due - t.amount_paid)
+           t.penalty_amount + t.pending_adjusted_balance
                               * (POWER(1 + t.daily_rate, t.days_to_apply) - 1),
            t.original_amount * t.max_rate
          ),
          amount_due = t.original_amount + LEAST(
-           t.penalty_amount + (t.amount_due - t.amount_paid)
+           t.penalty_amount + t.pending_adjusted_balance
                               * (POWER(1 + t.daily_rate, t.days_to_apply) - 1),
            t.original_amount * t.max_rate
          ),
@@ -143,7 +171,8 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
          updated_at              = NOW()
        FROM to_update t
        WHERE i.id = t.id
-         AND t.days_to_apply > 0
+         AND t.days_to_apply             > 0
+         AND t.pending_adjusted_balance  > 0
        RETURNING i.id, t.days_to_apply::int AS days_applied`,
       [effectiveToday, graceDays, dailyRate, maxRate, isFirstRun]
     );
