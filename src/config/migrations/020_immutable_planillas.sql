@@ -33,6 +33,7 @@ ALTER TABLE collection_sheet_details
   ADD COLUMN IF NOT EXISTS customer_name_snapshot         VARCHAR(150),
   ADD COLUMN IF NOT EXISTS customer_phone_snapshot        VARCHAR(30),
   ADD COLUMN IF NOT EXISTS customer_address_snapshot      VARCHAR(255),
+  ADD COLUMN IF NOT EXISTS customer_dni_snapshot           VARCHAR(20),
   ADD COLUMN IF NOT EXISTS next_visit_date_snapshot       DATE,
   ADD COLUMN IF NOT EXISTS has_pending_payment_snapshot   BOOLEAN,
   ADD COLUMN IF NOT EXISTS collection_reference_snapshot  TEXT,
@@ -88,6 +89,7 @@ BEGIN
   OR NEW.customer_name_snapshot        IS DISTINCT FROM OLD.customer_name_snapshot
   OR NEW.customer_phone_snapshot       IS DISTINCT FROM OLD.customer_phone_snapshot
   OR NEW.customer_address_snapshot     IS DISTINCT FROM OLD.customer_address_snapshot
+  OR NEW.customer_dni_snapshot         IS DISTINCT FROM OLD.customer_dni_snapshot
   OR NEW.next_visit_date_snapshot      IS DISTINCT FROM OLD.next_visit_date_snapshot
   OR NEW.has_pending_payment_snapshot  IS DISTINCT FROM OLD.has_pending_payment_snapshot
   OR NEW.collection_reference_snapshot IS DISTINCT FROM OLD.collection_reference_snapshot

@@ -7,6 +7,7 @@ const seed03 = require('./03_interest_rates.seed');
 const seed04 = require('./04_bulk_data.seed');
 const seed05 = require('./05_e2e.seed');
 const seed06 = require('./06_expenses_ui.seed');
+const seed07 = require('./07_liquidations_ui.seed');
 
 const seeds = [
   { name: 'Admin inicial',          fn: seed01 },
@@ -15,6 +16,7 @@ const seeds = [
   { name: 'Datos bulk E2E',         fn: seed04 },
   { name: 'Datos E2E Tests',       fn: seed05 },
   { name: 'Gastos visuales UI',    fn: seed06 },
+  { name: 'Liquidaciones visuales UI', fn: seed07 },
   { name: 'Forzar recarga datos E2E',   fn: async () => { console.log('   ⚠️   Recarga omitida — ejecutar seed 05 manualmente si es necesario'); } },
 ];
 

@@ -20,6 +20,7 @@ router.get('/',
   controller.getAll
 );
 router.get('/:id', authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'), v.collections.id, validate, controller.getById);
+router.patch('/:id/send', authorize('ADMIN'), v.collections.id, validate, controller.send);
 
 // Generar planilla — solo Admin
 router.post('/',

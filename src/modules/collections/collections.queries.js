@@ -305,6 +305,7 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
        cu.full_name          AS customer_name,
        cu.phone              AS customer_phone,
        cu.address            AS customer_address,
+       cu.dni                AS customer_dni,
        lnv.next_visit_date,
        s.reason              AS inclusion_reason,
        s.op_priority,
@@ -406,7 +407,7 @@ const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
  */
 const createDetails = async (sheetId, items, db = pool) => {
   if (!items.length) return;
-  const COLS_PER_ROW = 25;
+  const COLS_PER_ROW = 26;
   const values = items.map((_, i) => {
     const b = i * COLS_PER_ROW;
     const ph = [];
@@ -436,6 +437,7 @@ const createDetails = async (sheetId, items, db = pool) => {
     item.customer_name,
     item.customer_phone,
     item.customer_address,
+    item.customer_dni,
     item.next_visit_date,
     item.has_pending_payment === true,
     item.collection_reference,
@@ -450,6 +452,7 @@ const createDetails = async (sheetId, items, db = pool) => {
        amount_due_snapshot, amount_paid_snapshot, penalty_amount_snapshot,
        installment_status_snapshot, credit_type_snapshot,
        customer_name_snapshot, customer_phone_snapshot, customer_address_snapshot,
+       customer_dni_snapshot,
        next_visit_date_snapshot, has_pending_payment_snapshot,
        collection_reference_snapshot, antecedent_id_snapshot
      ) VALUES ${values}`,
@@ -579,6 +582,7 @@ const findById = async (id) => {
   const sheetRes = await pool.query(
     `SELECT cs.id, cs.sheet_date, cs.filter_used, cs.status, cs.created_at,
             cs.closed_at, cs.closed_by, cs.snapshot_version,
+            cs.sent_at, cs.sent_by,
             cs.collector_id,
             COALESCE(cs.collector_name_snapshot,    u.full_name)   AS collector_name,
             COALESCE(cs.generated_by_name_snapshot, adm.full_name) AS generated_by_name
@@ -596,6 +600,9 @@ const findById = async (id) => {
   let detailsRes;
   if (isV1) {
     // ── Lectura PURA del snapshot — planilla inmutable. ───────────────────
+    // customer_dni se incluyó al snapshot (csd.customer_dni_snapshot) post-merge
+    // con feat sent_at: el dni es identidad fija, pero por consistencia con el
+    // resto de campos del cliente, lo congelamos también en csd.
     detailsRes = await pool.query(
       `SELECT csd.order_number,
               csd.installment_id,
@@ -609,6 +616,7 @@ const findById = async (id) => {
               csd.customer_name_snapshot      AS customer_name,
               csd.customer_phone_snapshot     AS customer_phone,
               csd.customer_address_snapshot   AS customer_address,
+              csd.customer_dni_snapshot       AS customer_dni,
               csd.next_visit_date_snapshot    AS next_visit_date,
               csd.has_pending_payment_snapshot AS has_pending_payment,
               csd.collection_reference_snapshot AS collection_reference,
@@ -658,6 +666,7 @@ const findById = async (id) => {
               cu.full_name AS customer_name,
               cu.phone AS customer_phone,
               cu.address AS customer_address,
+              cu.dni AS customer_dni,
               lnv.next_visit_date,
               EXISTS (
                 SELECT 1 FROM payments p
@@ -700,6 +709,23 @@ const findUnassignedCustomersWithPending = async () => {
   return r.rows;
 };
 
+/**
+ * Marca una planilla como enviada al cobrador.
+ * @param {string} id - ID de la planilla.
+ * @param {string} adminId - ID del admin que realiza el envío.
+ * @returns {Promise<{ id, sent_at }|null>} Fila actualizada o null si no existe/no es ACTIVE.
+ */
+const markAsSent = async (id, adminId) => {
+  const r = await pool.query(
+    `UPDATE collection_sheets
+     SET sent_at = NOW(), sent_by = $2
+     WHERE id = $1 AND status = 'ACTIVE'
+     RETURNING id, sent_at`,
+    [id, adminId],
+  );
+  return r.rows[0] || null;
+};
+
 module.exports = {
   findInstallmentsForSheet,
   create,
@@ -707,6 +733,7 @@ module.exports = {
   markSheetAsRegenerated,
   closeSheet,
   cancelSheet,
+  markAsSent,
   findAll,
   findActiveByCollectorAndDate,
   findById,
