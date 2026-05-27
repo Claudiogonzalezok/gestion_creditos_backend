@@ -425,7 +425,7 @@ const createDetails = async (sheetId, items, db = pool) => {
     item.inclusion_reason   || null,
     item.op_priority        ?? null,
     item.remaining_amount   ?? null,
-    // Snapshots nuevos (migration 019)
+    // Snapshots nuevos (migration 020)
     item.installment_number,
     item.due_date,
     item.amount_due,
@@ -563,11 +563,11 @@ const findActiveByCollectorAndDate = async (collectorId, date, db = pool) => {
  * Obtiene una planilla por ID con su detalle.
  *
  * Estrategia de lectura por snapshot_version:
- *   · v1+ (migration 019+): lee EXCLUSIVAMENTE del snapshot persistido en
+ *   · v1+ (migration 020+): lee EXCLUSIVAMENTE del snapshot persistido en
  *     collection_sheet_details. Sin JOINs a installments/customers/credits.
  *     Sin CTEs que recalculen antecedentes/visitas. La planilla es un
  *     documento histórico inmutable.
- *   · v0 (legacy pre-019): fallback a JOINs live para que las planillas
+ *   · v0 (legacy pre-020): fallback a JOINs live para que las planillas
  *     viejas sigan siendo legibles, aunque pueden mostrar inconsistencias
  *     porque sus datos no fueron snapshoteados. Esto se documenta en
  *     docs/installments-model.md.
@@ -628,7 +628,7 @@ const findById = async (id) => {
       [id]
     );
   } else {
-    // ── Fallback LEGACY — solo para planillas pre-019. ─────────────────────
+    // ── Fallback LEGACY — solo para planillas pre-020. ─────────────────────
     // Estos datos NO son auditables: reflejan estado actual de las tablas
     // live, no el snapshot del día de generación.
     detailsRes = await pool.query(

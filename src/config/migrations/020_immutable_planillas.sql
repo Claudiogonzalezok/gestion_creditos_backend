@@ -1,4 +1,4 @@
--- ── 019: Planillas inmutables — snapshot total + ciclo de vida ───────────────
+-- ── 020: Planillas inmutables — snapshot total + ciclo de vida ───────────────
 -- Transforma collection_sheets/collection_sheet_details en documentos
 -- históricos legales: una vez generadas, NO cambian — ni durante el día.
 --
@@ -16,7 +16,7 @@
 --   · El único campo editable es management_status — y solo si la planilla
 --     está ACTIVE y su sheet_date = CURRENT_DATE.
 --
--- Planillas legacy (pre-019):
+-- Planillas legacy (pre-020):
 --   · Quedan con snapshot_version = 0 y campos snapshot en NULL.
 --   · NO se hace backfill (sería falso histórico).
 --   · El findById hace fallback a JOINs live SOLO si snapshot_version = 0.
@@ -50,8 +50,8 @@ ALTER TABLE collection_sheets
   ADD COLUMN IF NOT EXISTS closed_by                   UUID NULL
       REFERENCES users(id) ON UPDATE CASCADE,
   ADD COLUMN IF NOT EXISTS snapshot_version            SMALLINT NOT NULL DEFAULT 0;
-  -- snapshot_version = 0  → legacy (pre-019, sin snapshot completo)
-  -- snapshot_version = 1  → v1 (migration 019, snapshot total)
+  -- snapshot_version = 0  → legacy (pre-020, sin snapshot completo)
+  -- snapshot_version = 1  → v1 (migration 020, snapshot total)
 
 -- ── Estados extendidos ───────────────────────────────────────────────────────
 ALTER TABLE collection_sheets
@@ -156,7 +156,7 @@ CREATE TRIGGER trg_collection_sheet_immutability
 
 -- ── Documentación inline ─────────────────────────────────────────────────────
 COMMENT ON COLUMN collection_sheets.snapshot_version IS
-  '0 = legacy (pre-019, sin snapshot completo). 1 = v1 (snapshot total). Reportes deben filtrar por snapshot_version >= 1 para auditoría confiable.';
+  '0 = legacy (pre-020, sin snapshot completo). 1 = v1 (snapshot total). Reportes deben filtrar por snapshot_version >= 1 para auditoría confiable.';
 
 COMMENT ON COLUMN collection_sheets.closed_at IS
   'Timestamp del cierre del día. NULL mientras la planilla está ACTIVE.';

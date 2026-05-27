@@ -1,4 +1,4 @@
-// Bloque G — Inmutabilidad de planillas (migration 019)
+// Bloque G — Inmutabilidad de planillas (migration 020)
 // Verifica que collection_sheets + collection_sheet_details son documentos
 // históricos congelados desde la generación. Cualquier cambio posterior a las
 // tablas live (mora, edits de clientes, nuevos antecedentes, pagos) NO debe

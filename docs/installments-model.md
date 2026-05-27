@@ -418,7 +418,7 @@ La planilla es **una foto**. Las gestiones del día se ven en otra capa.
 Frontend que quiere mostrar "qué pasó hoy" cruza ambas: snapshot para el
 contexto, eventos por separado para la novedad.
 
-### Campos snapshoteados (migration 019)
+### Campos snapshoteados (migration 020)
 
 En `collection_sheet_details`:
 - Económicos: `amount_due_snapshot`, `amount_paid_snapshot`, `penalty_amount_snapshot`, `planned_amount`, `remaining_amount_snapshot`.
@@ -471,7 +471,7 @@ A nivel DB:
 Esto protege incluso contra bugs futuros del backend — un service mal
 escrito que intente modificar un snapshot falla con `RAISE EXCEPTION`.
 
-### Planillas legacy (pre-019)
+### Planillas legacy (pre-020)
 
 Quedan con `snapshot_version = 0` y campos snapshot en NULL. **NO se hace
 backfill** desde datos actuales: sería falso histórico (la planilla aparenta
