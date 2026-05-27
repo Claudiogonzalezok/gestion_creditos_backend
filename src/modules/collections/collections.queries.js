@@ -345,16 +345,29 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
 };
 
 /**
- * Crea la cabecera de una planilla de cobro.
+ * Crea la cabecera de una planilla de cobro persistiendo snapshot de identidad:
+ *   · collector_name_snapshot — nombre del cobrador AL MOMENTO de la generación.
+ *   · generated_by_name_snapshot — admin generador AL MOMENTO de la generación.
+ *   · snapshot_version = 1 — indica que la planilla tiene snapshot completo.
+ * Si los users cambian de nombre después, la planilla mantiene la identidad
+ * original (documento histórico).
+ *
  * @param {{ collectorId, date, filter, adminId }} payload
  * @param {import('pg').PoolClient} [db=pool]
  * @returns {Promise<object>}
  */
 const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
   const r = await db.query(
-    `INSERT INTO collection_sheets (collector_id, sheet_date, filter_used, generated_by)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, collector_id, sheet_date, filter_used, generated_by, status, created_at`,
+    `INSERT INTO collection_sheets (
+       collector_id, sheet_date, filter_used, generated_by,
+       collector_name_snapshot, generated_by_name_snapshot, snapshot_version
+     )
+     SELECT $1, $2, $3, $4,
+            (SELECT full_name FROM users WHERE id = $1),
+            (SELECT full_name FROM users WHERE id = $4),
+            1
+     RETURNING id, collector_id, sheet_date, filter_used, generated_by, status, created_at,
+               snapshot_version`,
     [collectorId, date, filter || 'ALL_PENDING', adminId]
   );
   return r.rows[0];
@@ -373,12 +386,32 @@ const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
  * @param {Array<object>} items
  * @param {import('pg').PoolClient} [db=pool]
  */
+/**
+ * Inserta los detalles de la planilla con SNAPSHOT TOTAL al momento de
+ * generación. Todos los datos visibles en la planilla quedan persistidos
+ * en collection_sheet_details — la planilla es inmutable desde este insert.
+ *
+ * Si alguno de los campos cambia después (mora aplicada, teléfono editado,
+ * pagos nuevos, antecedentes nuevos), la planilla MANTIENE los valores de
+ * este snapshot. Las gestiones del día se ven en otra capa (queries live
+ * sobre payments/collection_attempts).
+ *
+ * El trigger trg_csd_immutability rechaza cualquier UPDATE futuro sobre
+ * estos campos como defensa adicional a nivel DB.
+ *
+ * @param {string} sheetId
+ * @param {Array<object>} items - Filas devueltas por findInstallmentsForSheet,
+ *                                ya con todos los campos snapshot calculados.
+ * @param {import('pg').PoolClient} [db=pool]
+ */
 const createDetails = async (sheetId, items, db = pool) => {
   if (!items.length) return;
-  const COLS_PER_ROW = 11;
+  const COLS_PER_ROW = 25;
   const values = items.map((_, i) => {
     const b = i * COLS_PER_ROW;
-    return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6}, $${b+7}, $${b+8}, $${b+9}, $${b+10}, $${b+11})`;
+    const ph = [];
+    for (let n = 1; n <= COLS_PER_ROW; n++) ph.push(`$${b + n}`);
+    return `(${ph.join(', ')})`;
   }).join(', ');
   const params = items.flatMap((item, i) => [
     sheetId,
@@ -389,16 +422,37 @@ const createDetails = async (sheetId, items, db = pool) => {
     item.antecedent_type    || null,
     item.antecedent_date    || null,
     item.antecedent_notes   || null,
-    item.inclusion_reason   || null,                 // snapshot razón inclusión
-    item.op_priority        ?? null,                 // snapshot prioridad operativa
-    item.remaining_amount   ?? null,                 // snapshot saldo a cobrar
+    item.inclusion_reason   || null,
+    item.op_priority        ?? null,
+    item.remaining_amount   ?? null,
+    // Snapshots nuevos (migration 019)
+    item.installment_number,
+    item.due_date,
+    item.amount_due,
+    item.amount_paid,
+    item.penalty_amount,
+    item.installment_status,
+    item.credit_type,
+    item.customer_name,
+    item.customer_phone,
+    item.customer_address,
+    item.next_visit_date,
+    item.has_pending_payment === true,
+    item.collection_reference,
+    item.antecedent_id || null,
   ]);
   await db.query(
-    `INSERT INTO collection_sheet_details
-       (sheet_id, installment_id, order_number, planned_amount,
-        inclusion_criteria, antecedent_type, antecedent_date, antecedent_notes,
-        inclusion_reason, op_priority, remaining_amount_snapshot)
-     VALUES ${values}`,
+    `INSERT INTO collection_sheet_details (
+       sheet_id, installment_id, order_number, planned_amount,
+       inclusion_criteria, antecedent_type, antecedent_date, antecedent_notes,
+       inclusion_reason, op_priority, remaining_amount_snapshot,
+       installment_number_snapshot, due_date_snapshot,
+       amount_due_snapshot, amount_paid_snapshot, penalty_amount_snapshot,
+       installment_status_snapshot, credit_type_snapshot,
+       customer_name_snapshot, customer_phone_snapshot, customer_address_snapshot,
+       next_visit_date_snapshot, has_pending_payment_snapshot,
+       collection_reference_snapshot, antecedent_id_snapshot
+     ) VALUES ${values}`,
     params,
   );
 };
@@ -406,6 +460,7 @@ const createDetails = async (sheetId, items, db = pool) => {
 /**
  * Marca una planilla como REGENERATED (soft-delete).
  * Los collection_sheet_details NO se eliminan — el historial se preserva completo.
+ * El trigger trg_collection_sheet_immutability valida la transición.
  * @param {string} id - ID de la planilla a marcar.
  * @param {import('pg').PoolClient} client
  */
@@ -414,6 +469,39 @@ const markSheetAsRegenerated = async (id, client) => {
     `UPDATE collection_sheets SET status = 'REGENERATED' WHERE id = $1`,
     [id]
   );
+};
+
+/**
+ * Cierra la planilla del día. Solo permitido si status='ACTIVE'.
+ * El trigger valida la transición; acá agregamos guard SQL adicional con
+ * RETURNING para detectar si se cerró efectivamente (defensa en profundidad).
+ * @param {string} id
+ * @param {string} adminId - quien cierra.
+ * @returns {Promise<boolean>} true si la transición ocurrió.
+ */
+const closeSheet = async (id, adminId, db = pool) => {
+  const r = await db.query(
+    `UPDATE collection_sheets
+     SET status = 'CLOSED', closed_at = NOW(), closed_by = $2
+     WHERE id = $1 AND status = 'ACTIVE'
+     RETURNING id`,
+    [id, adminId]
+  );
+  return r.rowCount > 0;
+};
+
+/**
+ * Cancela la planilla. Solo permitido si status='ACTIVE'.
+ * @returns {Promise<boolean>} true si la transición ocurrió.
+ */
+const cancelSheet = async (id, db = pool) => {
+  const r = await db.query(
+    `UPDATE collection_sheets SET status = 'CANCELLED'
+     WHERE id = $1 AND status = 'ACTIVE'
+     RETURNING id`,
+    [id]
+  );
+  return r.rowCount > 0;
 };
 
 /**
@@ -472,17 +560,28 @@ const findActiveByCollectorAndDate = async (collectorId, date, db = pool) => {
 };
 
 /**
- * Obtiene una planilla por ID con detalle completo.
- * Devuelve cualquier status (ACTIVE o REGENERATED) para permitir auditoría.
- * La restricción por rol se aplica en el service.
+ * Obtiene una planilla por ID con su detalle.
+ *
+ * Estrategia de lectura por snapshot_version:
+ *   · v1+ (migration 019+): lee EXCLUSIVAMENTE del snapshot persistido en
+ *     collection_sheet_details. Sin JOINs a installments/customers/credits.
+ *     Sin CTEs que recalculen antecedentes/visitas. La planilla es un
+ *     documento histórico inmutable.
+ *   · v0 (legacy pre-019): fallback a JOINs live para que las planillas
+ *     viejas sigan siendo legibles, aunque pueden mostrar inconsistencias
+ *     porque sus datos no fueron snapshoteados. Esto se documenta en
+ *     docs/installments-model.md.
+ *
  * @param {string} id
  * @returns {Promise<object|null>}
  */
 const findById = async (id) => {
   const sheetRes = await pool.query(
     `SELECT cs.id, cs.sheet_date, cs.filter_used, cs.status, cs.created_at,
-            u.full_name AS collector_name, u.id AS collector_id,
-            adm.full_name AS generated_by_name
+            cs.closed_at, cs.closed_by, cs.snapshot_version,
+            cs.collector_id,
+            COALESCE(cs.collector_name_snapshot,    u.full_name)   AS collector_name,
+            COALESCE(cs.generated_by_name_snapshot, adm.full_name) AS generated_by_name
      FROM collection_sheets cs
      JOIN users u   ON u.id  = cs.collector_id
      JOIN users adm ON adm.id = cs.generated_by
@@ -492,61 +591,92 @@ const findById = async (id) => {
   if (!sheetRes.rows.length) return null;
   const sheet = sheetRes.rows[0];
 
-  // Distinción snapshot vs vivo (regla 7):
-  //   • SNAPSHOT (de csd) — inmutable, reflejan el momento de generación:
-  //       planned_amount, inclusion_criteria, inclusion_reason, op_priority,
-  //       remaining_amount_snapshot.
-  //   • VIVO (de CTEs) — refleja el estado actual para operatoria:
-  //       antecedent_*, next_visit_date, has_pending_payment, amounts/status
-  //       de la cuota (para mostrar mora aplicada después, p.ej.).
-  //   • collection_reference se recalcula porque depende de datos que pueden
-  //     cambiar (cantidad de cuotas, productos asociados, etc.) y no se
-  //     persiste — su shape es el mismo siempre.
-  const detailsRes = await pool.query(
-    `WITH
-      ${CTE_LATEST_NEXT_VISIT},
-      ${CTE_LATEST_ANTECEDENT}
-     SELECT csd.order_number,
-            csd.planned_amount::float8,
-            csd.inclusion_criteria,
-            csd.inclusion_reason,
-            csd.op_priority,
-            csd.remaining_amount_snapshot::float8 AS remaining_amount,
-            la.antecedent_id,
-            la.antecedent_type,
-            la.antecedent_date,
-            la.antecedent_notes,
-            csd.management_status,
-            i.id AS installment_id,
-            i.installment_number,
-            i.due_date,
-            i.amount_due::float8,
-            i.amount_paid::float8,
-            i.penalty_amount::float8,
-            i.status AS installment_status,
-            c.id AS credit_id,
-            c.type AS credit_type,
-            cu.full_name AS customer_name,
-            cu.phone AS customer_phone,
-            cu.address AS customer_address,
-            lnv.next_visit_date,
-            EXISTS (
-              SELECT 1 FROM payments p
-              WHERE p.installment_id = i.id
-                AND p.status = 'PENDING'
-                AND p.is_reversal = FALSE
-            ) AS has_pending_payment,
-            ${SELECT_COLLECTION_REFERENCE} AS collection_reference
-     FROM collection_sheet_details csd
-     JOIN installments i ON i.id  = csd.installment_id
-     JOIN credits c      ON c.id  = i.credit_id
-     JOIN customers cu   ON cu.id = c.customer_id
-     LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
-     LEFT JOIN latest_antecedent la  ON la.installment_id  = i.id
-     WHERE csd.sheet_id = $1
-     ORDER BY csd.order_number`,
-    [id]
-  );
+  const isV1 = sheet.snapshot_version >= 1;
+
+  let detailsRes;
+  if (isV1) {
+    // ── Lectura PURA del snapshot — planilla inmutable. ───────────────────
+    detailsRes = await pool.query(
+      `SELECT csd.order_number,
+              csd.installment_id,
+              csd.installment_number_snapshot AS installment_number,
+              csd.due_date_snapshot           AS due_date,
+              csd.amount_due_snapshot::float8 AS amount_due,
+              csd.amount_paid_snapshot::float8 AS amount_paid,
+              csd.penalty_amount_snapshot::float8 AS penalty_amount,
+              csd.installment_status_snapshot AS installment_status,
+              csd.credit_type_snapshot        AS credit_type,
+              csd.customer_name_snapshot      AS customer_name,
+              csd.customer_phone_snapshot     AS customer_phone,
+              csd.customer_address_snapshot   AS customer_address,
+              csd.next_visit_date_snapshot    AS next_visit_date,
+              csd.has_pending_payment_snapshot AS has_pending_payment,
+              csd.collection_reference_snapshot AS collection_reference,
+              csd.planned_amount::float8,
+              csd.remaining_amount_snapshot::float8 AS remaining_amount,
+              csd.inclusion_criteria,
+              csd.inclusion_reason,
+              csd.op_priority,
+              csd.antecedent_id_snapshot AS antecedent_id,
+              csd.antecedent_type,
+              csd.antecedent_date,
+              csd.antecedent_notes,
+              csd.management_status
+       FROM collection_sheet_details csd
+       WHERE csd.sheet_id = $1
+       ORDER BY csd.order_number`,
+      [id]
+    );
+  } else {
+    // ── Fallback LEGACY — solo para planillas pre-019. ─────────────────────
+    // Estos datos NO son auditables: reflejan estado actual de las tablas
+    // live, no el snapshot del día de generación.
+    detailsRes = await pool.query(
+      `WITH
+        ${CTE_LATEST_NEXT_VISIT},
+        ${CTE_LATEST_ANTECEDENT}
+       SELECT csd.order_number,
+              csd.planned_amount::float8,
+              csd.inclusion_criteria,
+              csd.inclusion_reason,
+              csd.op_priority,
+              csd.remaining_amount_snapshot::float8 AS remaining_amount,
+              la.antecedent_id,
+              la.antecedent_type,
+              la.antecedent_date,
+              la.antecedent_notes,
+              csd.management_status,
+              i.id AS installment_id,
+              i.installment_number,
+              i.due_date,
+              i.amount_due::float8,
+              i.amount_paid::float8,
+              i.penalty_amount::float8,
+              i.status AS installment_status,
+              c.id AS credit_id,
+              c.type AS credit_type,
+              cu.full_name AS customer_name,
+              cu.phone AS customer_phone,
+              cu.address AS customer_address,
+              lnv.next_visit_date,
+              EXISTS (
+                SELECT 1 FROM payments p
+                WHERE p.installment_id = i.id
+                  AND p.status = 'PENDING'
+                  AND p.is_reversal = FALSE
+              ) AS has_pending_payment,
+              ${SELECT_COLLECTION_REFERENCE} AS collection_reference
+       FROM collection_sheet_details csd
+       JOIN installments i ON i.id  = csd.installment_id
+       JOIN credits c      ON c.id  = i.credit_id
+       JOIN customers cu   ON cu.id = c.customer_id
+       LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
+       LEFT JOIN latest_antecedent la  ON la.installment_id  = i.id
+       WHERE csd.sheet_id = $1
+       ORDER BY csd.order_number`,
+      [id]
+    );
+  }
   return { ...sheet, items: detailsRes.rows };
 };
 
@@ -575,6 +705,8 @@ module.exports = {
   create,
   createDetails,
   markSheetAsRegenerated,
+  closeSheet,
+  cancelSheet,
   findAll,
   findActiveByCollectorAndDate,
   findById,

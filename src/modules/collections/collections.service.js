@@ -1,5 +1,6 @@
 const queries = require('./collections.queries');
 const { withTransaction } = require('../../utils/transaction');
+const { localDate }       = require('../../utils/date');
 
 /**
  * Toma un lock transaccional por cobrador+fecha para evitar generaciones concurrentes de la misma planilla.
@@ -27,8 +28,10 @@ const generate = async (data, adminId) => {
   const selectedFilter = filter || 'ALL_PENDING';
 
   // No se permiten planillas para fechas pasadas — no aportan valor operativo y
-  // pueden enmascarar errores de digitación al elegir la fecha.
-  const today = new Date().toISOString().split('T')[0];
+  // pueden enmascarar errores de digitación al elegir la fecha. Usamos localDate
+  // (TZ del proyecto) y NO toISOString() para evitar que ART vs UTC corra el
+  // "hoy" un día y bloquee generaciones legítimas cerca de medianoche.
+  const today = localDate();
   if (date < today)
     throw { status: 400, message: 'No se puede generar una planilla para una fecha pasada.' };
 
@@ -143,4 +146,40 @@ const getById = async (id, requestingUser) => {
   return sheet;
 };
 
-module.exports = { generate, getAll, getById };
+/**
+ * Cierra una planilla del día (status='ACTIVE' → 'CLOSED').
+ * Solo Admin. La planilla cerrada es terminal: no se puede reabrir ni
+ * editar management_status. Sirve para arqueo y cierre operativo.
+ * @param {string} id
+ * @param {string} adminId
+ */
+const close = async (id, adminId) => {
+  const sheet = await queries.findById(id);
+  if (!sheet) throw { status: 404, message: 'Planilla no encontrada.' };
+  if (sheet.status !== 'ACTIVE')
+    throw { status: 409, message: `Solo se pueden cerrar planillas en estado ACTIVE (actual: ${sheet.status}).` };
+
+  const closed = await queries.closeSheet(id, adminId);
+  if (!closed)
+    throw { status: 409, message: 'La planilla cambió de estado durante la operación. Reintentá.' };
+  return await queries.findById(id);
+};
+
+/**
+ * Cancela una planilla del día (status='ACTIVE' → 'CANCELLED').
+ * Útil cuando la planilla se generó por error y no debe trabajarse.
+ * @param {string} id
+ */
+const cancel = async (id) => {
+  const sheet = await queries.findById(id);
+  if (!sheet) throw { status: 404, message: 'Planilla no encontrada.' };
+  if (sheet.status !== 'ACTIVE')
+    throw { status: 409, message: `Solo se pueden cancelar planillas en estado ACTIVE (actual: ${sheet.status}).` };
+
+  const cancelled = await queries.cancelSheet(id);
+  if (!cancelled)
+    throw { status: 409, message: 'La planilla cambió de estado durante la operación. Reintentá.' };
+  return await queries.findById(id);
+};
+
+module.exports = { generate, getAll, getById, close, cancel };
