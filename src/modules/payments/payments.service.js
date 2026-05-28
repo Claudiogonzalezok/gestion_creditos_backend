@@ -7,6 +7,18 @@ const { getValue }          = require('../systemConfig/systemConfig.queries');
 const { withTransaction }   = require('../../utils/transaction');
 const { localDate }         = require('../../utils/date');
 
+/**
+ * Determina la fecha de la jornada comercial activa.
+ * Duplicado local para evitar dependencia circular con cashRegister.service.
+ * Reutiliza cashRegisterQueries.findUnclosedJornadaDate, que ya es importado.
+ * @returns {Promise<string>} Fecha YYYY-MM-DD de la jornada activa.
+ */
+const getActiveJornadaDate = async () => {
+  const today = localDate();
+  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
+  return jornadaDate || today;
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // NÚCLEO FINANCIERO REUTILIZABLE
 // Funciones privadas compartidas por todos los flujos de cobranza.
