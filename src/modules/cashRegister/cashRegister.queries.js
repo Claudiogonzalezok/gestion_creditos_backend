@@ -209,6 +209,42 @@ const getPreClose = async (date) => {
   return r.rows[0];
 };
 
+// ── Jornada comercial activa ──────────────────────────────────
+/**
+ * Busca la fecha más reciente con actividad financiera que no tiene cierre de caja.
+ * Permite determinar la jornada comercial activa cuando se trabaja pasada la medianoche.
+ * Busca hasta 14 días atrás desde la fecha de referencia.
+ * @param {string} today - Fecha de referencia YYYY-MM-DD.
+ * @returns {Promise<string|null>} Fecha YYYY-MM-DD de la jornada activa, o null si no hay actividad abierta.
+ */
+const findUnclosedJornadaDate = async (today) => {
+  const r = await pool.query(
+    `SELECT MAX(activity_date)::text AS jornada_date
+     FROM (
+       SELECT created_at::date AS activity_date
+       FROM payments
+       WHERE status != 'REJECTED'
+         AND created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+       UNION ALL
+       SELECT created_at::date
+       FROM credit_down_payments
+       WHERE payment_type = 'DOWN_PAYMENT'
+         AND created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+       UNION ALL
+       SELECT created_at::date
+       FROM expenses
+       WHERE created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+     ) t
+     WHERE activity_date NOT IN (
+       SELECT register_date::date
+       FROM cash_registers
+       WHERE register_date >= ($1::date - INTERVAL '14 days')
+     )`,
+    [today]
+  );
+  return r.rows[0]?.jornada_date || null;
+};
+
 // ── Verifica si ya existe un cierre para la fecha ─────────────
 const findByDate = async (date) => {
   const r = await pool.query(
@@ -361,6 +397,7 @@ module.exports = {
   getPreClose,
   getPendingPaymentsToday,
   findByDate,
+  findUnclosedJornadaDate,
   findAll,
   findById,
   create,

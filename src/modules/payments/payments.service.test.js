@@ -20,7 +20,12 @@ jest.mock('./cash_movements.queries', () => ({
 }));
 
 jest.mock('../cashRegister/cashRegister.queries', () => ({
-  findByDate: jest.fn(),
+  findByDate:              jest.fn(),
+  findUnclosedJornadaDate: jest.fn().mockResolvedValue(null),
+}));
+
+jest.mock('../collections/collections.queries', () => ({
+  updateManagementStatusForActiveTodaySheet: jest.fn().mockResolvedValue(),
 }));
 
 jest.mock('../systemConfig/systemConfig.queries', () => ({
@@ -47,6 +52,8 @@ describe('payments.service holiday-related behavior', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     withTransaction.mockImplementation(async (callback) => callback(client));
+    // Devuelve { rows: [] } para cualquier client.query (ej: SELECT status FROM installments)
+    client.query.mockResolvedValue({ rows: [] });
     cashRegisterQueries.findByDate.mockResolvedValue(null);
     queries.lockAndGetCredit.mockResolvedValue({ id: 'credit-1', status: 'ACTIVE' });
     queries.countPendingInstallments.mockResolvedValue(1);

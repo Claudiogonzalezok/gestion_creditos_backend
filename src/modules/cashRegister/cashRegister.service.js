@@ -2,9 +2,20 @@ const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
 const { localDate } = require('../../utils/date');
 
-const getDashboard = async (date) => {
+/**
+ * Determina la fecha de la jornada comercial activa.
+ * Busca la fecha más reciente con actividad sin cierre de caja.
+ * Si no hay jornada sin cerrar en los últimos 14 días, retorna el día de hoy como fallback.
+ * @returns {Promise<string>} Fecha YYYY-MM-DD de la jornada activa.
+ */
+const getActiveJornadaDate = async () => {
   const today = localDate();
-  const target = date || today;
+  const jornadaDate = await queries.findUnclosedJornadaDate(today);
+  return jornadaDate || today;
+};
+
+const getDashboard = async (date) => {
+  const target = date || (await getActiveJornadaDate());
   const [data, closed] = await Promise.all([
     queries.getDashboard(target),
     queries.findByDate(target),
@@ -27,7 +38,7 @@ const getDashboard = async (date) => {
 
 const close = async (data, adminId) => {
   const today        = localDate();
-  const registerDate = data.register_date || today;
+  const registerDate = data.register_date || (await getActiveJornadaDate());
 
   if (registerDate > today)
     throw { status: 422, message: 'No se puede cerrar una caja de fecha futura.' };
@@ -36,12 +47,10 @@ const close = async (data, adminId) => {
   if (existing)
     throw { status: 409, message: `Ya existe un cierre de caja para el ${registerDate}.` };
 
-  // El chequeo de pre-cargas pendientes solo aplica al cierre del día actual.
-  // Para cierres retroactivos (fecha pasada) se omite: las pre-cargas de esos días
-  // pudieron haberse resuelto después o estar aún pendientes sin poder bloquearse.
-  const isToday = registerDate === today;
-  if (isToday && !data.force) {
-    const pending = await queries.getPendingPaymentsToday(today);
+  // El chequeo de pre-cargas pendientes aplica siempre que la jornada tenga cobros
+  // sin aprobar, incluyendo el caso post-medianoche (registerDate = ayer).
+  if (!data.force) {
+    const pending = await queries.getPendingPaymentsToday(registerDate);
     if (pending.count > 0)
       throw { status: 409, message: `Hay ${pending.count} pre-carga(s) pendiente(s) de aprobación por $${pending.amount}. Aprobá o rechazá antes de cerrar, o enviá force: true para cerrar igual.`, pending_payments: pending };
   }
@@ -89,8 +98,7 @@ const close = async (data, adminId) => {
 };
 
 const getPreClose = async (date) => {
-  const today  = localDate();
-  const target = date || today;
+  const target = date || (await getActiveJornadaDate());
   const data   = await queries.getPreClose(target);
   return {
     date: target,
@@ -129,4 +137,4 @@ const getById = async (id) => {
   return register;
 };
 
-module.exports = { getDashboard, getPreClose, close, getAll, getById };
+module.exports = { getDashboard, getPreClose, close, getAll, getById, getActiveJornadaDate };
