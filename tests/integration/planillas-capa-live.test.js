@@ -69,6 +69,27 @@ describe('I — Capa live separada en findById', () => {
       });
     });
 
+    it('expone el estado VIVO de la cuota tras un pago parcial aprobado', async () => {
+      const { admin, collector, inst, sheet } = await seedScenarioWithSheet();
+
+      // Snapshot al generar: PENDING, amount_paid 0.
+      expect(itemFor(sheet, inst.id).installment_status).toBe('PENDING');
+
+      const payment = await paymentsService.create(
+        { installment_id: inst.id, amount_received: 400, payment_method: 'CASH', next_visit_date: today() },
+        { id: collector.id, role: 'COLLECTOR' },
+      );
+      await paymentsService.approve(payment.id, admin.id);
+
+      const fresh = await collectionsQueries.findById(sheet.id);
+      const item = itemFor(fresh, inst.id);
+
+      // Snapshot sigue congelado; la capa live muestra el progreso real.
+      expect(item.installment_status).toBe('PENDING');
+      expect(item.live.installment_status).toBe('PARTIAL');
+      expect(item.live.amount_paid).toBeCloseTo(400, 2);
+    });
+
     it('has_pending_payment refleja pre-carga viva (no el snapshot congelado)', async () => {
       const { collector, inst, sheet } = await seedScenarioWithSheet();
 

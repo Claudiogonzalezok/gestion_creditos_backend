@@ -703,6 +703,10 @@ const findById = async (id) => {
     const installmentIds = items.map((it) => it.installment_id);
     const liveRes = await pool.query(
       `SELECT i.id AS installment_id,
+              i.status                AS installment_status,
+              i.amount_due::float8    AS amount_due,
+              i.amount_paid::float8   AS amount_paid,
+              i.penalty_amount::float8 AS penalty_amount,
               EXISTS (
                 SELECT 1 FROM payments p
                 WHERE p.installment_id = i.id
@@ -726,6 +730,13 @@ const findById = async (id) => {
     );
     const liveById = new Map(
       liveRes.rows.map((r) => [r.installment_id, {
+        // Estado VIVO de la cuota — refleja el progreso real del día, a
+        // diferencia del snapshot (congelado al generar). El admin lo usa para
+        // mostrar el estado actual y filtrar por PARTIAL/PAID.
+        installment_status:  r.installment_status,
+        amount_due:          r.amount_due,
+        amount_paid:         r.amount_paid,
+        penalty_amount:      r.penalty_amount,
         has_pending_payment: r.has_pending_payment,
         today_attempt_id:    r.today_attempt_id,
         today_attempt_type:  r.today_attempt_type,
@@ -733,6 +744,10 @@ const findById = async (id) => {
     );
     for (const it of items) {
       it.live = liveById.get(it.installment_id) || {
+        installment_status:  null,
+        amount_due:          null,
+        amount_paid:         null,
+        penalty_amount:      null,
         has_pending_payment: false,
         today_attempt_id:    null,
         today_attempt_type:  null,
