@@ -584,6 +584,7 @@ const findById = async (id) => {
             cs.closed_at, cs.closed_by, cs.snapshot_version,
             cs.sent_at, cs.sent_by,
             cs.collector_id,
+            (cs.sheet_date = CURRENT_DATE) AS is_today,
             COALESCE(cs.collector_name_snapshot,    u.full_name)   AS collector_name,
             COALESCE(cs.generated_by_name_snapshot, adm.full_name) AS generated_by_name
      FROM collection_sheets cs
@@ -593,7 +594,8 @@ const findById = async (id) => {
     [id]
   );
   if (!sheetRes.rows.length) return null;
-  const sheet = sheetRes.rows[0];
+  // is_today es interno (decide si adjuntar capa live); no forma parte del contrato.
+  const { is_today: isToday, ...sheet } = sheetRes.rows[0];
 
   const isV1 = sheet.snapshot_version >= 1;
 
@@ -686,7 +688,61 @@ const findById = async (id) => {
       [id]
     );
   }
-  return { ...sheet, items: detailsRes.rows };
+
+  const items = detailsRes.rows;
+
+  // ── Capa LIVE separada ───────────────────────────────────────────────────────
+  // El snapshot es inmutable, pero el cobrador necesita ver el estado VIVO de la
+  // gestión del día para decidir qué botones habilitar (cobrar / no pagó / no
+  // encontrado / deshacer). Esa info NUNCA se mezcla con el snapshot: viaja en un
+  // sub-objeto `live` aparte, y SOLO cuando la planilla es operable hoy
+  // (ACTIVE + sheet_date = CURRENT_DATE). Para planillas cerradas, regeneradas o
+  // de otro día, live = null → el frontend la trata como documento read-only.
+  const liveEnabled = sheet.status === 'ACTIVE' && isToday === true;
+  if (liveEnabled && items.length) {
+    const installmentIds = items.map((it) => it.installment_id);
+    const liveRes = await pool.query(
+      `SELECT i.id AS installment_id,
+              EXISTS (
+                SELECT 1 FROM payments p
+                WHERE p.installment_id = i.id
+                  AND p.status = 'PENDING'
+                  AND p.is_reversal = FALSE
+              ) AS has_pending_payment,
+              ca.id           AS today_attempt_id,
+              ca.attempt_type AS today_attempt_type
+       FROM installments i
+       LEFT JOIN LATERAL (
+         SELECT a.id, a.attempt_type
+         FROM collection_attempts a
+         WHERE a.installment_id = i.id
+           AND a.voided_at IS NULL
+           AND a.created_at::date = CURRENT_DATE
+         ORDER BY a.created_at DESC
+         LIMIT 1
+       ) ca ON TRUE
+       WHERE i.id = ANY($1::uuid[])`,
+      [installmentIds]
+    );
+    const liveById = new Map(
+      liveRes.rows.map((r) => [r.installment_id, {
+        has_pending_payment: r.has_pending_payment,
+        today_attempt_id:    r.today_attempt_id,
+        today_attempt_type:  r.today_attempt_type,
+      }])
+    );
+    for (const it of items) {
+      it.live = liveById.get(it.installment_id) || {
+        has_pending_payment: false,
+        today_attempt_id:    null,
+        today_attempt_type:  null,
+      };
+    }
+  } else {
+    for (const it of items) it.live = null;
+  }
+
+  return { ...sheet, items };
 };
 
 /**
