@@ -29,4 +29,8 @@ router.post('/',
   controller.generate
 );
 
+// Cerrar / cancelar planilla — solo Admin. Operaciones terminales.
+router.post('/:id/close',  authorize('ADMIN'), v.collections.id, validate, controller.close);
+router.post('/:id/cancel', authorize('ADMIN'), v.collections.id, validate, controller.cancel);
+
 module.exports = router;

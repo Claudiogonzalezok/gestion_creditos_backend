@@ -42,6 +42,28 @@ const getById = async (req, res) => {
   }
 };
 
+const close = async (req, res) => {
+  try {
+    const result = await service.close(req.params.id, req.user.id);
+    return response.success(res, result, 'Planilla cerrada correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const cancel = async (req, res) => {
+  try {
+    const result = await service.cancel(req.params.id);
+    return response.success(res, result, 'Planilla cancelada correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const send = async (req, res) => {
   try {
     const result = await service.send(req.params.id, req.user);
@@ -53,4 +75,4 @@ const send = async (req, res) => {
   }
 };
 
-module.exports = { generate, getAll, getById, send };
+module.exports = { generate, getAll, getById, close, cancel, send };

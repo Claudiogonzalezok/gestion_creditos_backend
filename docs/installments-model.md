@@ -384,3 +384,120 @@ Ver `tests/README.md` para detalles operativos.
   another query in flight" — usar `pool` o secuencial.
 - ❌ Validar status fuera de la transacción sin revalidarlo bajo `FOR UPDATE`:
   abre ventana de TOCTOU. Patrón: fast-path + safety-path.
+- ❌ Leer datos live (`amount_due` actual, `phone` actual del cliente) en
+  reportes de planillas históricas. Las planillas son inmutables (sección 10);
+  el snapshot persistido es la fuente de verdad para auditoría.
+
+---
+
+## 10. Planillas inmutables (`collection_sheets` + `collection_sheet_details`)
+
+Las planillas son **documentos históricos legales**: una vez generadas, NO
+cambian — ni durante el día, ni después. Funcionan como una hoja de papel
+archivada: lo que el cobrador recibió al iniciar la jornada queda
+inmortalizado.
+
+### Por qué inmutable también durante el día
+
+Si el cobrador abre la planilla a las 10:00 y a las 11:00 entra un pago, la
+planilla NO debe cambiar entre ambas lecturas. Sino:
+- Dos usuarios viendo "la misma planilla" verían cosas distintas → rompe
+  consistencia operativa.
+- La planilla deja de ser un documento — se convierte en una vista híbrida.
+- Auditoría no puede defender lo que vio el cobrador.
+
+La planilla es **una foto**. Las gestiones del día se ven en otra capa.
+
+### Arquitectura: snapshot + eventos separados
+
+| Capa | Tabla / origen | Naturaleza |
+|------|----------------|-----------|
+| **Planilla snapshot** | `collection_sheets` + `collection_sheet_details` | INMUTABLE desde la generación |
+| **Eventos del día** | `payments`, `collection_attempts` | LIVE — se acumulan durante la operación |
+
+Frontend que quiere mostrar "qué pasó hoy" cruza ambas: snapshot para el
+contexto, eventos por separado para la novedad.
+
+### Campos snapshoteados (migration 020)
+
+En `collection_sheet_details`:
+- Económicos: `amount_due_snapshot`, `amount_paid_snapshot`, `penalty_amount_snapshot`, `planned_amount`, `remaining_amount_snapshot`.
+- Cuota: `installment_number_snapshot`, `due_date_snapshot`, `installment_status_snapshot`.
+- Cliente: `customer_name_snapshot`, `customer_phone_snapshot`, `customer_address_snapshot`.
+- Crédito: `credit_type_snapshot`, `collection_reference_snapshot`.
+- Gestión previa: `antecedent_id_snapshot`, `antecedent_type`, `antecedent_date`, `antecedent_notes`.
+- Operativos: `inclusion_criteria`, `inclusion_reason`, `op_priority`, `next_visit_date_snapshot`, `has_pending_payment_snapshot`.
+
+En `collection_sheets`:
+- Identidad: `collector_name_snapshot`, `generated_by_name_snapshot`.
+- Versionado: `snapshot_version` (0=legacy, 1=v1+).
+
+### Ciclo de vida
+
+```
+                  ┌──────────┐
+                  │  ACTIVE  │   (generada — única editable: management_status)
+                  └────┬─────┘
+            ┌─────────┼──────────────┐
+            ▼         ▼              ▼
+       ┌────────┐ ┌─────────┐ ┌───────────────┐
+       │ CLOSED │ │CANCELLED│ │ REGENERATED   │
+       └────────┘ └─────────┘ │ (al regenerar │
+       terminal  terminal     │  el mismo día)│
+                              └───────────────┘
+                              terminal
+```
+
+- `POST /api/collections/:id/close` — Admin. Sella la planilla con `closed_at` + `closed_by`.
+- `POST /api/collections/:id/cancel` — Admin. Cancela una planilla generada por error.
+- Regenerar la planilla del día marca la vieja `REGENERATED` automáticamente.
+
+Todos los estados ≠ ACTIVE son **terminales** — el trigger DB rechaza salir de ellos.
+
+### Único campo editable: `management_status`
+
+Estado de gestión por fila de la planilla (¿el cobrador la visitó? ¿qué pasó?):
+- Valores: `PENDING`, `VISITED`, `PAID`, `NO_PAYMENT`, `NOT_FOUND`.
+- **Editable solo si**: `sheet.status = 'ACTIVE'` Y `sheet.sheet_date = CURRENT_DATE`.
+- Tras cerrar el día (o tras CLOSED/CANCELLED/REGENERATED): **read-only absoluto**.
+
+#### Hook automático desde gestiones operativas
+
+El estado NO se edita a mano desde la UI. Se actualiza automáticamente cuando
+el cobrador (o el admin sobre datos del cobrador) ejecuta una gestión:
+
+| Evento operativo                          | management_status resultante  |
+|-------------------------------------------|-------------------------------|
+| `collectionAttempts.create` NO_PAYMENT    | `NO_PAYMENT`                  |
+| `collectionAttempts.create` NOT_FOUND     | `NOT_FOUND`                   |
+| `payments.create` (pre-carga PENDING)     | `VISITED`                     |
+| `payments.approve` → cuota PAID           | `PAID`                        |
+| `payments.approve` → cuota PARTIAL        | `VISITED`                     |
+| `payments.reverse`                        | `VISITED`                     |
+
+Implementado por `collectionsQueries.updateManagementStatusForActiveTodaySheet`,
+que filtra por `sheet.status='ACTIVE' AND sheet.sheet_date=CURRENT_DATE` —
+fuera de ese scope es no-op silencioso (planilla CLOSED, planilla de otro día,
+o cuotas sin planilla generada). El trigger DB es defensa en profundidad
+contra races concurrentes.
+
+### Defensa en profundidad
+
+A nivel DB:
+- **Trigger `trg_csd_immutability`** rechaza UPDATE de cualquier columna snapshot.
+- **Trigger `trg_collection_sheet_immutability`** rechaza modificar identidad
+  y bloquea transiciones desde estados terminales.
+
+Esto protege incluso contra bugs futuros del backend — un service mal
+escrito que intente modificar un snapshot falla con `RAISE EXCEPTION`.
+
+### Planillas legacy (pre-020)
+
+Quedan con `snapshot_version = 0` y campos snapshot en NULL. **NO se hace
+backfill** desde datos actuales: sería falso histórico (la planilla aparenta
+haber tenido los datos de hoy en el pasado).
+
+`findById` detecta legacy por `snapshot_version` y hace fallback a JOINs
+live solo en ese caso, documentando que esos datos NO son auditables.
+
+Para reportes auditables filtrar por `snapshot_version >= 1`.

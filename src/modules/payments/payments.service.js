@@ -1,11 +1,11 @@
-const pool                      = require('../../config/db');
-const queries                   = require('./payments.queries');
-const cashMovementsQueries       = require('./cash_movements.queries');
-const cashRegisterQueries        = require('../cashRegister/cashRegister.queries');
-const { getActiveJornadaDate }   = require('../cashRegister/cashRegister.service');
-const { getValue }               = require('../systemConfig/systemConfig.queries');
-const { withTransaction }        = require('../../utils/transaction');
-const { localDate }              = require('../../utils/date');
+const pool                  = require('../../config/db');
+const queries               = require('./payments.queries');
+const cashMovementsQueries  = require('./cash_movements.queries');
+const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
+const collectionsQueries    = require('../collections/collections.queries');
+const { getValue }          = require('../systemConfig/systemConfig.queries');
+const { withTransaction }   = require('../../utils/transaction');
+const { localDate }         = require('../../utils/date');
 
 // ══════════════════════════════════════════════════════════════════════════════
 // NÚCLEO FINANCIERO REUTILIZABLE
@@ -252,7 +252,7 @@ const create = async (data, requestingUser) => {
       };
   }
 
-  return queries.create({
+  const payment = await queries.create({
     installment_id:     data.installment_id,
     collector_id:       requestingUser.id,
     amount_received:    data.amount_received,
@@ -261,6 +261,15 @@ const create = async (data, requestingUser) => {
     notes:              data.notes,
     next_visit_date:    data.next_visit_date,
   });
+
+  // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
+  // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
+  // si fue pago parcial.
+  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+    requestingUser.id, data.installment_id, 'VISITED',
+  );
+
+  return payment;
 };
 
 /**
@@ -319,6 +328,19 @@ const approve = async (id, adminId) => {
 
     // 4. Verificar si el crédito quedó totalmente liquidado (con lock sobre credits)
     await _checkAndSettleCredit(client, payment.credit_id);
+
+    // 5. Hook: reflejar el resultado en la planilla del día del cobrador.
+    // Si la cuota quedó PAID, marcamos PAID; si quedó parcial, VISITED.
+    // Se ejecuta DENTRO de la transacción: si el trigger DB rechazara,
+    // el approve completo rollback (defensa contra race sheet ACTIVE→CLOSED).
+    const instAfter = await client.query(
+      `SELECT status FROM installments WHERE id = $1`,
+      [payment.installment_id],
+    );
+    const newMgmtStatus = instAfter.rows[0]?.status === 'PAID' ? 'PAID' : 'VISITED';
+    await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+      payment.collector_id, payment.installment_id, newMgmtStatus, client,
+    );
   });
 
   return queries.findById(id);
@@ -536,6 +558,13 @@ const reverse = async (id, reason, adminId) => {
         [payment.credit_id]
       );
     }
+
+    // Hook: la cuota deja de estar pagada; en la planilla del día vuelve a
+    // VISITED para reflejar que el cobrador estuvo pero el cobro fue revertido.
+    // Solo aplica a la planilla del cobrador original (payment.collector_id).
+    await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+      payment.collector_id, payment.installment_id, 'VISITED', client,
+    );
   });
 
   return queries.findById(id);
