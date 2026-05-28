@@ -47,12 +47,10 @@ const close = async (data, adminId) => {
   if (existing)
     throw { status: 409, message: `Ya existe un cierre de caja para el ${registerDate}.` };
 
-  // El chequeo de pre-cargas pendientes solo aplica al cierre del día actual.
-  // Para cierres retroactivos (fecha pasada) se omite: las pre-cargas de esos días
-  // pudieron haberse resuelto después o estar aún pendientes sin poder bloquearse.
-  const isToday = registerDate === today;
-  if (isToday && !data.force) {
-    const pending = await queries.getPendingPaymentsToday(today);
+  // El chequeo de pre-cargas pendientes aplica siempre que la jornada tenga cobros
+  // sin aprobar, incluyendo el caso post-medianoche (registerDate = ayer).
+  if (!data.force) {
+    const pending = await queries.getPendingPaymentsToday(registerDate);
     if (pending.count > 0)
       throw { status: 409, message: `Hay ${pending.count} pre-carga(s) pendiente(s) de aprobación por $${pending.amount}. Aprobá o rechazá antes de cerrar, o enviá force: true para cerrar igual.`, pending_payments: pending };
   }
