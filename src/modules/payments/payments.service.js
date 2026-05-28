@@ -1,10 +1,11 @@
-const pool                  = require('../../config/db');
-const queries               = require('./payments.queries');
-const cashMovementsQueries  = require('./cash_movements.queries');
-const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
-const { getValue }          = require('../systemConfig/systemConfig.queries');
-const { withTransaction }   = require('../../utils/transaction');
-const { localDate }         = require('../../utils/date');
+const pool                      = require('../../config/db');
+const queries                   = require('./payments.queries');
+const cashMovementsQueries       = require('./cash_movements.queries');
+const cashRegisterQueries        = require('../cashRegister/cashRegister.queries');
+const { getActiveJornadaDate }   = require('../cashRegister/cashRegister.service');
+const { getValue }               = require('../systemConfig/systemConfig.queries');
+const { withTransaction }        = require('../../utils/transaction');
+const { localDate }              = require('../../utils/date');
 
 // ══════════════════════════════════════════════════════════════════════════════
 // NÚCLEO FINANCIERO REUTILIZABLE
@@ -278,10 +279,10 @@ const create = async (data, requestingUser) => {
  * @returns {Promise<object>} Cobro aprobado con su estado actualizado.
  */
 const approve = async (id, adminId) => {
-  const today = localDate();
+  const jornadaDate = await getActiveJornadaDate();
 
   // Validar caja ANTES de iniciar la transacción (operación de solo lectura)
-  await _validateCajaOpen(today);
+  await _validateCajaOpen(jornadaDate);
 
   // Días de gracia para el recálculo de status post-aplicación del pago
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
@@ -305,13 +306,14 @@ const approve = async (id, adminId) => {
     // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
     await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId, id, graceDays);
 
-    // 3. Registrar movimiento contable en caja
+    // 3. Registrar movimiento contable en caja — se usa la fecha de la jornada activa,
+    //    no localDate(), para que los cobros post-medianoche queden en la jornada correcta.
     await _registerCashMovement(client, {
       paymentId:      id,
       amount:         parseFloat(payment.amount_received),
       paymentMethod:  payment.payment_method,
       movementType:   'PAYMENT',
-      registerDate:   today,
+      registerDate:   jornadaDate,
       userId:         adminId,
     });
 
@@ -371,8 +373,8 @@ const getByCredit = async (creditId) => {
  * @returns {Promise<object>} Payment creado y aprobado.
  */
 const adminDirect = async (data, adminId) => {
-  const today = localDate();
-  await _validateCajaOpen(today);
+  const jornadaDate = await getActiveJornadaDate();
+  await _validateCajaOpen(jornadaDate);
 
   // Días de gracia para el recálculo de status post-aplicación del pago
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
@@ -440,7 +442,7 @@ const adminDirect = async (data, adminId) => {
       amount:        amountReceived,
       paymentMethod: data.payment_method,
       movementType:  'PAYMENT',
-      registerDate:  today,
+      registerDate:  jornadaDate,
       userId:        adminId,
     });
 
@@ -465,10 +467,6 @@ const adminDirect = async (data, adminId) => {
  * @param {string} adminId
  */
 const reverse = async (id, reason, adminId) => {
-  const today = localDate();
-
-  // Validación 1: la caja de HOY debe estar abierta (check rápido antes de la transacción)
-  await _validateCajaOpen(today);
 
   // Días de gracia para el recálculo de status tras restaurar amount_paid
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
@@ -492,20 +490,13 @@ const reverse = async (id, reason, adminId) => {
     if (payment.reversal_payment_id)
       throw { status: 409, message: 'Este cobro ya fue revertido anteriormente.' };
 
-    // Validación 3: el movimiento de caja del cobro debe corresponder a la caja de HOY.
-    // Si el cobro fue aprobado en una fecha cuya caja ya está cerrada, no se puede revertir.
+    // Validación 3: la caja de la jornada del cobro no debe estar cerrada.
+    // Si el movimiento pertenece a una fecha con cierre, no se puede revertir.
     const movement = await cashMovementsQueries.findPaymentMovement(client, id);
     if (!movement)
       throw { status: 409, message: 'No se encontró movimiento de caja para este cobro.' };
 
-    if (movement.register_date !== today) {
-      const closedCaja = await cashRegisterQueries.findByDate(movement.register_date);
-      if (closedCaja)
-        throw {
-          status: 409,
-          message: `El cobro pertenece a la caja del ${movement.register_date}, que ya fue cerrada. No es posible revertirlo.`,
-        };
-    }
+    await _validateCajaOpen(movement.register_date);
 
     // Recolectar todos los pagos a revertir: el principal + sus sub-pagos
     const children = await queries.findChildPayments(client, id);
@@ -532,7 +523,7 @@ const reverse = async (id, reason, adminId) => {
         amount:        p.amount_received,
         paymentMethod: p.payment_method,
         movementType:  'REVERSAL',
-        registerDate:  today,
+        registerDate:  movement.register_date,
         userId:        adminId,
       });
     }
