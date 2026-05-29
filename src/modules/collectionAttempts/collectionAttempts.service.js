@@ -131,6 +131,14 @@ const voidAttempt = async (id, requestingUser) => {
     throw { status: 409, message: 'Solo se pueden anular intentos registrados en el día actual.' };
 
   await queries.markVoided(id, requestingUser.id);
+
+  // Hook: el intento anulado deja de ser gestión vigente. Recalcular el
+  // management_status de la planilla del día para que vuelva a PENDING (o
+  // refleje la gestión viva restante) y el cobrador pueda gestionar de nuevo.
+  await collectionsQueries.recalcManagementStatusForActiveTodaySheet(
+    attempt.collector_id, attempt.installment_id,
+  );
+
   return queries.findById(id);
 };
 

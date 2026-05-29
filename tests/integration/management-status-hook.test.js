@@ -112,6 +112,43 @@ describe('H — Hook management_status (planilla del día)', () => {
 
       expect(await readMgmtStatus(sheet.id)).toBe('NOT_FOUND');
     });
+
+    it('anular el intento devuelve la planilla a PENDING (permite re-gestionar)', async () => {
+      const { collector, inst, sheet } = await seedScenarioWithSheet();
+
+      const attempt = await collectionAttemptsService.create(
+        {
+          installment_id:  inst.id,
+          attempt_type:    'NO_PAYMENT',
+          reason:          'error de carga',
+          next_visit_date: today(),
+        },
+        { id: collector.id, role: 'COLLECTOR' },
+      );
+      expect(await readMgmtStatus(sheet.id)).toBe('NO_PAYMENT');
+
+      await collectionAttemptsService.voidAttempt(attempt.id, { id: collector.id, role: 'COLLECTOR' });
+
+      // El intento anulado deja de contar como gestión vigente → vuelve a PENDING.
+      expect(await readMgmtStatus(sheet.id)).toBe('PENDING');
+    });
+
+    it('tras anular, una nueva gestión vuelve a marcar la planilla', async () => {
+      const { collector, inst, sheet } = await seedScenarioWithSheet();
+
+      const first = await collectionAttemptsService.create(
+        { installment_id: inst.id, attempt_type: 'NOT_FOUND', notes: 'mal cargado' },
+        { id: collector.id, role: 'COLLECTOR' },
+      );
+      await collectionAttemptsService.voidAttempt(first.id, { id: collector.id, role: 'COLLECTOR' });
+      expect(await readMgmtStatus(sheet.id)).toBe('PENDING');
+
+      await collectionAttemptsService.create(
+        { installment_id: inst.id, attempt_type: 'NO_PAYMENT', reason: 'ausente', next_visit_date: today() },
+        { id: collector.id, role: 'COLLECTOR' },
+      );
+      expect(await readMgmtStatus(sheet.id)).toBe('NO_PAYMENT');
+    });
   });
 
   describe('payments.create', () => {

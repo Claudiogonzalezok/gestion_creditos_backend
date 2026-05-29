@@ -840,6 +840,59 @@ const updateManagementStatusForActiveTodaySheet = async (
   return r.rowCount > 0;
 };
 
+/**
+ * Recalcula management_status desde las gestiones VIVAS del día, en lugar de
+ * fijarlo a un valor. Se usa al ANULAR un intento: si el cobrador anuló su
+ * única gestión, la planilla debe volver a 'PENDING' para que pueda gestionar
+ * de nuevo (el intento anulado queda en el log para auditoría, pero ya no
+ * cuenta como gestión vigente).
+ *
+ * Derivación (precedencia cobro > intento):
+ *   1. Pago vivo del día (PENDING/APPROVED, no reversión) → 'PAID' si la cuota
+ *      quedó saldada, sino 'VISITED'.
+ *   2. Último intento vivo del día (voided_at IS NULL) → su attempt_type.
+ *   3. Nada vivo → 'PENDING'.
+ *
+ * @param {string} collectorId
+ * @param {string} installmentId
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
+ * @returns {Promise<boolean>} true si actualizó la fila de planilla.
+ */
+const recalcManagementStatusForActiveTodaySheet = async (
+  collectorId, installmentId, db = pool,
+) => {
+  if (!collectorId || !installmentId) return false;
+  const r = await db.query(
+    `SELECT
+       CASE
+         WHEN EXISTS (
+           SELECT 1 FROM payments p
+           WHERE p.installment_id = $2
+             AND p.collector_id = $1
+             AND p.is_reversal = FALSE
+             AND p.status IN ('PENDING','APPROVED')
+             AND p.created_at::date = CURRENT_DATE
+         ) THEN (
+           CASE WHEN (SELECT status FROM installments WHERE id = $2) = 'PAID'
+                THEN 'PAID' ELSE 'VISITED' END
+         )
+         ELSE COALESCE((
+           SELECT a.attempt_type
+           FROM collection_attempts a
+           WHERE a.installment_id = $2
+             AND a.collector_id = $1
+             AND a.voided_at IS NULL
+             AND a.created_at::date = CURRENT_DATE
+           ORDER BY a.created_at DESC
+           LIMIT 1
+         ), 'PENDING')
+       END AS status`,
+    [collectorId, installmentId],
+  );
+  const newStatus = r.rows[0].status;
+  return updateManagementStatusForActiveTodaySheet(collectorId, installmentId, newStatus, db);
+};
+
 module.exports = {
   findInstallmentsForSheet,
   create,
@@ -853,4 +906,5 @@ module.exports = {
   findById,
   findUnassignedCustomersWithPending,
   updateManagementStatusForActiveTodaySheet,
+  recalcManagementStatusForActiveTodaySheet,
 };
