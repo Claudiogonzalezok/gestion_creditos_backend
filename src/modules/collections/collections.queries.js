@@ -53,8 +53,14 @@ const SELECT_COLLECTION_REFERENCE = `
 // NO la fecha más lejana — el último intento registrado es el que manda.
 //
 // Unifica dos orígenes:
-//   payments        (status='PENDING', next_visit_date IS NOT NULL, is_reversal=FALSE)
+//   payments        (status IN ('PENDING','APPROVED'), next_visit_date IS NOT NULL, is_reversal=FALSE)
 //   collection_attempts (next_visit_date IS NOT NULL)
+//
+// IMPORTANTE: se consideran pagos APPROVED además de PENDING. Un cobro parcial
+// aprobado deja la cuota PARTIAL con saldo y la fecha de próxima visita pactada
+// con el cliente sigue vigente — la agenda debe respetarla. Si solo miráramos
+// PENDING, al aprobar el pago la cuota perdería su agenda y volvería a "vencidas"
+// antes de la fecha acordada. Los REJECTED quedan fuera (no agendan nada).
 //
 // Resultado por cuota: installment_id, next_visit_date más reciente.
 // =============================================================================
@@ -66,7 +72,7 @@ const CTE_LATEST_NEXT_VISIT = `
     FROM (
       SELECT installment_id, next_visit_date, created_at
       FROM payments
-      WHERE status = 'PENDING'
+      WHERE status IN ('PENDING','APPROVED')
         AND next_visit_date IS NOT NULL
         AND is_reversal = FALSE
       UNION ALL
@@ -159,6 +165,18 @@ const CTE_LATEST_ANTECEDENT = `
 // 8. La fuente de verdad de la última visita es created_at DESC (última
 //    gestión registrada), NO next_visit_date DESC (fecha más lejana). Esto
 //    permite que un cambio de agenda pise correctamente al anterior.
+//
+// 9. Una cuota con pre-carga PENDING viva (cobro sin aprobar/rechazar) queda
+//    FUERA del recorrido hasta que el admin la resuelva. Está "en proceso de
+//    doble control": re-incluirla generaría re-visitas y dobles pre-cargas.
+//    Si la pre-carga se rechaza, la cuota vuelve a aparecer; si se aprueba y
+//    salda, sale por saldo 0. Coherente con cajas por jornada (las pre-cargas
+//    cruzan de un día a otro).
+//
+// 10. La agenda (latest_next_visit) considera pagos PENDING y APPROVED: un
+//     cobro PARCIAL aprobado conserva la fecha pactada con el cliente. Una
+//     visita pactada para HOY es trabajo "del día" → entra por TODAY y
+//     TODAY_AND_OVERDUE, NO por "solo vencidas" (OVERDUE).
 // =============================================================================
 
 /**
@@ -182,7 +200,12 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
       ${CTE_LATEST_NEXT_VISIT},
       ${CTE_LATEST_ANTECEDENT},
 
-      -- Universo base: cuotas vigentes con saldo > 0 (regla 3).
+      -- Universo base: cuotas vigentes con saldo > 0 (regla 3) que NO estén
+      -- esperando aprobación de un cobro (regla 9). Una cuota con pre-carga
+      -- PENDING viva está "en proceso de doble control": no se vuelve a poner
+      -- en el recorrido hasta que el admin la apruebe o rechace. Esto evita
+      -- re-visitas y dobles pre-cargas, y respeta el modelo de cajas por jornada
+      -- (las pre-cargas pueden cruzar de un día a otro).
       candidates AS (
         SELECT i.id                AS installment_id,
                i.due_date,
@@ -195,6 +218,12 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
           AND cu.assigned_collector_id = $1
           AND i.status IN ('PENDING','PARTIAL','OVERDUE')
           AND (i.amount_due - i.amount_paid) > 0
+          AND NOT EXISTS (
+            SELECT 1 FROM payments p
+            WHERE p.installment_id = i.id
+              AND p.status = 'PENDING'
+              AND p.is_reversal = FALSE
+          )
       ),
 
       -- Razones de inclusión (cada una resuelve un "por qué entra")
@@ -234,10 +263,13 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
 
       -- Composición por filter — incl_prio define qué razón gana en caso de
       -- overlap (regla 5).
+      -- "Solo vencidas" (OVERDUE) usa overdue_unscheduled: vencidas SIN visita
+      -- de hoy ni futura (incluye visita vencida, que volvió a mora). Una cuota
+      -- con próxima visita agendada para HOY es trabajo "del día", no una
+      -- vencida pura, así que entra por TODAY y TODAY_AND_OVERDUE, no acá
+      -- (regla 10).
       filter_overdue AS (
-        SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM overdue
-        UNION ALL
-        SELECT installment_id, 'SCHEDULED_VISIT' AS reason, 3 AS incl_prio FROM scheduled_today
+        SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM overdue_unscheduled
       ),
       filter_today AS (
         SELECT installment_id, 'OVERDUE_UNSCHEDULED' AS reason, 1 AS incl_prio FROM overdue_unscheduled

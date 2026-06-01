@@ -392,6 +392,27 @@ Ver `tests/README.md` para detalles operativos.
 
 ## 10. Planillas inmutables (`collection_sheets` + `collection_sheet_details`)
 
+### Reglas de inclusión en el recorrido (qué cuotas entran al generar)
+
+`findInstallmentsForSheet` decide qué cuotas entran. La fuente normativa
+completa son las reglas 1-10 documentadas en `collections.queries.js`. Las dos
+que cierran el flujo con el doble control y la agenda:
+
+- **Regla 9 — Pre-cargas pendientes excluyen.** Una cuota con una pre-carga
+  `PENDING` viva (cobro registrado por el cobrador, sin aprobar/rechazar) queda
+  **fuera** del recorrido hasta que el admin la resuelva. Evita re-visitas y
+  dobles pre-cargas. Si la pre-carga se **rechaza**, la cuota reaparece; si se
+  **aprueba** y salda, sale por saldo 0. Es coherente con cajas por jornada: las
+  pre-cargas pueden cruzar de un día a otro y no deben re-encolar la cuota.
+- **Regla 10 — La agenda respeta pagos aprobados.** `latest_next_visit`
+  considera pagos `PENDING` **y** `APPROVED`: un cobro **parcial aprobado**
+  conserva la fecha pactada con el cliente, así la cuota queda reservada hasta
+  esa fecha y se trae ese día. Una visita pactada para **hoy** es trabajo "del
+  día" → entra por `TODAY` y `TODAY_AND_OVERDUE`, **no** por "solo vencidas"
+  (`OVERDUE`, que usa `overdue_unscheduled`).
+
+---
+
 Las planillas son **documentos históricos legales**: una vez generadas, NO
 cambian — ni durante el día, ni después. Funcionan como una hoja de papel
 archivada: lo que el cobrador recibió al iniciar la jornada queda
