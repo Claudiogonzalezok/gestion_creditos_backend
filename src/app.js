@@ -11,6 +11,17 @@ const swaggerSpec = require('./config/swagger');
 
 const app = express();
 
+/**
+ * Interpreta flags booleanos de entorno con tolerancia a formatos comunes.
+ * @param {string | undefined} value Valor crudo de variable de entorno.
+ * @returns {boolean} True cuando el valor representa un booleano afirmativo.
+ */
+const envFlag = (value) => {
+  if (typeof value !== 'string') return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+};
+
 // ── Documentación API ─────────────────────────────────────────
 // CSP permisiva solo para esta ruta (swagger-ui necesita inline scripts/styles)
 app.use('/api/docs',
@@ -57,15 +68,21 @@ app.get('/api/health', (req, res) => {
 });
 
 // ── Rate limiting — endpoints de login ───────────────────────
-const loginLimiter = rateLimit({
-  windowMs:         15 * 60 * 1000, // ventana de 15 minutos
-  max:              20,              // máximo 20 intentos por IP
-  standardHeaders:  true,
-  legacyHeaders:    false,
-  message: { ok: false, message: 'Demasiados intentos de acceso. Intentá nuevamente en 15 minutos.' },
-});
-app.use('/api/auth/login',        loginLimiter);
-app.use('/api/auth/portal/login', loginLimiter);
+const disableLoginRateLimit = envFlag(process.env.DISABLE_LOGIN_RATE_LIMIT);
+
+if (!disableLoginRateLimit) {
+  const loginLimiter = rateLimit({
+    windowMs:        parseInt(process.env.LOGIN_RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000), 10),
+    max:             parseInt(process.env.LOGIN_RATE_LIMIT_MAX || '20', 10),
+    standardHeaders: true,
+    legacyHeaders:   false,
+    message: { ok: false, message: 'Demasiados intentos de acceso. Intentá nuevamente en 15 minutos.' },
+  });
+  app.use('/api/auth/login', loginLimiter);
+  app.use('/api/auth/portal/login', loginLimiter);
+} else {
+  console.warn('⚠️  Rate limit de login deshabilitado por DISABLE_LOGIN_RATE_LIMIT=true');
+}
 
 const refreshLimiter = rateLimit({
   windowMs:        15 * 60 * 1000,
