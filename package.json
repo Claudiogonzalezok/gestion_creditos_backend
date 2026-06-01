@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/app.js",
     "dev": "nodemon src/app.js",
+    "dev:e2e": "cross-env DISABLE_LOGIN_RATE_LIMIT=true nodemon src/app.js",
     "test": "npm run test:unit",
     "test:unit": "cross-env NODE_ENV=test jest --config jest.unit.config.js --runInBand",
     "test:integration": "jest --config jest.integration.config.js --runInBand",

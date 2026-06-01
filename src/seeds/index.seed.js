@@ -9,6 +9,8 @@ const seed05 = require('./05_e2e.seed');
 const seed06 = require('./06_expenses_ui.seed');
 const seed07 = require('./07_liquidations_ui.seed');
 const seed09 = require('./09_collector_payments_ui.seed');
+const seed10 = require('./10_admin_collections_ui_states.seed');
+const seed11 = require('./11_admin_collections_ui_refresh.seed');
 
 const seeds = [
   { name: 'Admin inicial',          fn: seed01 },
@@ -19,6 +21,8 @@ const seeds = [
   { name: 'Gastos visuales UI',    fn: seed06 },
   { name: 'Liquidaciones visuales UI', fn: seed07 },
   { name: 'Cobros visuales cobrador UI', fn: seed09 },
+  { name: 'Planilla admin con estados UI', fn: seed10 },
+  { name: 'Refresco demo planillas admin UI', fn: seed11 },
   { name: 'Forzar recarga datos E2E',   fn: async () => { console.log('   ⚠️   Recarga omitida — ejecutar seed 05 manualmente si es necesario'); } },
 ];
 

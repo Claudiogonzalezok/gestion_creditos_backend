@@ -63,9 +63,9 @@ const seed = async () => {
       const r = rows[i];
       const categoryId = byName.get(r.category) || null;
       await client.query(
-        `INSERT INTO expenses (amount, description, expense_date, payment_method, transfer_reference, category_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-        [r.amount, r.desc, r.date, r.method, r.ref, categoryId, actorIds[i]]
+        `INSERT INTO expenses (amount, description, expense_date, register_date, payment_method, transfer_reference, category_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [r.amount, r.desc, r.date, r.date, r.method, r.ref, categoryId, actorIds[i]]
       );
     }
 

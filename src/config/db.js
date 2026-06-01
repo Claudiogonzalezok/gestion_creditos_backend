@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const { Pool, types } = require('pg');
 
 // Evita que el driver convierta columnas DATE a objetos Date de JS.
