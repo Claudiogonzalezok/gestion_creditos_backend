@@ -32,6 +32,10 @@ jest.mock('../../utils/transaction', () => ({
   withTransaction: jest.fn(),
 }));
 
+jest.mock('../cashRegister/cashRegister.queries', () => ({
+  findUnclosedJornadaDate: jest.fn().mockResolvedValue(null),
+}));
+
 jest.mock('../../utils/businessDay', () => {
   const actual = jest.requireActual('../../utils/businessDay');
   return {

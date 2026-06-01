@@ -386,12 +386,13 @@ const createDownPayment = async (
     transferReference,
     approvedBy,
     paymentType = "DOWN_PAYMENT",
+    registerDate,
   },
 ) => {
   await client.query(
     `INSERT INTO credit_down_payments
-       (credit_id, amount, payment_method, transfer_reference, approved_by, payment_type)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+       (credit_id, amount, payment_method, transfer_reference, approved_by, payment_type, register_date)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
     [
       creditId,
       amount,
@@ -399,6 +400,7 @@ const createDownPayment = async (
       transferReference || null,
       approvedBy,
       paymentType,
+      registerDate,
     ],
   );
 };

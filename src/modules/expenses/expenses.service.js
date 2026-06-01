@@ -1,4 +1,12 @@
 const queries = require('./expenses.queries');
+const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
+const { localDate } = require('../../utils/date');
+
+const getActiveJornadaDate = async () => {
+  const today = localDate();
+  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
+  return jornadaDate || today;
+};
 
 const getAll = async ({ dateFrom, dateTo, categoryId, page, limit } = {}) => {
   return queries.findAll({ dateFrom, dateTo, categoryId, page, limit });
@@ -15,6 +23,7 @@ const create = async (data, requestingUser) => {
     const category = await queries.findActiveCategoryById(data.category_id);
     if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
   }
+  const registerDate = await getActiveJornadaDate();
   return queries.create({
     amount:            parseFloat(data.amount),
     description:       data.description,
@@ -23,6 +32,7 @@ const create = async (data, requestingUser) => {
     transferReference: data.transfer_reference || null,
     categoryId:        data.category_id || null,
     createdBy:         requestingUser.id,
+    registerDate,
   });
 };
 

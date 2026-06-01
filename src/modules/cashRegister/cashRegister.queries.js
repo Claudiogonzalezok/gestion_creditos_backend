@@ -29,7 +29,7 @@ const getDashboard = async (date) => {
           COALESCE(SUM(amount), 0)                                             AS total,
           COUNT(*)                                                              AS count
         FROM credit_down_payments
-        WHERE created_at::date = $1::date
+        WHERE register_date = $1::date
           AND payment_type = 'DOWN_PAYMENT'
       ),
      egreses_data AS (
@@ -44,7 +44,7 @@ const getDashboard = async (date) => {
          COALESCE(SUM(amount), 0)                                             AS total,
          COUNT(*)                                                              AS count
        FROM expenses
-       WHERE created_at::date = $1::date
+       WHERE register_date = $1::date
      )
      SELECT
        (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
@@ -89,7 +89,7 @@ const getDailyTotals = async (date) => {
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM credit_down_payments
-       WHERE created_at::date = $1::date
+       WHERE register_date = $1::date
          AND payment_type = 'DOWN_PAYMENT'
      ),
      commissions_totals AS (
@@ -106,7 +106,7 @@ const getDailyTotals = async (date) => {
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
          COALESCE(SUM(amount), 0)                                             AS total
        FROM expenses
-       WHERE created_at::date = $1::date
+       WHERE register_date = $1::date
      )
      SELECT
        -- Ingresos brutos por método
@@ -163,7 +163,7 @@ const getPreClose = async (date) => {
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM credit_down_payments
-       WHERE created_at::date = $1::date
+       WHERE register_date = $1::date
          AND payment_type = 'DOWN_PAYMENT'
      ),
      commissions_totals AS (
@@ -178,7 +178,7 @@ const getPreClose = async (date) => {
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM expenses
-       WHERE created_at::date = $1::date
+       WHERE register_date = $1::date
      ),
      pending_totals AS (
        SELECT
@@ -226,14 +226,14 @@ const findUnclosedJornadaDate = async (today) => {
        WHERE status != 'REJECTED'
          AND created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
        UNION ALL
-       SELECT created_at::date
+       SELECT register_date
        FROM credit_down_payments
        WHERE payment_type = 'DOWN_PAYMENT'
-         AND created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+         AND register_date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
        UNION ALL
-       SELECT created_at::date
+       SELECT register_date
        FROM expenses
-       WHERE created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+       WHERE register_date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
      ) t
      WHERE activity_date NOT IN (
        SELECT register_date::date
@@ -318,7 +318,7 @@ const findById = async (id) => {
         JOIN credits c    ON c.id  = cdp.credit_id
         JOIN customers cu ON cu.id = c.customer_id
         JOIN users u      ON u.id  = cdp.approved_by
-        WHERE cdp.created_at::date = $1::date
+        WHERE cdp.register_date = $1::date
           AND cdp.payment_type = 'DOWN_PAYMENT'
         ORDER BY cdp.created_at`,
       [register.register_date]
@@ -340,7 +340,7 @@ const findById = async (id) => {
               u.full_name AS created_by_name
        FROM expenses e
        JOIN users u ON u.id = e.created_by
-       WHERE e.created_at::date = $1::date
+       WHERE e.register_date = $1::date
        ORDER BY e.created_at`,
       [register.register_date]
     ),

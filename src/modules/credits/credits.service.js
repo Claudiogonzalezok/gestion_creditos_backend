@@ -6,6 +6,7 @@ const puQueries   = require('../productUnits/productUnits.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
 const { withTransaction } = require('../../utils/transaction');
 const { localDate } = require('../../utils/date');
+const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -19,6 +20,12 @@ const {
   moveToNextBusinessDay,
   getActiveHolidayKeysInRange,
 } = require('../../utils/businessDay');
+
+const getActiveJornadaDate = async () => {
+  const today = localDate();
+  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
+  return jornadaDate || today;
+};
 
 /**
  * Calcula el capital realmente financiado de una venta a crédito.
@@ -558,6 +565,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
   const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
   const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+  const registerDate = await getActiveJornadaDate();
 
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId, null, installmentsCount);
@@ -580,6 +588,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         transferReference: credit.prepaid_installments_transfer_reference || null,
         approvedBy:        adminId,
         paymentType:       'PREPAID_INSTALLMENT',
+        registerDate,
       });
       // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
       // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
@@ -596,6 +605,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         paymentMethod:     credit.down_payment_method || 'CASH',
         transferReference: credit.down_payment_transfer_reference || null,
         approvedBy:        adminId,
+        registerDate,
       });
     }
 
