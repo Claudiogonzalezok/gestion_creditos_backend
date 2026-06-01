@@ -110,15 +110,20 @@ const seed = async () => {
         const transferRef = isTransfer ? `TRF-SEED-09-X-${idx + 1}` : null;
         const notes = `Cobro visual extra ${idx + 1} (${markerExtra})`;
         const rejectionReason = status === 'REJECTED' ? 'No coincide comprobante (seed UI)' : null;
+        const approvedAtHours = idx + 6;
+        const approvedAtExpr =
+          status === 'APPROVED' || status === 'REJECTED'
+            ? `NOW() - (${approvedAtHours}::text || ' hours')::interval`
+            : 'NULL';
 
         await client.query(
           `INSERT INTO payments
              (installment_id, collector_id, amount_received, payment_method,
-              transfer_reference, status, notes, rejection_reason,
-              approved_by, approved_at, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-                   $9, CASE WHEN $6 IN ('APPROVED', 'REJECTED') THEN NOW() - ($10::text || ' hours')::interval ELSE NULL END,
-                   NOW() - ($10::text || ' hours')::interval)`,
+               transfer_reference, status, notes, rejection_reason,
+               approved_by, approved_at, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                    $9, ${approvedAtExpr},
+                    NOW() - ($10::text || ' hours')::interval)`,
           [
             inst.id,
             collectorId,
