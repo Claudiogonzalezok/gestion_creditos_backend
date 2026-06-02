@@ -47,12 +47,25 @@ const create = async (data, requestingUser) => {
  * @param {{ amount: number|string, description: string, expense_date?: string, payment_method: 'CASH'|'TRANSFER', transfer_reference?: string|null, category_id?: string|null }} data
  * @returns {Promise<object>}
  */
+/**
+ * IMP-7: un gasto queda inmutable cuando su caja contable (cash_session) está
+ * CLOSED — fuente de verdad post-Fase 2/3. Se mantiene además el check legacy
+ * sobre cash_registers para gastos pre-Fase 2 que pudieran no tener
+ * cash_session_id asociado.
+ */
+const assertExpenseMutable = async (expense) => {
+  if (expense.cash_session_id && expense.cash_session_status === 'CLOSED')
+    throw { status: 409, message: 'No se puede modificar un gasto cuya caja ya fue cerrada.' };
+  const closedLegacy = await queries.hasCashRegister(expense.expense_date || expense.created_at);
+  if (closedLegacy)
+    throw { status: 409, message: 'No se puede modificar un gasto que ya fue incluido en un cierre de caja.' };
+};
+
 const update = async (id, data) => {
   const expense = await queries.findById(id);
   if (!expense) throw { status: 404, message: 'Gasto no encontrado.' };
 
-  const closed = await queries.hasCashRegister(expense.expense_date || expense.created_at);
-  if (closed) throw { status: 409, message: 'No se puede modificar un gasto que ya fue incluido en un cierre de caja.' };
+  await assertExpenseMutable(expense);
 
   if (data.category_id) {
     const category = await queries.findActiveCategoryById(data.category_id);
@@ -74,8 +87,7 @@ const remove = async (id) => {
   const expense = await queries.findById(id);
   if (!expense) throw { status: 404, message: 'Gasto no encontrado.' };
 
-  const closed = await queries.hasCashRegister(expense.created_at);
-  if (closed) throw { status: 409, message: 'No se puede eliminar un gasto que ya fue incluido en un cierre de caja.' };
+  await assertExpenseMutable(expense);
 
   await queries.remove(id);
 };

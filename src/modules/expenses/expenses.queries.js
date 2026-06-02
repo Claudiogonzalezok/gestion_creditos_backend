@@ -42,11 +42,14 @@ const findById = async (id) => {
   const r = await pool.query(
     `SELECT e.id, e.amount::float8, e.description, e.expense_date,
             e.payment_method, e.transfer_reference, e.created_at,
+            e.cash_session_id,
+            cs.status AS cash_session_status,
             u.full_name AS created_by_name,
             ec.id AS category_id, ec.name AS category_name
      FROM expenses e
      JOIN users u ON u.id = e.created_by
      LEFT JOIN expense_categories ec ON ec.id = e.category_id
+     LEFT JOIN cash_sessions cs ON cs.id = e.cash_session_id
      WHERE e.id = $1`,
     [id]
   );
