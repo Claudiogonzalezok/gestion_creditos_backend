@@ -47,6 +47,8 @@ const insertMovementWithBalance = async (client, params) => {
   // 1) Lock fila de la cuenta + leer balance fresco.
   const account = await queries.lockAndGetBalance(client, cashAccountId);
   if (!account) throw err(404, 'Cuenta no encontrada.', 'NOT_FOUND');
+  if (!account.is_active)
+    throw err(409, 'La cuenta está inactiva. No se pueden registrar movimientos.', 'ACCOUNT_INACTIVE');
 
   // 2) Calcular nuevo saldo según direction.
   const delta = direction === 'IN' ? amount : -amount;

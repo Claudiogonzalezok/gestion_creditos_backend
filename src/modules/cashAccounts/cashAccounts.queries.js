@@ -44,11 +44,13 @@ const findGeneralCashAccount = async (db = pool) => {
   return r.rows[0] || null;
 };
 
-// Lock fila de la cuenta y devuelve current_balance fresco. Debe llamarse
-// dentro de una transacción (recibe client, no pool).
+// Lock fila de la cuenta y devuelve current_balance + is_active fresco. Debe
+// llamarse dentro de una transacción (recibe client, no pool). El caller
+// (insertMovementWithBalance) valida is_active y lanza 409 si está inactiva —
+// la defensa final contra escribir movimientos sobre cuentas deshabilitadas.
 const lockAndGetBalance = async (client, accountId) => {
   const r = await client.query(
-    `SELECT id, current_balance::float8 AS current_balance
+    `SELECT id, current_balance::float8 AS current_balance, is_active
      FROM cash_accounts
      WHERE id = $1
      FOR UPDATE`,

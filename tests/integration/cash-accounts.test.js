@@ -145,6 +145,32 @@ describe('O — Caja General (cash_accounts)', () => {
     });
   });
 
+  // ── IMP-3: cuenta inactiva bloquea movimientos ──────────────────────────
+  describe('IMP-3: cuentas inactivas', () => {
+    it('registerMovement sobre cuenta inactiva lanza 409 ACCOUNT_INACTIVE', async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: 'ADMIN' });
+
+      await pool.query(`UPDATE cash_accounts SET is_active = FALSE WHERE id = $1`, [acc.id]);
+      try {
+        await expect(cashAccountsService.registerMovement(acc.id, {
+          movementType: 'ADJUSTMENT', direction: 'IN', amount: 100,
+        }, asUser(admin))).rejects.toMatchObject({
+          status: 409, code: 'ACCOUNT_INACTIVE',
+        });
+
+        // Ni siquiera ADJUSTMENT IN pasa — la cuenta es la frontera, no la dirección.
+        await expect(cashAccountsService.registerMovement(acc.id, {
+          movementType: 'EXPENSE', amount: 50,
+        }, asUser(admin))).rejects.toMatchObject({
+          status: 409, code: 'ACCOUNT_INACTIVE',
+        });
+      } finally {
+        await pool.query(`UPDATE cash_accounts SET is_active = TRUE WHERE id = $1`, [acc.id]);
+      }
+    });
+  });
+
   // ── Validaciones del service ────────────────────────────────────────────
   describe('Validaciones de service', () => {
     it('ADJUSTMENT sin direction lanza 422 INVALID_DIRECTION', async () => {
