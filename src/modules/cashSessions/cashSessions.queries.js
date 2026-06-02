@@ -230,25 +230,25 @@ const createDrop = async (client, cashSessionId, {
   amount, paymentMethod, destination, destinationAccountId,
   reason, receiptReference, performedBy,
 }) => {
-  // destination_account_id es NOT NULL en DB (migración 025). Si el caller no lo
-  // pasa, se defaultea a la Caja General. El wiring full (parámetro explícito
-  // + generación de DROP_IN auto en la misma tx) llega en una fase posterior;
-  // este default mantiene el código existente funcional sin tocar callers.
+  // destination_account_id es NOT NULL en DB (migración 025) y es responsabilidad
+  // del service resolverlo antes de llamar (cashSessions.service.resolveDropDestinationAccount).
+  // IMP-4: eliminado el COALESCE → SELECT fallback (era frágil: no filtraba
+  // is_active y podía devolver NULL si todas las cuentas estaban inactivas,
+  // produciendo un 500 confuso en vez del 409 ACCOUNT_INACTIVE del service).
+  if (!destinationAccountId)
+    throw new Error('createDrop: destinationAccountId es obligatorio (resolverlo en el service).');
+
   const r = await client.query(
     `INSERT INTO cash_session_drops
        (cash_session_id, amount, payment_method, destination, destination_account_id,
         reason, receipt_reference, performed_by)
-     VALUES (
-       $1, $2, $3, $4,
-       COALESCE($5, (SELECT id FROM cash_accounts WHERE type='GENERAL_CASH' LIMIT 1)),
-       $6, $7, $8
-     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id, cash_session_id, amount::float8 AS amount, payment_method,
                destination, destination_account_id, reason, receipt_reference, status,
                performed_by, performed_at`,
     [
       cashSessionId, amount, paymentMethod, destination,
-      destinationAccountId || null,
+      destinationAccountId,
       reason || null, receiptReference || null, performedBy,
     ],
   );
