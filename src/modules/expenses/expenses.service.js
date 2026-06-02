@@ -23,6 +23,15 @@ const create = async (data, requestingUser) => {
     const category = await queries.findActiveCategoryById(data.category_id);
     if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
   }
+
+  const duplicate = await queries.findRecentDuplicate({
+    amount:      parseFloat(data.amount),
+    categoryId:  data.category_id || null,
+    expenseDate: data.expense_date,
+    createdBy:   requestingUser.id,
+  });
+  if (duplicate) throw { status: 409, message: 'Ya existe un gasto idéntico registrado en los últimos 30 segundos. Verificá antes de reintentar.' };
+
   const registerDate = await getActiveJornadaDate();
   return queries.create({
     amount:            parseFloat(data.amount),
