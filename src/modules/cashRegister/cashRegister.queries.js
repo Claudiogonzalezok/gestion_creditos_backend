@@ -37,19 +37,26 @@ const getDashboard = async (date) => {
        FROM commission_liquidations
        WHERE paid_at::date = $1::date
      ),
-     expenses_data AS (
+      expenses_data AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
          COALESCE(SUM(amount), 0)                                             AS total,
          COUNT(*)                                                              AS count
-       FROM expenses
-       WHERE register_date = $1::date
-     )
-     SELECT
-       (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
-       (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
-       (p.total_collected + dp.total)::float8               AS total_collected,
+        FROM expenses
+        WHERE register_date = $1::date
+      ),
+      conversions_data AS (
+        SELECT
+          COALESCE(SUM(CASE WHEN source_method = 'CASH' THEN -amount WHEN target_method = 'CASH' THEN amount ELSE 0 END), 0) AS cash_delta,
+          COALESCE(SUM(CASE WHEN source_method = 'TRANSFER' THEN -amount WHEN target_method = 'TRANSFER' THEN amount ELSE 0 END), 0) AS transfer_delta
+        FROM cash_conversions
+        WHERE register_date = $1::date
+      )
+      SELECT
+        (p.cash_amount     + dp.cash_amount + cv.cash_delta)::float8         AS cash_amount,
+        (p.transfer_amount + dp.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount,
+        (p.total_collected + dp.total)::float8               AS total_collected,
        (e.total + ex.total)::float8                         AS total_outflows,
        (p.total_collected + dp.total - e.total - ex.total)::float8 AS net_balance,
        p.approved_count::int                                AS approved_count,
@@ -59,7 +66,7 @@ const getDashboard = async (date) => {
        dp.count::int                                        AS down_payments_count,
        ex.total::float8                                     AS expenses_total,
        ex.count::int                                        AS expenses_count
-     FROM payments_data p, down_payments_data dp, egreses_data e, expenses_data ex`,
+      FROM payments_data p, down_payments_data dp, egreses_data e, expenses_data ex, conversions_data cv`,
     [date]
   );
   return r.rows[0];
@@ -105,7 +112,14 @@ const getDailyTotals = async (date) => {
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
          COALESCE(SUM(amount), 0)                                             AS total
-       FROM expenses
+        FROM expenses
+        WHERE register_date = $1::date
+     ),
+     conversions_totals AS (
+       SELECT
+         COALESCE(SUM(CASE WHEN source_method = 'CASH' THEN -amount WHEN target_method = 'CASH' THEN amount ELSE 0 END), 0) AS cash_delta,
+         COALESCE(SUM(CASE WHEN source_method = 'TRANSFER' THEN -amount WHEN target_method = 'TRANSFER' THEN amount ELSE 0 END), 0) AS transfer_delta
+       FROM cash_conversions
        WHERE register_date = $1::date
      )
      SELECT
@@ -119,9 +133,9 @@ const getDailyTotals = async (date) => {
        c.transfer_amount::float8                                                            AS commissions_transfer,
        (ex.total + c.total)::float8                                                         AS total_outflows,
        -- Saldos netos por método (ingresos - egresos del mismo método)
-       (p.cash_amount     + dp.cash_amount     - ex.cash_amount     - c.cash_amount)::float8     AS cash_amount,
-       (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount)::float8 AS transfer_amount
-     FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex`,
+        (p.cash_amount     + dp.cash_amount     - ex.cash_amount     - c.cash_amount + cv.cash_delta)::float8     AS cash_amount,
+        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount
+      FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, conversions_totals cv`,
     [date]
   );
   return r.rows[0];
@@ -180,15 +194,22 @@ const getPreClose = async (date) => {
        FROM expenses
        WHERE register_date = $1::date
      ),
-     pending_totals AS (
+      pending_totals AS (
        SELECT
          COUNT(*)::int                                   AS count,
          COALESCE(SUM(amount_received), 0)::float8       AS amount
-       FROM payments
-       WHERE status = 'PENDING'
-         AND created_at::date = $1::date
-     )
-     SELECT
+        FROM payments
+        WHERE status = 'PENDING'
+          AND created_at::date = $1::date
+      ),
+      conversions_totals AS (
+        SELECT
+          COALESCE(SUM(CASE WHEN source_method = 'CASH' THEN -amount WHEN target_method = 'CASH' THEN amount ELSE 0 END), 0) AS cash_delta,
+          COALESCE(SUM(CASE WHEN source_method = 'TRANSFER' THEN -amount WHEN target_method = 'TRANSFER' THEN amount ELSE 0 END), 0) AS transfer_delta
+        FROM cash_conversions
+        WHERE register_date = $1::date
+      )
+      SELECT
        p.cash_amount::float8                                                                     AS cobros_efectivo,
        p.transfer_amount::float8                                                                 AS cobros_transferencia,
        dp.cash_amount::float8                                                                    AS enganches_efectivo,
@@ -199,11 +220,11 @@ const getPreClose = async (date) => {
        c.cash_amount::float8                                                                     AS comisiones_efectivo,
        c.transfer_amount::float8                                                                 AS comisiones_transferencia,
        (ex.cash_amount + ex.transfer_amount + c.cash_amount + c.transfer_amount)::float8         AS total_egresos,
-       (p.cash_amount + dp.cash_amount - ex.cash_amount - c.cash_amount)::float8                 AS efectivo_esperado,
-       (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount)::float8 AS transferencia_esperada,
-       pt.count                                                                                  AS pendientes_count,
-       pt.amount                                                                                 AS pendientes_amount
-     FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, pending_totals pt`,
+        (p.cash_amount + dp.cash_amount - ex.cash_amount - c.cash_amount + cv.cash_delta)::float8                 AS efectivo_esperado,
+        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount + cv.transfer_delta)::float8 AS transferencia_esperada,
+        pt.count                                                                                  AS pendientes_count,
+        pt.amount                                                                                 AS pendientes_amount
+      FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, pending_totals pt, conversions_totals cv`,
     [date]
   );
   return r.rows[0];
@@ -391,6 +412,33 @@ const linkLiquidations = async (client, cashRegisterId, date) => {
   );
 };
 
+/**
+ * Crea un movimiento de conversión entre efectivo y transferencia.
+ * @param {object} client - Cliente de transacción pg.
+ * @param {object} params - Datos de la conversión.
+ * @returns {Promise<object>} Conversión creada.
+ */
+const createConversion = async (client, {
+  registerDate, criteria, sourceMethod, targetMethod, amount, notes, createdBy,
+}) => {
+  const r = await client.query(
+    `INSERT INTO cash_conversions
+       (register_date, criteria, source_method, target_method, amount, notes, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id,
+               register_date::text,
+               criteria,
+               source_method,
+               target_method,
+               amount::float8,
+               notes,
+               created_by,
+               created_at`,
+    [registerDate, criteria, sourceMethod, targetMethod, amount, notes || null, createdBy],
+  );
+  return r.rows[0];
+};
+
 module.exports = {
   getDashboard,
   getDailyTotals,
@@ -402,4 +450,5 @@ module.exports = {
   findById,
   create,
   linkLiquidations,
+  createConversion,
 };

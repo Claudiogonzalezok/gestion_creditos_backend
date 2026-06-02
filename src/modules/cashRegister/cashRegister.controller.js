@@ -41,4 +41,15 @@ const getById = async (req, res) => {
   }
 };
 
-module.exports = { getDashboard, getPreClose, close, getAll, getById };
+const createConversion = async (req, res) => {
+  try {
+    const result = await service.createConversion(req.body, req.user.id);
+    return response.created(res, result, 'Conversión de caja registrada correctamente.');
+  } catch (err) {
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { getDashboard, getPreClose, close, getAll, getById, createConversion };

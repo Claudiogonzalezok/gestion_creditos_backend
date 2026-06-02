@@ -35,6 +35,9 @@ const getSummaryReport = async () =>
 
 const getPaymentsOverdue48h = () => queries.getPaymentsOverdue48h();
 
+const getCashConversionsReport = async (dateFrom, dateTo) =>
+  queries.getCashConversionsReport(dateFrom, dateTo);
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -45,4 +48,5 @@ module.exports = {
   getUpcomingReport,
   getSummaryReport,
   getPaymentsOverdue48h,
+  getCashConversionsReport,
 };
