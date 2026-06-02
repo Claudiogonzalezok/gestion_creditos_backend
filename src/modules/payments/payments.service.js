@@ -1,23 +1,23 @@
 const pool                  = require('../../config/db');
 const queries               = require('./payments.queries');
 const cashMovementsQueries  = require('./cash_movements.queries');
-const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
 const cashSessionsQueries   = require('../cashSessions/cashSessions.queries');
+const businessDaysQueries   = require('../businessDays/businessDays.queries');
 const collectionsQueries    = require('../collections/collections.queries');
 const { getValue }          = require('../systemConfig/systemConfig.queries');
 const { withTransaction }   = require('../../utils/transaction');
 const { localDate }         = require('../../utils/date');
 
 /**
- * Determina la fecha de la jornada comercial activa.
- * Duplicado local para evitar dependencia circular con cashRegister.service.
- * Reutiliza cashRegisterQueries.findUnclosedJornadaDate, que ya es importado.
- * @returns {Promise<string>} Fecha YYYY-MM-DD de la jornada activa.
+ * IMP-1: determina la fecha de la jornada comercial activa consultando
+ * business_days (autoridad post-rediseño). Cae al día actual si no hay
+ * jornada abierta (la próxima operación creará una).
  */
 const getActiveJornadaDate = async () => {
-  const today = localDate();
-  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
-  return jornadaDate || today;
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -27,19 +27,37 @@ const getActiveJornadaDate = async () => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Valida que la caja del día no esté cerrada.
- * La existencia de un registro en cash_registers para la fecha = caja cerrada.
- * Debe llamarse ANTES de iniciar la transacción de pago.
+ * IMP-1: valida que la jornada (business_day) de la fecha NO esté CLOSED/AUDITED.
+ *
+ * Autoridad post-rediseño: business_days. Reemplaza el check legacy contra
+ * cash_registers.findByDate, que mantenía un sistema paralelo de cierre.
+ *
+ * NOTA: esta función valida UNA condición — la jornada mutable. La segunda
+ * condición operativa (existe cash_session OPEN para el owner) la valida cada
+ * caller vía cashSessionsQueries.findOpenByOwner + lockOpenSessionForUser
+ * (IMP-2). No se duplica acá para no asumir cuál es el owner.
+ *
  * @param {string} date - Fecha contable 'YYYY-MM-DD'.
- * @throws {{ status: 409, message }} si la caja del día está cerrada.
+ * @throws {{ status: 409, message }} si la jornada está CLOSED o AUDITED.
  */
 const _validateCajaOpen = async (date) => {
-  const closed = await cashRegisterQueries.findByDate(date);
-  if (closed)
-    throw {
-      status: 409,
-      message: `La caja del ${date} ya fue cerrada. No es posible registrar cobros para ese día.`,
-    };
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return; // sin sucursales no hay nada que validar.
+  const mutable = await businessDaysQueries.isJornadaMutable(date, branch.id);
+  // Si la jornada NO existe (mutable=false por ausencia), permitir: la próxima
+  // apertura de caja la creará. Solo bloqueamos si EXISTE y está terminal.
+  if (mutable) return;
+
+  // Re-consultar para distinguir "no existe" de "terminal".
+  const r = await pool.query(
+    `SELECT status FROM business_days WHERE business_date = $1::date AND branch_id = $2`,
+    [date, branch.id],
+  );
+  if (!r.rows.length) return;
+  throw {
+    status: 409,
+    message: `La jornada del ${date} ya está ${r.rows[0].status}. No es posible registrar cobros para ese día.`,
+  };
 };
 
 /**

@@ -1,17 +1,18 @@
 const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const { localDate } = require('../../utils/date');
 
 /**
- * Determina la fecha de la jornada comercial activa.
- * Busca la fecha más reciente con actividad sin cierre de caja.
- * Si no hay jornada sin cerrar en los últimos 14 días, retorna el día de hoy como fallback.
- * @returns {Promise<string>} Fecha YYYY-MM-DD de la jornada activa.
+ * IMP-1: consulta business_days (autoridad post-rediseño). Cae al día actual
+ * si no hay jornada abierta. La búsqueda legacy
+ * cashRegister.queries.findUnclosedJornadaDate queda como deprecated.
  */
 const getActiveJornadaDate = async () => {
-  const today = localDate();
-  const jornadaDate = await queries.findUnclosedJornadaDate(today);
-  return jornadaDate || today;
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
 };
 
 const getDashboard = async (date) => {

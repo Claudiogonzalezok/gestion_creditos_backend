@@ -171,6 +171,48 @@ const audit = async (client, id, { auditedBy, observations }) => {
   return r.rows[0] || null;
 };
 
+/**
+ * IMP-1: devuelve la fecha (`business_date`) de la jornada activa más reciente
+ * de la sucursal — autoridad operativa post-rediseño. Reemplaza a
+ * cashRegisterQueries.findUnclosedJornadaDate (legacy).
+ *
+ * Una jornada está "activa" mientras su status sea OPEN o READY_TO_CLOSE.
+ * Cuando se cierra (CLOSED/AUDITED) deja de aceptar movimientos nuevos.
+ *
+ * Devuelve null si la sucursal nunca tuvo jornada o todas están terminales.
+ */
+const findActiveJornadaDate = async (branchId, db = pool) => {
+  const r = await db.query(
+    `SELECT business_date::text AS jornada_date
+     FROM business_days
+     WHERE branch_id = $1
+       AND status IN ('OPEN','READY_TO_CLOSE')
+     ORDER BY business_date DESC
+     LIMIT 1`,
+    [branchId],
+  );
+  return r.rows[0]?.jornada_date || null;
+};
+
+/**
+ * IMP-1: chequea si la jornada de (date, branchId) está en estado mutable
+ * (OPEN o READY_TO_CLOSE). Reemplaza a cashRegisterQueries.findByDate como
+ * autoridad para validar si un movimiento puede afectar esa fecha.
+ *
+ * Devuelve true si la jornada existe y es mutable, false si está CLOSED/AUDITED
+ * o si no existe (jornada nunca abierta).
+ */
+const isJornadaMutable = async (businessDate, branchId, db = pool) => {
+  const r = await db.query(
+    `SELECT status
+     FROM business_days
+     WHERE business_date = $1::date AND branch_id = $2`,
+    [businessDate, branchId],
+  );
+  if (!r.rows.length) return false;
+  return ['OPEN','READY_TO_CLOSE'].includes(r.rows[0].status);
+};
+
 const findAll = async ({ status, branchId, dateFrom, dateTo } = {}) => {
   let q = `
     SELECT bd.id, bd.business_date, bd.branch_id, b.code AS branch_code, b.name AS branch_name,
@@ -201,4 +243,6 @@ module.exports = {
   close,
   audit,
   findAll,
+  findActiveJornadaDate,
+  isJornadaMutable,
 };

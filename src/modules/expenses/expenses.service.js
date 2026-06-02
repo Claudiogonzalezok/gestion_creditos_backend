@@ -1,12 +1,17 @@
 const queries = require('./expenses.queries');
-const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
 const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const { localDate } = require('../../utils/date');
 
+/**
+ * IMP-1: consulta business_days (autoridad post-rediseño). Cae al día actual
+ * si no hay jornada abierta.
+ */
 const getActiveJornadaDate = async () => {
-  const today = localDate();
-  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
-  return jornadaDate || today;
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
 };
 
 const getAll = async ({ dateFrom, dateTo, categoryId, page, limit } = {}) => {
