@@ -1,0 +1,139 @@
+// Bloque M — Jornadas (business_days)
+// Verifica la máquina de estados OPEN → READY_TO_CLOSE → CLOSED → AUDITED y la
+// creación automática al abrir la primera caja del día.
+
+const { pool, setupTestSuite } = require('./helpers/db');
+const { createUserFixture } = require('./helpers/fixtures');
+const cashSessions = require('../../src/modules/cashSessions/cashSessions.service');
+const businessDays = require('../../src/modules/businessDays/businessDays.service');
+const businessDaysQueries = require('../../src/modules/businessDays/businessDays.queries');
+
+setupTestSuite();
+
+const asUser = (user) => ({ id: user.id, role: user.role });
+
+describe('M — Jornadas (business_days)', () => {
+  it('la primera apertura del día crea la jornada en OPEN', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+    expect(s.business_day.status).toBe('OPEN');
+    expect(s.business_day.id).toBeDefined();
+  });
+
+  it('aperturas del mismo día apuntan a la misma jornada', async () => {
+    const u1 = await createUserFixture({ role: 'ADMIN' });
+    const u2 = await createUserFixture({ role: 'ADMIN' });
+    const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
+    const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
+    expect(s1.business_day_id).toBe(s2.business_day_id);
+  });
+
+  it('transición OPEN → READY_TO_CLOSE cuando todas las cajas están CLOSED', async () => {
+    const u1 = await createUserFixture({ role: 'ADMIN' });
+    const u2 = await createUserFixture({ role: 'ADMIN' });
+    const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
+    const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
+
+    await cashSessions.close(s1.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u1));
+
+    // Mientras quede una caja OPEN la jornada NO transita.
+    let day = await businessDaysQueries.findById(s1.business_day_id);
+    expect(day.status).toBe('OPEN');
+
+    await cashSessions.close(s2.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u2));
+
+    day = await businessDaysQueries.findById(s1.business_day_id);
+    expect(day.status).toBe('READY_TO_CLOSE');
+    expect(day.ready_to_close_at).not.toBeNull();
+  });
+
+  it('una caja PENDING_RECONCILIATION bloquea la transición a READY_TO_CLOSE', async () => {
+    const u1 = await createUserFixture({ role: 'ADMIN' });
+    const u2 = await createUserFixture({ role: 'ADMIN' });
+    const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
+    const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
+
+    await cashSessions.close(s1.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u1));
+    await cashSessions.markPending(s2.id, { reason: 'olvido' }, asUser(u2));
+
+    const day = await businessDaysQueries.findById(s1.business_day_id);
+    expect(day.status).toBe('OPEN'); // sigue OPEN porque hay pendiente
+
+    // Al reconciliar la PENDING, la jornada transita.
+    const admin = await createUserFixture({ role: 'ADMIN' });
+    await cashSessions.reconcile(s2.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(admin));
+    const dayAfter = await businessDaysQueries.findById(s1.business_day_id);
+    expect(dayAfter.status).toBe('READY_TO_CLOSE');
+  });
+
+  it('cierre manual de jornada: READY_TO_CLOSE → CLOSED por supervisor', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const supervisor = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+    await cashSessions.close(s.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u));
+
+    const closed = await businessDays.close(s.business_day_id, { observations: 'OK' }, asUser(supervisor));
+    expect(closed.status).toBe('CLOSED');
+    expect(closed.closed_by).toBe(supervisor.id);
+    expect(closed.observations).toBe('OK');
+  });
+
+  it('no se cierra una jornada OPEN', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+    await expect(businessDays.close(s.business_day_id, {}, asUser(u)))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
+  it('audit: CLOSED → AUDITED', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const auditor = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+    await cashSessions.close(s.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u));
+    await businessDays.close(s.business_day_id, {}, asUser(auditor));
+    const audited = await businessDays.audit(s.business_day_id, { observations: 'auditada' }, asUser(auditor));
+    expect(audited.status).toBe('AUDITED');
+    expect(audited.audited_by).toBe(auditor.id);
+  });
+
+  it('no se puede abrir caja en una jornada CLOSED', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const supervisor = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+    await cashSessions.close(s.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u));
+    await businessDays.close(s.business_day_id, {}, asUser(supervisor));
+
+    // Mismo día, otro usuario: la sucursal ya tiene jornada CLOSED.
+    const u2 = await createUserFixture({ role: 'ADMIN' });
+    await expect(cashSessions.open({ opening_amount: 0 }, asUser(u2)))
+      .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/CLOSED/) });
+  });
+
+  it('constraint UNIQUE(business_date, branch_id) impide duplicar la jornada', async () => {
+    const branch = await pool.query(`SELECT id FROM branches WHERE code='HQ'`);
+    await pool.query(
+      `INSERT INTO business_days (business_date, branch_id) VALUES (CURRENT_DATE, $1)`,
+      [branch.rows[0].id],
+    );
+    await expect(
+      pool.query(
+        `INSERT INTO business_days (business_date, branch_id) VALUES (CURRENT_DATE, $1)`,
+        [branch.rows[0].id],
+      ),
+    ).rejects.toMatchObject({ code: '23505' });
+  });
+});

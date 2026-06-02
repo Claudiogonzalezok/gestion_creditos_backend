@@ -31,6 +31,12 @@ const TRANSACTIONAL_TABLES = [
   'collection_sheet_details',
   'collection_sheets',
   'cash_movements',
+  'cash_session_closure_details',
+  'cash_session_drops',
+  'cash_sessions',
+  'business_days',
+  // branches NO se trunca: la migración 023 inyecta una sucursal default 'HQ'
+  // necesaria para abrir cajas. Se queda intacta entre tests.
   'payments',
   'credit_refinancings',
   'credit_down_payments',
