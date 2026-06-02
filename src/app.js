@@ -114,6 +114,7 @@ app.use('/api/collections',         require('./modules/collections/collections.r
 app.use('/api/commissions',  require('./modules/commissions/commissions.routes'));
 app.use('/api/cash-register',require('./modules/cashRegister/cashRegister.routes'));
 app.use('/api/cash-sessions',require('./modules/cashSessions/cashSessions.routes'));
+app.use('/api/cash-accounts',require('./modules/cashAccounts/cashAccounts.routes'));
 app.use('/api/business-days',require('./modules/businessDays/businessDays.routes'));
 app.use('/api/expenses',          require('./modules/expenses/expenses.routes'));
 app.use('/api/expense-categories',  require('./modules/expenseCategories/expenseCategories.routes'));
