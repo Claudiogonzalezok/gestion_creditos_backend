@@ -63,8 +63,8 @@ const getPendingCommittedAmount = async (installmentId) => {
   return r.rows[0].total;
 };
 
-const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date, cash_session_id }) => {
-  const r = await pool.query(
+const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date, cash_session_id }, db = pool) => {
+  const r = await db.query(
     `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id, installment_id, amount_received::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,

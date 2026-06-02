@@ -591,16 +591,25 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
   // Si el crédito implica un movimiento de caja (downPayment o prepaid), el
   // admin que aprueba debe tener caja OPEN para imputar ese ingreso.
-  let adminCashSessionId = null;
-  if (downPayment > 0 || credit.prepaid_installments > 0) {
+  // IMP-2: pre-check amistoso fuera de la tx + re-validación bajo lock adentro.
+  const needsAdminCashSession = downPayment > 0 || credit.prepaid_installments > 0;
+  if (needsAdminCashSession) {
     const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
-    const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
-    if (!adminSession)
+    const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+    if (!adminSessionPreCheck)
       throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
-    adminCashSessionId = adminSession.id;
   }
 
   await withTransaction(async (client) => {
+    let adminCashSessionId = null;
+    if (needsAdminCashSession) {
+      const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+      const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+      if (!adminSession)
+        throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
+      adminCashSessionId = adminSession.id;
+    }
+
     await queries.approve(client, id, adminId, null, installmentsCount);
 
     for (const [, g] of productGroups) {

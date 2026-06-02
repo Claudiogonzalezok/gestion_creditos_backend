@@ -62,6 +62,27 @@ const findByIdWithDetails = async (id) => {
 };
 
 /**
+ * Lock + read de la caja OPEN del owner dentro de una transacción. Cierra la
+ * ventana TOCTOU entre el lookup amistoso (findOpenByOwner desde pool) y el
+ * INSERT del movimiento: si otra request transicionó la caja a PENDING o
+ * CLOSED entre ambos pasos, este lookup la NO retorna y el caller falla con
+ * 409 sin haber imputado nada.
+ *
+ * Devuelve la sesión OPEN bajo lock, o null si no existe.
+ */
+const lockOpenSessionForUser = async (client, ownerUserId) => {
+  const r = await client.query(
+    `SELECT id, business_day_id, owner_user_id,
+            opening_amount::float8 AS opening_amount, status
+     FROM cash_sessions
+     WHERE owner_user_id = $1 AND status = 'OPEN'
+     FOR UPDATE`,
+    [ownerUserId],
+  );
+  return r.rows[0] || null;
+};
+
+/**
  * Lock + read de la sesión para evitar transiciones concurrentes.
  */
 const lockAndGetById = async (client, id) => {
@@ -393,6 +414,7 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
 
 module.exports = {
   findOpenByOwner,
+  lockOpenSessionForUser,
   findById,
   findByIdWithDetails,
   lockAndGetById,

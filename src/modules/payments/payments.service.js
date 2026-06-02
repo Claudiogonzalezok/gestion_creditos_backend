@@ -265,30 +265,38 @@ const create = async (data, requestingUser) => {
       };
   }
 
-  // Caja OPEN del cobrador: imputa el cobro a esa caja (fuente de verdad de
-  // la rendición). Si el cobrador no tiene caja abierta, el sistema exige
-  // abrirla antes — un cobro no puede quedar huérfano de jornada.
-  const session = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
-  if (!session)
+  // Pre-check amistoso para mensaje temprano. Re-validación bajo lock dentro
+  // de la tx (IMP-2): cierra la ventana TOCTOU entre el lookup y el INSERT.
+  const sessionPreCheck = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
+  if (!sessionPreCheck)
     throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
 
-  const payment = await queries.create({
-    installment_id:     data.installment_id,
-    collector_id:       requestingUser.id,
-    amount_received:    data.amount_received,
-    payment_method:     data.payment_method,
-    transfer_reference: data.transfer_reference,
-    notes:              data.notes,
-    next_visit_date:    data.next_visit_date,
-    cash_session_id:    session.id,
-  });
+  // Envolver INSERT + hook de management_status en una sola tx para que el
+  // hook no quede colgado si el payment falla y viceversa.
+  let payment;
+  await withTransaction(async (client) => {
+    const session = await cashSessionsQueries.lockOpenSessionForUser(client, requestingUser.id);
+    if (!session)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
 
-  // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
-  // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
-  // si fue pago parcial.
-  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
-    requestingUser.id, data.installment_id, 'VISITED',
-  );
+    payment = await queries.create({
+      installment_id:     data.installment_id,
+      collector_id:       requestingUser.id,
+      amount_received:    data.amount_received,
+      payment_method:     data.payment_method,
+      transfer_reference: data.transfer_reference,
+      notes:              data.notes,
+      next_visit_date:    data.next_visit_date,
+      cash_session_id:    session.id,
+    }, client);
+
+    // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
+    // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
+    // si fue pago parcial.
+    await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+      requestingUser.id, data.installment_id, 'VISITED', client,
+    );
+  });
 
   return payment;
 };
@@ -419,10 +427,10 @@ const adminDirect = async (data, adminId) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
 
-  // Caja OPEN del admin que cobra directo (sin pre-carga). El admin es el
-  // owner del movimiento — la rendición sale de su caja.
-  const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
-  if (!adminSession)
+  // Pre-check amistoso (mensaje claro temprano). La validación bajo lock se
+  // hace dentro de la tx para cerrar la ventana TOCTOU (IMP-2).
+  const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSessionPreCheck)
     throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
 
   // Días de gracia para el recálculo de status post-aplicación del pago
@@ -456,6 +464,11 @@ const adminDirect = async (data, adminId) => {
 
   let newPaymentId;
   await withTransaction(async (client) => {
+    // IMP-2: re-validar caja OPEN bajo lock dentro de la tx.
+    const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+    if (!adminSession)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
+
     // Lock sobre la cuota principal
     const lockedInst = await queries.lockAndGetInstallment(client, data.installment_id);
     if (!lockedInst) throw { status: 404, message: 'Cuota no encontrada.' };
@@ -521,14 +534,18 @@ const reverse = async (id, reason, adminId) => {
   // Días de gracia para el recálculo de status tras restaurar amount_paid
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
-  // Caja OPEN del admin que revierte: el movimiento contrario se imputa a
-  // esa caja (no al cash_session_id del payment original, que probablemente
-  // esté CLOSED). La reversión es contable, no histórica.
-  const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
-  if (!adminSession)
+  // Pre-check amistoso (mensaje claro temprano). Re-validación bajo lock
+  // dentro de la tx (IMP-2). La reversión se imputa a la caja OPEN del admin
+  // que revierte, no al cash_session_id del payment original (probablemente CLOSED).
+  const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSessionPreCheck)
     throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
 
   await withTransaction(async (client) => {
+    const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+    if (!adminSession)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
+
     const payment = await queries.lockAndGetPayment(client, id);
     if (!payment)               throw { status: 404, message: 'Cobro no encontrado.' };
     if (payment.status !== 'APPROVED')
