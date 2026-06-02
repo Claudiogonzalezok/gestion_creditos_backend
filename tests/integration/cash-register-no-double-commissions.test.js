@@ -116,4 +116,34 @@ describe('Q — Auditoría CRIT-1: dashboard legacy NO debe doble-contar commiss
     const bal = await cashAccountsService.getBalance(acc.id);
     expect(bal.current_balance).toBe(4200); // 5000 - 800
   });
+
+  // ── CRIT-2: linkLiquidations no debe enganchar liquidaciones Fase 3 ──
+  it('CRIT-2: cash_register.close NO setea cash_register_id en liquidaciones Fase 3', async () => {
+    const acc       = await cashAccountsQueries.findGeneralCashAccount();
+    const admin     = await createUserFixture({ role: 'ADMIN' });
+    const collector = await createUserFixture({ role: 'COLLECTOR' });
+
+    await cashAccountsService.registerMovement(acc.id, {
+      movementType: 'ADJUSTMENT', direction: 'IN', amount: 2000,
+    }, asUser(admin));
+    await seedPendingCommission(collector.id, 500);
+    const liq = await commissionsService.liquidate({
+      user_id: collector.id, payment_method: 'CASH',
+    }, admin.id);
+
+    // Cerrar el cash_register del día (legacy). La función linkLiquidations es
+    // no-op desde Fase 3 → la liquidación queda con cash_register_id NULL.
+    const cashRegisterService = require('../../src/modules/cashRegister/cashRegister.service');
+    const date = localDate();
+    await cashRegisterService.close({
+      register_date: date, declared_cash: 0, force: true,
+    }, admin.id);
+
+    const r = await pool.query(
+      `SELECT cash_register_id, cash_session_id FROM commission_liquidations WHERE id = $1`,
+      [liq.id],
+    );
+    expect(r.rows[0].cash_register_id).toBeNull();
+    expect(r.rows[0].cash_session_id).toBeNull();
+  });
 });

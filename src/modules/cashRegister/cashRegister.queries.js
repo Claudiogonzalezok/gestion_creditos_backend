@@ -401,14 +401,16 @@ const create = async (client, {
 };
 
 // ── Vincula liquidaciones del día al cierre recién creado ─────
-const linkLiquidations = async (client, cashRegisterId, date) => {
-  await client.query(
-    `UPDATE commission_liquidations
-     SET cash_register_id = $1
-     WHERE paid_at::date = $2::date
-       AND cash_register_id IS NULL`,
-    [cashRegisterId, date]
-  );
+/**
+ * @deprecated CRIT-2 (Fase 3): no se llama más desde cashRegister.service.close.
+ *   Post-Fase 3, commission_liquidations se imputa a Caja General vía
+ *   cash_account_movements/SALARY_PAYMENT (con reference_type=COMMISSION_LIQUIDATION).
+ *   Enlazar la liquidación al cierre legacy producía contradicciones: el cierre
+ *   "se apropiaba" de un movimiento que ya estaba en otro libro.
+ *   Se mantiene como no-op para no romper consumers/tests que la mockean.
+ */
+const linkLiquidations = async (/* client, cashRegisterId, date */) => {
+  // No-op intencional. Ver JSDoc.
 };
 
 /**

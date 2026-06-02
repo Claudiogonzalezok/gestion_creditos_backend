@@ -85,7 +85,10 @@ const close = async (data, adminId) => {
       closedBy:         adminId,
     });
 
-    await queries.linkLiquidations(client, register.id, registerDate);
+    // CRIT-2 (Fase 3): NO se llama linkLiquidations. Las liquidaciones de
+    // comisiones ahora son tesorería (Caja General) y no deben quedar
+    // enlazadas al cierre legacy de cash_registers — eso producía un cierre
+    // "apropiado" de movimientos que ya estaban imputados a cash_account_movements.
 
     await client.query('COMMIT');
     return register;
