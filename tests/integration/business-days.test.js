@@ -123,6 +123,69 @@ describe('M — Jornadas (business_days)', () => {
       .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/CLOSED/) });
   });
 
+  // ── IMP-5: force-close para jornadas trabadas con cajas PENDING ───────
+  describe('force-close (IMP-5)', () => {
+    it('cierra una jornada que tiene cajas PENDING_RECONCILIATION', async () => {
+      const u  = await createUserFixture({ role: 'COLLECTOR' });
+      const sv = await createUserFixture({ role: 'ADMIN' });
+      const s  = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.markPending(s.id, { reason: 'cobrador no volvió' }, asUser(u));
+
+      // La transición automática a READY_TO_CLOSE NO dispara (hay PENDING).
+      const before = await businessDaysQueries.findById(s.business_day_id);
+      expect(before.status).toBe('OPEN');
+
+      const forced = await businessDays.forceClose(s.business_day_id, {
+        reason: 'cierre por planilla mensual',
+      }, asUser(sv));
+      expect(forced.status).toBe('CLOSED');
+      expect(forced.closed_by).toBe(sv.id);
+      expect(forced.observations).toMatch(/FORCE-CLOSE/);
+      expect(forced.observations).toMatch(/1 PENDING/);
+
+      // La caja PENDING NO se tocó: queda como deuda operativa.
+      const sessAfter = await pool.query(`SELECT status FROM cash_sessions WHERE id = $1`, [s.id]);
+      expect(sessAfter.rows[0].status).toBe('PENDING_RECONCILIATION');
+    });
+
+    it('rechaza 422 si reason no se pasa', async () => {
+      const u  = await createUserFixture({ role: 'COLLECTOR' });
+      const sv = await createUserFixture({ role: 'ADMIN' });
+      const s  = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.markPending(s.id, { reason: 'x' }, asUser(u));
+
+      await expect(businessDays.forceClose(s.business_day_id, {}, asUser(sv)))
+        .rejects.toMatchObject({ status: 422 });
+    });
+
+    it('rechaza 409 si no hay cajas OPEN ni PENDING (usar close normal)', async () => {
+      const u  = await createUserFixture({ role: 'ADMIN' });
+      const sv = await createUserFixture({ role: 'ADMIN' });
+      const s  = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.close(s.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u));
+
+      await expect(businessDays.forceClose(s.business_day_id, {
+        reason: 'no debería pasar',
+      }, asUser(sv))).rejects.toMatchObject({ status: 409 });
+    });
+
+    it('rechaza 409 si la jornada ya está CLOSED/AUDITED', async () => {
+      const u  = await createUserFixture({ role: 'ADMIN' });
+      const sv = await createUserFixture({ role: 'ADMIN' });
+      const s  = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.close(s.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u));
+      await businessDays.close(s.business_day_id, {}, asUser(sv));
+
+      await expect(businessDays.forceClose(s.business_day_id, {
+        reason: 'tardío',
+      }, asUser(sv))).rejects.toMatchObject({ status: 409 });
+    });
+  });
+
   it('constraint UNIQUE(business_date, branch_id) impide duplicar la jornada', async () => {
     const branch = await pool.query(`SELECT id FROM branches WHERE code='HQ'`);
     await pool.query(

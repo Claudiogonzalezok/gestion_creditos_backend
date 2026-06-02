@@ -120,6 +120,27 @@ const maybeTransitionToReadyToClose = async (client, businessDayId) => {
   return { transitioned: r.rowCount === 1, status: r.rows[0]?.status ?? day.status };
 };
 
+/**
+ * IMP-5: force-close (OPEN o READY_TO_CLOSE) → CLOSED. Permite cerrar una
+ * jornada que tiene cajas PENDING_RECONCILIATION (no avanzaría a READY_TO_CLOSE
+ * sola). Las cajas PENDING quedan como deuda operativa, registradas en
+ * observations vía el caller.
+ */
+const forceClose = async (client, id, { closedBy, observations }) => {
+  const r = await client.query(
+    `UPDATE business_days
+     SET status = 'CLOSED',
+         closed_at = NOW(),
+         closed_by = $2,
+         ready_to_close_at = COALESCE(ready_to_close_at, NOW()),
+         observations = COALESCE($3, observations)
+     WHERE id = $1 AND status IN ('OPEN','READY_TO_CLOSE')
+     RETURNING id, status, closed_at, closed_by`,
+    [id, closedBy, observations || null],
+  );
+  return r.rows[0] || null;
+};
+
 /** READY_TO_CLOSE → CLOSED (supervisor). */
 const close = async (client, id, { closedBy, observations }) => {
   const r = await client.query(
@@ -176,6 +197,7 @@ module.exports = {
   create,
   countSessionsByStatus,
   maybeTransitionToReadyToClose,
+  forceClose,
   close,
   audit,
   findAll,

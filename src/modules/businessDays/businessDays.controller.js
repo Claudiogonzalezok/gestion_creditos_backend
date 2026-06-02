@@ -31,6 +31,13 @@ const close = async (req, res) => {
   } catch (err) { return handleError(res, err); }
 };
 
+const forceClose = async (req, res) => {
+  try {
+    const data = await service.forceClose(req.params.id, req.body, req.user);
+    return res.status(200).json({ ok: true, message: 'Jornada cerrada (force).', data });
+  } catch (err) { return handleError(res, err); }
+};
+
 const audit = async (req, res) => {
   try {
     const data = await service.audit(req.params.id, req.body, req.user);
@@ -38,4 +45,4 @@ const audit = async (req, res) => {
   } catch (err) { return handleError(res, err); }
 };
 
-module.exports = { getById, getAll, close, audit };
+module.exports = { getById, getAll, close, forceClose, audit };

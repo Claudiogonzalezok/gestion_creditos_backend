@@ -33,6 +33,16 @@ router.post('/:id/close',
   controller.close,
 );
 
+router.post('/:id/force-close',
+  [
+    param('id').isUUID(),
+    body('reason').isString().isLength({ min: 3, max: 1000 })
+      .withMessage('reason es obligatorio (3..1000 chars) para forzar el cierre.'),
+  ],
+  validate,
+  controller.forceClose,
+);
+
 router.post('/:id/audit',
   [
     param('id').isUUID(),
