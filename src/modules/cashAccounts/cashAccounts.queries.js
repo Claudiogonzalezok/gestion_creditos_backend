@@ -115,6 +115,28 @@ const findMovementById = async (id, db = pool) => {
   return r.rows[0] || null;
 };
 
+// Busca un movimiento por (reference_type, reference_id, movement_type).
+// movementType es opcional para acotar a un tipo específico (ej: DROP_IN).
+const findMovementByReference = async ({
+  referenceType, referenceId, movementType,
+}, db = pool) => {
+  const conds = ['reference_type = $1', 'reference_id = $2'];
+  const params = [referenceType, referenceId];
+  if (movementType) {
+    conds.push(`movement_type = $${params.length + 1}`);
+    params.push(movementType);
+  }
+  const r = await db.query(
+    `SELECT ${MOVEMENT_FIELDS}
+     FROM cash_account_movements
+     WHERE ${conds.join(' AND ')}
+     ORDER BY created_at
+     LIMIT 1`,
+    params,
+  );
+  return r.rows[0] || null;
+};
+
 // Inserta el movimiento sin tocar current_balance. Pensado para uso interno
 // del service (que ya hizo FOR UPDATE + validó saldo y va a UPDATE el cache).
 const insertMovement = async (client, {
@@ -188,6 +210,7 @@ module.exports = {
   findMovements,
   countMovements,
   findMovementById,
+  findMovementByReference,
   insertMovement,
   updateCurrentBalance,
   // balance derivado

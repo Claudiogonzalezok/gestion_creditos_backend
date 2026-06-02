@@ -1,5 +1,7 @@
 const queries        = require('./cashSessions.queries');
 const bdQueries      = require('../businessDays/businessDays.queries');
+const cashAccountsQueries = require('../cashAccounts/cashAccounts.queries');
+const cashAccountsService = require('../cashAccounts/cashAccounts.service');
 const { withTransaction } = require('../../utils/transaction');
 const { localDate }       = require('../../utils/date');
 
@@ -362,14 +364,32 @@ const reconcile = async (id, data, requestingUser) => {
 
 // ── Drops ──────────────────────────────────────────────────────────────────
 
+/**
+ * Resuelve la cuenta destino del drop. Si el caller no especifica
+ * destination_account_id, defaultea a la Caja General. Valida que la cuenta
+ * exista y esté activa.
+ */
+const resolveDropDestinationAccount = async (client, destinationAccountId) => {
+  if (destinationAccountId) {
+    const acc = await cashAccountsQueries.findById(destinationAccountId, client);
+    if (!acc || !acc.is_active)
+      throw { status: 404, message: 'Cuenta destino no encontrada o inactiva.' };
+    return acc;
+  }
+  const def = await cashAccountsQueries.findGeneralCashAccount(client);
+  if (!def) throw { status: 500, message: 'No hay Caja General configurada.' };
+  return def;
+};
+
 const addDrop = async (id, data, requestingUser) => {
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
     throw { status: 422, message: 'amount debe ser un número > 0.' };
   if (!['CASH', 'TRANSFER'].includes(data.payment_method))
     throw { status: 422, message: 'payment_method debe ser CASH o TRANSFER.' };
-  const destination = (data.destination || '').trim();
-  if (!destination) throw { status: 422, message: 'destination es obligatorio.' };
+  // destination (texto libre) es opcional desde Fase 3: si no viene, se deja
+  // null. La cuenta destino real va por destination_account_id.
+  const destination = (data.destination || '').trim() || null;
 
   return withTransaction(async (client) => {
     const session = await queries.lockAndGetById(client, id);
@@ -377,14 +397,40 @@ const addDrop = async (id, data, requestingUser) => {
     if (session.status !== 'OPEN')
       throw { status: 409, message: `Solo se agregan drops a cajas OPEN (estado actual: ${session.status}).` };
 
-    return queries.createDrop(client, id, {
+    const destinationAccount = await resolveDropDestinationAccount(
+      client, data.destination_account_id,
+    );
+
+    const drop = await queries.createDrop(client, id, {
       amount,
-      paymentMethod:    data.payment_method,
+      paymentMethod:        data.payment_method,
       destination,
-      reason:           data.reason,
-      receiptReference: data.receipt_reference,
-      performedBy:      requestingUser.id,
+      destinationAccountId: destinationAccount.id,
+      reason:               data.reason,
+      receiptReference:     data.receipt_reference,
+      performedBy:          requestingUser.id,
     });
+
+    // Generar el DROP_IN automático en la cuenta destino, misma transacción.
+    // beneficiary_name = owner de la sesión (para trazabilidad por beneficiario).
+    const owner = await client.query(
+      `SELECT full_name FROM users WHERE id = $1`, [session.owner_user_id],
+    );
+    const ownerName = owner.rows[0]?.full_name || null;
+
+    await cashAccountsService.insertMovementWithBalance(client, {
+      cashAccountId: destinationAccount.id,
+      movementType:  'DROP_IN',
+      direction:     'IN',
+      amount,
+      description:   `Drop ${data.payment_method} de caja ${id}`,
+      beneficiaryName: ownerName,
+      referenceType: 'CASH_SESSION_DROP',
+      referenceId:   drop.id,
+      createdBy:     requestingUser.id,
+    });
+
+    return drop;
   });
 };
 
@@ -404,11 +450,40 @@ const reverseDrop = async (sessionId, dropId, data, requestingUser) => {
     if (drop.status !== 'ACTIVE')
       throw { status: 409, message: `Solo se revierten drops ACTIVE (estado actual: ${drop.status}).` };
 
+    // 1) Marcar el drop como REVERSED.
     const reversed = await queries.reverseDrop(client, dropId, {
       reversedBy: requestingUser.id,
       reason,
     });
     if (!reversed) throw { status: 409, message: 'El drop cambió de estado. Reintentá.' };
+
+    // 2) Compensar en la cuenta destino con un ADJUSTMENT OUT por el mismo monto.
+    //    Apunta polimórficamente al DROP_IN original. Puede fallar 409
+    //    INSUFFICIENT_BALANCE — en ese caso toda la tx (incluido el step 1)
+    //    revierte y el drop queda intacto.
+    const originalDropIn = await cashAccountsQueries.findMovementByReference({
+      referenceType: 'CASH_SESSION_DROP',
+      referenceId:   dropId,
+      movementType:  'DROP_IN',
+    }, client);
+    if (!originalDropIn) {
+      // Caso de drop legacy backfilleado sin DROP_IN: no se puede compensar.
+      // Lanzamos 500 con mensaje claro — debería investigarse manualmente.
+      throw { status: 500, message: 'No se encontró el DROP_IN asociado al drop. Investigar manualmente.' };
+    }
+
+    await cashAccountsService.insertMovementWithBalance(client, {
+      cashAccountId: originalDropIn.cash_account_id,
+      movementType:  'ADJUSTMENT',
+      direction:     'OUT',
+      amount:        drop.amount,
+      description:   `Reverso de drop ${dropId} — ${reason}`,
+      beneficiaryName: originalDropIn.beneficiary_name,
+      referenceType: 'CASH_ACCOUNT_MOVEMENT',
+      referenceId:   originalDropIn.id,
+      createdBy:     requestingUser.id,
+    });
+
     return queries.findDropById(dropId, client);
   });
 };

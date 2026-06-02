@@ -272,7 +272,7 @@ const reverseDrop = async (client, dropId, { reversedBy, reason }) => {
 const findDropById = async (id, db = pool) => {
   const r = await db.query(
     `SELECT id, cash_session_id, amount::float8 AS amount, payment_method,
-            destination, reason, receipt_reference, status,
+            destination, destination_account_id, reason, receipt_reference, status,
             performed_by, performed_at, reversed_at, reversed_by, reversed_reason
      FROM cash_session_drops WHERE id = $1`,
     [id],
@@ -282,7 +282,8 @@ const findDropById = async (id, db = pool) => {
 
 const findDropsBySession = async (cashSessionId) => {
   const r = await pool.query(
-    `SELECT id, amount::float8 AS amount, payment_method, destination, reason,
+    `SELECT id, amount::float8 AS amount, payment_method, destination,
+            destination_account_id, reason,
             receipt_reference, status, performed_by, performed_at,
             reversed_at, reversed_by, reversed_reason
      FROM cash_session_drops
