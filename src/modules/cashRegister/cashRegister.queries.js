@@ -4,6 +4,13 @@ const pool = require('../../config/db');
 /**
  * Obtiene el dashboard diario de caja sumando cobros aprobados y enganches.
  * Solo incorpora movimientos tipo DOWN_PAYMENT dentro del bloque de ventas.
+ *
+ * NOTA Fase 3: las liquidaciones de comisiones dejaron de imputarse como egreso
+ * operativo del día. Ahora son operación de tesorería y descuentan de Caja
+ * General (cash_account_movements / SALARY_PAYMENT). Por eso este dashboard YA
+ * NO incluye commission_liquidations en total_outflows / net_balance — antes lo
+ * hacía y producía un doble-cómputo (egreso operativo + descuento de tesorería).
+ *
  * @param {string} date - Fecha local del día a consultar.
  * @returns {Promise<object>} Resumen consolidado de caja.
  */
@@ -32,11 +39,6 @@ const getDashboard = async (date) => {
         WHERE register_date = $1::date
           AND payment_type = 'DOWN_PAYMENT'
       ),
-     egreses_data AS (
-       SELECT COALESCE(SUM(total_paid), 0) AS total
-       FROM commission_liquidations
-       WHERE paid_at::date = $1::date
-     ),
       expenses_data AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
@@ -57,8 +59,8 @@ const getDashboard = async (date) => {
         (p.cash_amount     + dp.cash_amount + cv.cash_delta)::float8         AS cash_amount,
         (p.transfer_amount + dp.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount,
         (p.total_collected + dp.total)::float8               AS total_collected,
-       (e.total + ex.total)::float8                         AS total_outflows,
-       (p.total_collected + dp.total - e.total - ex.total)::float8 AS net_balance,
+       ex.total::float8                                     AS total_outflows,
+       (p.total_collected + dp.total - ex.total)::float8    AS net_balance,
        p.approved_count::int                                AS approved_count,
        p.pending_count::int                                 AS pending_count,
        p.pending_amount::float8                             AS pending_amount,
@@ -66,7 +68,7 @@ const getDashboard = async (date) => {
        dp.count::int                                        AS down_payments_count,
        ex.total::float8                                     AS expenses_total,
        ex.count::int                                        AS expenses_count
-      FROM payments_data p, down_payments_data dp, egreses_data e, expenses_data ex, conversions_data cv`,
+      FROM payments_data p, down_payments_data dp, expenses_data ex, conversions_data cv`,
     [date]
   );
   return r.rows[0];
@@ -76,8 +78,14 @@ const getDashboard = async (date) => {
 /**
  * Calcula los totales diarios usados para el cierre de caja.
  * Devuelve ingresos brutos, egresos desglosados por método y saldos netos.
- * cash_amount_neto     = (cobros_efec + enganches_efec) - (gastos_efec + comisiones_efec)
- * transfer_amount_neto = (cobros_transf + enganches_transf) - (gastos_transf + comisiones_transf)
+ * cash_amount_neto     = (cobros_efec + enganches_efec) - gastos_efec + conv_delta
+ * transfer_amount_neto = (cobros_transf + enganches_transf) - gastos_transf + conv_delta
+ *
+ * NOTA Fase 3: las liquidaciones de comisiones dejaron de imputarse al cierre
+ * operativo del día (ahora son operación de tesorería contra Caja General).
+ * commissions_cash/transfer se devuelven en 0 para preservar el shape del
+ * response, pero los netos por método ya NO las restan.
+ *
  * @param {string} date - Fecha local del cierre.
  * @returns {Promise<object>} Totales brutos, egresos y netos de efectivo y transferencia.
  */
@@ -98,14 +106,6 @@ const getDailyTotals = async (date) => {
        FROM credit_down_payments
        WHERE register_date = $1::date
          AND payment_type = 'DOWN_PAYMENT'
-     ),
-     commissions_totals AS (
-       SELECT
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
-         COALESCE(SUM(total_paid), 0)                                             AS total
-       FROM commission_liquidations
-       WHERE paid_at::date = $1::date
      ),
      expenses_totals AS (
        SELECT
@@ -129,13 +129,14 @@ const getDailyTotals = async (date) => {
        -- Egresos desglosados por método
        ex.cash_amount::float8                                                               AS expenses_cash,
        ex.transfer_amount::float8                                                           AS expenses_transfer,
-       c.cash_amount::float8                                                                AS commissions_cash,
-       c.transfer_amount::float8                                                            AS commissions_transfer,
-       (ex.total + c.total)::float8                                                         AS total_outflows,
+       -- DEPRECATED Fase 3: commissions ya no se imputan al día (van a Caja General).
+       0::float8                                                                            AS commissions_cash,
+       0::float8                                                                            AS commissions_transfer,
+       ex.total::float8                                                                     AS total_outflows,
        -- Saldos netos por método (ingresos - egresos del mismo método)
-        (p.cash_amount     + dp.cash_amount     - ex.cash_amount     - c.cash_amount + cv.cash_delta)::float8     AS cash_amount,
-        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount
-      FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, conversions_totals cv`,
+        (p.cash_amount     + dp.cash_amount     - ex.cash_amount     + cv.cash_delta)::float8     AS cash_amount,
+        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount
+      FROM payments_totals p, down_payment_totals dp, expenses_totals ex, conversions_totals cv`,
     [date]
   );
   return r.rows[0];
@@ -163,6 +164,10 @@ const getPendingPaymentsToday = async (date) => {
  * @returns {Promise<object>} Desglose de ingresos, egresos, saldos netos y pendientes.
  */
 const getPreClose = async (date) => {
+  // NOTA Fase 3: las liquidaciones de comisiones ya no son egreso operativo del
+  // día (ahora son tesorería contra Caja General). Las keys comisiones_efectivo
+  // y comisiones_transferencia se devuelven en 0 para preservar el shape de la
+  // respuesta. Los totales y "esperados" por método ya NO restan commissions.
   const r = await pool.query(
     `WITH
      payments_totals AS (
@@ -179,13 +184,6 @@ const getPreClose = async (date) => {
        FROM credit_down_payments
        WHERE register_date = $1::date
          AND payment_type = 'DOWN_PAYMENT'
-     ),
-     commissions_totals AS (
-       SELECT
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
-       FROM commission_liquidations
-       WHERE paid_at::date = $1::date
      ),
      expenses_totals AS (
        SELECT
@@ -217,14 +215,15 @@ const getPreClose = async (date) => {
        (p.cash_amount + p.transfer_amount + dp.cash_amount + dp.transfer_amount)::float8         AS total_bruto,
        ex.cash_amount::float8                                                                    AS gastos_efectivo,
        ex.transfer_amount::float8                                                                AS gastos_transferencia,
-       c.cash_amount::float8                                                                     AS comisiones_efectivo,
-       c.transfer_amount::float8                                                                 AS comisiones_transferencia,
-       (ex.cash_amount + ex.transfer_amount + c.cash_amount + c.transfer_amount)::float8         AS total_egresos,
-        (p.cash_amount + dp.cash_amount - ex.cash_amount - c.cash_amount + cv.cash_delta)::float8                 AS efectivo_esperado,
-        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount + cv.transfer_delta)::float8 AS transferencia_esperada,
+       -- DEPRECATED Fase 3: commissions ya no se imputan al día.
+       0::float8                                                                                 AS comisiones_efectivo,
+       0::float8                                                                                 AS comisiones_transferencia,
+       (ex.cash_amount + ex.transfer_amount)::float8                                             AS total_egresos,
+        (p.cash_amount + dp.cash_amount - ex.cash_amount + cv.cash_delta)::float8                 AS efectivo_esperado,
+        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transferencia_esperada,
         pt.count                                                                                  AS pendientes_count,
         pt.amount                                                                                 AS pendientes_amount
-      FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, pending_totals pt, conversions_totals cv`,
+      FROM payments_totals p, down_payment_totals dp, expenses_totals ex, pending_totals pt, conversions_totals cv`,
     [date]
   );
   return r.rows[0];
