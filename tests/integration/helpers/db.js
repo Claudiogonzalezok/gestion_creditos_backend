@@ -31,12 +31,15 @@ const TRANSACTIONAL_TABLES = [
   'collection_sheet_details',
   'collection_sheets',
   'cash_movements',
+  'cash_account_movements',
   'cash_session_closure_details',
   'cash_session_drops',
   'cash_sessions',
   'business_days',
   // branches NO se trunca: la migración 023 inyecta una sucursal default 'HQ'
   // necesaria para abrir cajas. Se queda intacta entre tests.
+  // cash_accounts TAMPOCO se trunca: la migración 025 inyecta la seed
+  // 'Caja General' obligatoria. current_balance se resetea en truncateAll.
   'payments',
   'credit_refinancings',
   'credit_down_payments',
@@ -65,6 +68,9 @@ const truncateAll = async () => {
   await pool.query(
     `TRUNCATE TABLE ${TRANSACTIONAL_TABLES.join(', ')} RESTART IDENTITY CASCADE`
   );
+  // Resetear current_balance: cash_accounts no se trunca (preserva seed),
+  // pero su balance cacheado tiene que arrancar en 0 en cada test.
+  await pool.query(`UPDATE cash_accounts SET current_balance = 0`);
   await reseedSystemConfig();
 };
 

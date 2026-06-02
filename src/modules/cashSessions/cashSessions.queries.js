@@ -227,16 +227,30 @@ const findClosureDetailsBySession = async (cashSessionId) => {
 // ── Drops (retiros parciales) ──────────────────────────────────────────────
 
 const createDrop = async (client, cashSessionId, {
-  amount, paymentMethod, destination, reason, receiptReference, performedBy,
+  amount, paymentMethod, destination, destinationAccountId,
+  reason, receiptReference, performedBy,
 }) => {
+  // destination_account_id es NOT NULL en DB (migración 025). Si el caller no lo
+  // pasa, se defaultea a la Caja General. El wiring full (parámetro explícito
+  // + generación de DROP_IN auto en la misma tx) llega en una fase posterior;
+  // este default mantiene el código existente funcional sin tocar callers.
   const r = await client.query(
     `INSERT INTO cash_session_drops
-       (cash_session_id, amount, payment_method, destination, reason, receipt_reference, performed_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (cash_session_id, amount, payment_method, destination, destination_account_id,
+        reason, receipt_reference, performed_by)
+     VALUES (
+       $1, $2, $3, $4,
+       COALESCE($5, (SELECT id FROM cash_accounts WHERE type='GENERAL_CASH' LIMIT 1)),
+       $6, $7, $8
+     )
      RETURNING id, cash_session_id, amount::float8 AS amount, payment_method,
-               destination, reason, receipt_reference, status,
+               destination, destination_account_id, reason, receipt_reference, status,
                performed_by, performed_at`,
-    [cashSessionId, amount, paymentMethod, destination, reason || null, receiptReference || null, performedBy],
+    [
+      cashSessionId, amount, paymentMethod, destination,
+      destinationAccountId || null,
+      reason || null, receiptReference || null, performedBy,
+    ],
   );
   return r.rows[0];
 };
