@@ -1,5 +1,7 @@
 const pool    = require('../../config/db');
 const queries = require('./commissions.queries');
+const cashAccountsQueries = require('../cashAccounts/cashAccounts.queries');
+const cashAccountsService = require('../cashAccounts/cashAccounts.service');
 const { withTransaction } = require('../../utils/transaction');
 const { getWeekBounds }   = require('../../utils/creditCalculator');
 
@@ -50,9 +52,9 @@ const getWeeklySummary = async () => {
 const liquidate = async (data, adminId) => {
   const { user_id, payment_method, transfer_reference } = data;
 
-  // Verificar usuario
+  // Verificar usuario (full_name necesario como beneficiary_name del movimiento)
   const userCheck = await pool.query(
-    `SELECT id, role FROM users WHERE id = $1 AND status = 'ACTIVE'`,
+    `SELECT id, role, full_name FROM users WHERE id = $1 AND status = 'ACTIVE'`,
     [user_id]
   );
   if (!userCheck.rows.length)
@@ -68,11 +70,10 @@ const liquidate = async (data, adminId) => {
   if (preTotal + salaryAmount <= 0)
     throw { status: 409, message: `El total neto es $${(preTotal + salaryAmount).toFixed(2)}. No hay monto positivo a liquidar.` };
 
-  // El admin que paga la liquidación necesita caja OPEN (egreso de caja).
-  const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
-  const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
-  if (!adminSession)
-    throw { status: 409, message: 'Tenés que abrir una caja antes de liquidar comisiones.' };
+  // Fase 3: la liquidación se imputa a la Caja General (tesorería), no a la
+  // caja operativa del admin. Ya no se exige caja OPEN del admin.
+  const generalCash = await cashAccountsQueries.findGeneralCashAccount();
+  if (!generalCash) throw { status: 500, message: 'No hay Caja General configurada.' };
 
   return withTransaction(async (client) => {
     const pendingRows = await queries.getPendingIds(client, user_id);
@@ -95,8 +96,9 @@ const liquidate = async (data, adminId) => {
 
     await queries.markCommissionsPaid(client, pendingIds);
 
+    let liquidation;
     try {
-      return await queries.createLiquidation(client, {
+      liquidation = await queries.createLiquidation(client, {
         userId: user_id,
         weekStart,
         weekEnd,
@@ -106,13 +108,30 @@ const liquidate = async (data, adminId) => {
         paymentMethod: payment_method,
         transferReference: transfer_reference,
         paidBy: adminId,
-        cashSessionId: adminSession.id,
+        cashSessionId: null,  // ya no se imputa a la caja del admin
       });
     } catch (err) {
       if (err.code === '23505')
         throw { status: 409, message: 'Este empleado ya fue liquidado para el período correspondiente.' };
       throw err;
     }
+
+    // Imputar el egreso a Caja General. La regla universal de saldo no-negativo
+    // puede rechazar (409 INSUFFICIENT_BALANCE); en ese caso TODA la tx revierte
+    // y las comisiones vuelven a PENDING — la liquidación queda como no-op.
+    await cashAccountsService.insertMovementWithBalance(client, {
+      cashAccountId: generalCash.id,
+      movementType:  'SALARY_PAYMENT',
+      direction:     'OUT',
+      amount:        totalNet,
+      description:   `Liquidación ${user.full_name} (${weekStart}..${weekEnd})`,
+      beneficiaryName: user.full_name,
+      referenceType: 'COMMISSION_LIQUIDATION',
+      referenceId:   liquidation.id,
+      createdBy:     adminId,
+    });
+
+    return liquidation;
   });
 };
 

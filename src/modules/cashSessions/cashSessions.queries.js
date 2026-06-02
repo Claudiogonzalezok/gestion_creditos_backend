@@ -314,7 +314,12 @@ const findDropsBySession = async (cashSessionId) => {
  * @returns {Promise<object>}
  */
 const computeSessionTotals = async (cashSessionId, db = pool) => {
-  const [drops, payments, downPays, expenses, commissions, conversions] = await Promise.all([
+  // Fase 3: commission_liquidations dejó de imputarse a la caja del admin
+  // (ahora va a Caja General vía cash_account_movements/SALARY_PAYMENT). Las
+  // keys outflows_commissions_* se mantienen en 0 para preservar el formato
+  // v1 del closure_snapshot. Cuando se versione el snapshot a v2, estas keys
+  // pueden eliminarse del retorno.
+  const [drops, payments, downPays, expenses, conversions] = await Promise.all([
     db.query(
       `SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'     AND status='ACTIVE'), 0)::float8 AS drops_cash,
@@ -356,14 +361,6 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
     ),
     db.query(
       `SELECT
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method='CASH'),     0)::float8 AS commissions_cash,
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS commissions_transfer
-       FROM commission_liquidations
-       WHERE cash_session_id = $1`,
-      [cashSessionId],
-    ),
-    db.query(
-      `SELECT
          COALESCE(SUM(CASE WHEN source_method='CASH'     THEN -amount
                            WHEN target_method='CASH'     THEN  amount
                            ELSE 0 END), 0)::float8 AS conversions_cash_delta,
@@ -387,8 +384,8 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
     collections_down_payments_transfer:  downPays.rows[0].down_payments_transfer,
     outflows_expenses_cash:              expenses.rows[0].expenses_cash,
     outflows_expenses_transfer:          expenses.rows[0].expenses_transfer,
-    outflows_commissions_cash:           commissions.rows[0].commissions_cash,
-    outflows_commissions_transfer:       commissions.rows[0].commissions_transfer,
+    outflows_commissions_cash:           0, // DEPRECATED: ahora se imputa a Caja General
+    outflows_commissions_transfer:       0, // DEPRECATED
     conversions_cash_delta:              conversions.rows[0].conversions_cash_delta,
     conversions_transfer_delta:          conversions.rows[0].conversions_transfer_delta,
   };
