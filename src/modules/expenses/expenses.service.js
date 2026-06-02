@@ -1,5 +1,6 @@
 const queries = require('./expenses.queries');
 const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
+const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
 const { localDate } = require('../../utils/date');
 
 const getActiveJornadaDate = async () => {
@@ -23,6 +24,9 @@ const create = async (data, requestingUser) => {
     const category = await queries.findActiveCategoryById(data.category_id);
     if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
   }
+  const session = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
+  if (!session)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un gasto.' };
   const registerDate = await getActiveJornadaDate();
   return queries.create({
     amount:            parseFloat(data.amount),
@@ -33,6 +37,7 @@ const create = async (data, requestingUser) => {
     categoryId:        data.category_id || null,
     createdBy:         requestingUser.id,
     registerDate,
+    cashSessionId:     session.id,
   });
 };
 

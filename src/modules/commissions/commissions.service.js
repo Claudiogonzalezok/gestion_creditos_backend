@@ -68,6 +68,12 @@ const liquidate = async (data, adminId) => {
   if (preTotal + salaryAmount <= 0)
     throw { status: 409, message: `El total neto es $${(preTotal + salaryAmount).toFixed(2)}. No hay monto positivo a liquidar.` };
 
+  // El admin que paga la liquidación necesita caja OPEN (egreso de caja).
+  const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+  const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSession)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de liquidar comisiones.' };
+
   return withTransaction(async (client) => {
     const pendingRows = await queries.getPendingIds(client, user_id);
     const pendingIds  = pendingRows.map(r => r.id);
@@ -100,6 +106,7 @@ const liquidate = async (data, adminId) => {
         paymentMethod: payment_method,
         transferReference: transfer_reference,
         paidBy: adminId,
+        cashSessionId: adminSession.id,
       });
     } catch (err) {
       if (err.code === '23505')

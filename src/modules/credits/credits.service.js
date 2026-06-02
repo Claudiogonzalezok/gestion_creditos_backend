@@ -589,6 +589,17 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
   const registerDate = await getActiveJornadaDate();
 
+  // Si el crédito implica un movimiento de caja (downPayment o prepaid), el
+  // admin que aprueba debe tener caja OPEN para imputar ese ingreso.
+  let adminCashSessionId = null;
+  if (downPayment > 0 || credit.prepaid_installments > 0) {
+    const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+    const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
+    if (!adminSession)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
+    adminCashSessionId = adminSession.id;
+  }
+
   await withTransaction(async (client) => {
     await queries.approve(client, id, adminId, null, installmentsCount);
 
@@ -611,6 +622,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         approvedBy:        adminId,
         paymentType:       'PREPAID_INSTALLMENT',
         registerDate,
+        cashSessionId:     adminCashSessionId,
       });
       // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
       // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
@@ -628,6 +640,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         transferReference: credit.down_payment_transfer_reference || null,
         approvedBy:        adminId,
         registerDate,
+        cashSessionId:     adminCashSessionId,
       });
     }
 

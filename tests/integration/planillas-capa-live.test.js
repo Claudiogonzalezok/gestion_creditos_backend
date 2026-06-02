@@ -20,6 +20,10 @@ const collectionsService        = require('../../src/modules/collections/collect
 const collectionsQueries        = require('../../src/modules/collections/collections.queries');
 const collectionAttemptsService = require('../../src/modules/collectionAttempts/collectionAttempts.service');
 const paymentsService           = require('../../src/modules/payments/payments.service');
+const cashSessionsService       = require('../../src/modules/cashSessions/cashSessions.service');
+
+const openSessionFor = (user) =>
+  cashSessionsService.open({ opening_amount: 0 }, { id: user.id, role: user.role });
 
 setupTestSuite();
 
@@ -71,6 +75,8 @@ describe('I — Capa live separada en findById', () => {
 
     it('expone el estado VIVO de la cuota tras un pago parcial aprobado', async () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet();
+      await openSessionFor(collector);
+      await openSessionFor(admin);
 
       // Snapshot al generar: PENDING, amount_paid 0.
       expect(itemFor(sheet, inst.id).installment_status).toBe('PENDING');
@@ -92,6 +98,7 @@ describe('I — Capa live separada en findById', () => {
 
     it('has_pending_payment refleja pre-carga viva (no el snapshot congelado)', async () => {
       const { collector, inst, sheet } = await seedScenarioWithSheet();
+      await openSessionFor(collector);
 
       // En el snapshot, has_pending_payment quedó congelado en false.
       expect(itemFor(sheet, inst.id).has_pending_payment).toBe(false);

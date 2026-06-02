@@ -61,12 +61,12 @@ const findActiveCategoryById = async (id) => {
   return r.rows[0] || null;
 };
 
-const create = async ({ amount, description, expenseDate, paymentMethod, transferReference, categoryId, createdBy, registerDate }) => {
+const create = async ({ amount, description, expenseDate, paymentMethod, transferReference, categoryId, createdBy, registerDate, cashSessionId }) => {
   const r = await pool.query(
-    `INSERT INTO expenses (amount, description, expense_date, payment_method, transfer_reference, category_id, created_by, register_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, amount::float8, description, expense_date, payment_method, transfer_reference, category_id, created_at`,
-    [amount, description, expenseDate, paymentMethod, transferReference || null, categoryId || null, createdBy, registerDate]
+    `INSERT INTO expenses (amount, description, expense_date, payment_method, transfer_reference, category_id, created_by, register_date, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, amount::float8, description, expense_date, payment_method, transfer_reference, category_id, cash_session_id, created_at`,
+    [amount, description, expenseDate, paymentMethod, transferReference || null, categoryId || null, createdBy, registerDate, cashSessionId || null]
   );
   return r.rows[0];
 };

@@ -2,6 +2,7 @@ const pool                  = require('../../config/db');
 const queries               = require('./payments.queries');
 const cashMovementsQueries  = require('./cash_movements.queries');
 const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
+const cashSessionsQueries   = require('../cashSessions/cashSessions.queries');
 const collectionsQueries    = require('../collections/collections.queries');
 const { getValue }          = require('../systemConfig/systemConfig.queries');
 const { withTransaction }   = require('../../utils/transaction');
@@ -264,6 +265,13 @@ const create = async (data, requestingUser) => {
       };
   }
 
+  // Caja OPEN del cobrador: imputa el cobro a esa caja (fuente de verdad de
+  // la rendición). Si el cobrador no tiene caja abierta, el sistema exige
+  // abrirla antes — un cobro no puede quedar huérfano de jornada.
+  const session = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
+  if (!session)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
+
   const payment = await queries.create({
     installment_id:     data.installment_id,
     collector_id:       requestingUser.id,
@@ -272,6 +280,7 @@ const create = async (data, requestingUser) => {
     transfer_reference: data.transfer_reference,
     notes:              data.notes,
     next_visit_date:    data.next_visit_date,
+    cash_session_id:    session.id,
   });
 
   // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
@@ -410,6 +419,12 @@ const adminDirect = async (data, adminId) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
 
+  // Caja OPEN del admin que cobra directo (sin pre-carga). El admin es el
+  // owner del movimiento — la rendición sale de su caja.
+  const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSession)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
+
   // Días de gracia para el recálculo de status post-aplicación del pago
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
@@ -453,6 +468,7 @@ const adminDirect = async (data, adminId) => {
       paymentMethod:     data.payment_method,
       transferReference: data.transfer_reference,
       notes:             data.notes,
+      cashSessionId:     adminSession.id,
     });
     newPaymentId = created.id;
 
@@ -505,6 +521,13 @@ const reverse = async (id, reason, adminId) => {
   // Días de gracia para el recálculo de status tras restaurar amount_paid
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
+  // Caja OPEN del admin que revierte: el movimiento contrario se imputa a
+  // esa caja (no al cash_session_id del payment original, que probablemente
+  // esté CLOSED). La reversión es contable, no histórica.
+  const adminSession = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSession)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
+
   await withTransaction(async (client) => {
     const payment = await queries.lockAndGetPayment(client, id);
     if (!payment)               throw { status: 404, message: 'Cobro no encontrado.' };
@@ -547,6 +570,7 @@ const reverse = async (id, reason, adminId) => {
         paymentMethod:     p.payment_method,
         transferReference: p.transfer_reference,
         reason,
+        cashSessionId:     adminSession.id,
         originalPaymentId: p.id,
       });
 

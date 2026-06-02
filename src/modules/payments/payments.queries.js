@@ -63,12 +63,12 @@ const getPendingCommittedAmount = async (installmentId) => {
   return r.rows[0].total;
 };
 
-const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date }) => {
+const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date, cash_session_id }) => {
   const r = await pool.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, next_visit_date, created_at`,
-    [installment_id, collector_id, amount_received, payment_method, transfer_reference || null, notes || null, next_visit_date || null]
+    `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, installment_id, amount_received::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,
+    [installment_id, collector_id, amount_received, payment_method, transfer_reference || null, notes || null, next_visit_date || null, cash_session_id || null]
   );
   return r.rows[0];
 };
@@ -340,14 +340,14 @@ const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, pa
  * Inserta un pago ya aprobado (flujo admin-direct o bulk).
  * @returns {Promise<object>} Pago creado con su id.
  */
-const createApproved = async (client, { installmentId, adminId, amountReceived, paymentMethod, transferReference, notes }) => {
+const createApproved = async (client, { installmentId, adminId, amountReceived, paymentMethod, transferReference, notes, cashSessionId }) => {
   const r = await client.query(
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, admin_direct)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), $6, TRUE)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, created_at`,
-    [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, notes || null]
+        status, approved_by, approved_at, notes, admin_direct, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), $6, TRUE, $7)
+     RETURNING id, installment_id, amount_received::float8, payment_method, status, cash_session_id, created_at`,
+    [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, notes || null, cashSessionId || null]
   );
   return r.rows[0];
 };
@@ -357,14 +357,14 @@ const createApproved = async (client, { installmentId, adminId, amountReceived, 
  * El monto es el mismo que el original (se registra como salida de caja).
  * @returns {Promise<object>} Pago de reversión con su id.
  */
-const createReversal = async (client, { installmentId, adminId, amountReceived, paymentMethod, transferReference, reason, originalPaymentId }) => {
+const createReversal = async (client, { installmentId, adminId, amountReceived, paymentMethod, transferReference, reason, originalPaymentId, cashSessionId }) => {
   const r = await client.query(
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, is_reversal, reversal_reason, reversed_by_payment_id)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), NULL, TRUE, $6, $7)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status`,
-    [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, reason, originalPaymentId]
+        status, approved_by, approved_at, notes, is_reversal, reversal_reason, reversed_by_payment_id, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), NULL, TRUE, $6, $7, $8)
+     RETURNING id, installment_id, amount_received::float8, payment_method, status, cash_session_id`,
+    [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, reason, originalPaymentId, cashSessionId || null]
   );
   return r.rows[0];
 };

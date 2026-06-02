@@ -419,12 +419,12 @@ const linkLiquidations = async (client, cashRegisterId, date) => {
  * @returns {Promise<object>} Conversión creada.
  */
 const createConversion = async (client, {
-  registerDate, criteria, sourceMethod, targetMethod, amount, notes, createdBy,
+  registerDate, criteria, sourceMethod, targetMethod, amount, notes, createdBy, cashSessionId,
 }) => {
   const r = await client.query(
     `INSERT INTO cash_conversions
-       (register_date, criteria, source_method, target_method, amount, notes, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (register_date, criteria, source_method, target_method, amount, notes, created_by, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id,
                register_date::text,
                criteria,
@@ -433,8 +433,9 @@ const createConversion = async (client, {
                amount::float8,
                notes,
                created_by,
+               cash_session_id,
                created_at`,
-    [registerDate, criteria, sourceMethod, targetMethod, amount, notes || null, createdBy],
+    [registerDate, criteria, sourceMethod, targetMethod, amount, notes || null, createdBy, cashSessionId || null],
   );
   return r.rows[0];
 };

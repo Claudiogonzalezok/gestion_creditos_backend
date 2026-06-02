@@ -150,6 +150,11 @@ const createConversion = async (data, adminId) => {
   if (existing)
     throw { status: 409, message: `La caja del ${registerDate} ya está cerrada. No se pueden registrar conversiones.` };
 
+  const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+  const session = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!session)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar una conversión.' };
+
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
     throw { status: 422, message: 'El monto de conversión debe ser mayor a 0.' };
@@ -167,6 +172,7 @@ const createConversion = async (data, adminId) => {
       targetMethod,
       amount,
       notes: data.notes,
+      cashSessionId: session.id,
       createdBy: adminId,
     });
     await client.query('COMMIT');

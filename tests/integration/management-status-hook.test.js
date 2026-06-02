@@ -24,6 +24,12 @@ const { today, daysAgo } = require('./helpers/dates');
 const collectionsService        = require('../../src/modules/collections/collections.service');
 const collectionAttemptsService = require('../../src/modules/collectionAttempts/collectionAttempts.service');
 const paymentsService           = require('../../src/modules/payments/payments.service');
+const cashSessionsService       = require('../../src/modules/cashSessions/cashSessions.service');
+
+// payments.create/approve/reverse exigen caja OPEN del operador (Fase 2). Helper
+// para abrirla rápido en tests que solo necesitan habilitar el flujo.
+const openSessionFor = (user) =>
+  cashSessionsService.open({ opening_amount: 0 }, { id: user.id, role: user.role });
 
 setupTestSuite();
 
@@ -154,6 +160,7 @@ describe('H — Hook management_status (planilla del día)', () => {
   describe('payments.create', () => {
     it('crear pre-carga (PENDING) → planilla queda en VISITED', async () => {
       const { collector, inst, sheet } = await seedScenarioWithSheet();
+      await openSessionFor(collector);
 
       await paymentsService.create(
         {
@@ -174,6 +181,8 @@ describe('H — Hook management_status (planilla del día)', () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet({
         amountDue: 1000,
       });
+      await openSessionFor(collector);
+      await openSessionFor(admin);
 
       const payment = await paymentsService.create(
         {
@@ -195,6 +204,8 @@ describe('H — Hook management_status (planilla del día)', () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet({
         amountDue: 1000,
       });
+      await openSessionFor(collector);
+      await openSessionFor(admin);
 
       const payment = await paymentsService.create(
         {
@@ -217,6 +228,8 @@ describe('H — Hook management_status (planilla del día)', () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet({
         amountDue: 1000,
       });
+      await openSessionFor(collector);
+      await openSessionFor(admin);
 
       const payment = await paymentsService.create(
         {

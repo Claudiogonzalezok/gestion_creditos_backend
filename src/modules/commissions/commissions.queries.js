@@ -87,20 +87,20 @@ const updateSalary = async (id, weeklyAmount) => {
 const createLiquidation = async (client, {
   userId, weekStart, weekEnd,
   commissionsTotal, salaryAmount, totalPaid,
-  paymentMethod, transferReference, paidBy,
+  paymentMethod, transferReference, paidBy, cashSessionId,
 }) => {
   const r = await client.query(
     `INSERT INTO commission_liquidations
        (user_id, week_start, week_end, commissions_total, salary_amount,
-        total_paid, payment_method, transfer_reference, paid_by, paid_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+        total_paid, payment_method, transfer_reference, paid_by, paid_at, cash_session_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW(),$10)
      RETURNING id, user_id, week_start, week_end,
                commissions_total::float8, salary_amount::float8, total_paid::float8,
-               payment_method, transfer_reference, paid_by, paid_at`,
+               payment_method, transfer_reference, paid_by, paid_at, cash_session_id`,
     [
       userId, weekStart, weekEnd,
       commissionsTotal, salaryAmount, totalPaid,
-      paymentMethod, transferReference || null, paidBy,
+      paymentMethod, transferReference || null, paidBy, cashSessionId || null,
     ]
   );
   return r.rows[0];

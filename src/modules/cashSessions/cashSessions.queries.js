@@ -282,41 +282,100 @@ const findDropsBySession = async (cashSessionId) => {
 // ── Totales calculados para X report y snapshot al cierre ──────────────────
 
 /**
- * Calcula totales agregados de la sesión (drops por método). En Fase 1 los
- * movimientos (collections/expenses/etc.) no apuntan todavía a cash_session_id;
- * cuando llegue Fase 2 esta función se extiende para sumarlos desde sus tablas.
+ * Calcula totales agregados de la sesión:
+ *   · drops activos por método.
+ *   · cobros aprobados (payments) por método. is_reversal=TRUE se RESTAN
+ *     (las reversiones se imputan a la caja del admin que revierte).
+ *   · enganches/prepaids (credit_down_payments) por método.
+ *   · gastos (expenses) por método.
+ *   · comisiones liquidadas por método.
+ *   · conversiones (cash_conversions) — delta neto por método.
+ *
+ * Todos los queries filtran por cash_session_id directamente: nada de
+ * approved_at::date o register_date — esa fue la idea central del rediseño.
  *
  * @param {string} cashSessionId
  * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
  * @returns {Promise<object>}
  */
 const computeSessionTotals = async (cashSessionId, db = pool) => {
-  const dropsRes = await db.query(
-    `SELECT
-       COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'     AND status='ACTIVE'), 0)::float8 AS drops_cash,
-       COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER' AND status='ACTIVE'), 0)::float8 AS drops_transfer,
-       COUNT(*) FILTER (WHERE status='ACTIVE')::int   AS drops_active_count,
-       COUNT(*) FILTER (WHERE status='REVERSED')::int AS drops_reversed_count
-     FROM cash_session_drops
-     WHERE cash_session_id = $1`,
-    [cashSessionId],
-  );
+  const [drops, payments, downPays, expenses, commissions, conversions] = await Promise.all([
+    db.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'     AND status='ACTIVE'), 0)::float8 AS drops_cash,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER' AND status='ACTIVE'), 0)::float8 AS drops_transfer,
+         COUNT(*) FILTER (WHERE status='ACTIVE')::int   AS drops_active_count,
+         COUNT(*) FILTER (WHERE status='REVERSED')::int AS drops_reversed_count
+       FROM cash_session_drops
+       WHERE cash_session_id = $1`,
+      [cashSessionId],
+    ),
+    // payments: aprobados directos suman; reversiones (is_reversal=TRUE) restan.
+    db.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
+                  FILTER (WHERE payment_method='CASH'),     0)::float8 AS payments_cash,
+         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
+                  FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS payments_transfer
+       FROM payments
+       WHERE cash_session_id = $1
+         AND status = 'APPROVED'`,
+      [cashSessionId],
+    ),
+    db.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS down_payments_cash,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS down_payments_transfer
+       FROM credit_down_payments
+       WHERE cash_session_id = $1
+         AND payment_type = 'DOWN_PAYMENT'`,
+      [cashSessionId],
+    ),
+    db.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS expenses_cash,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS expenses_transfer
+       FROM expenses
+       WHERE cash_session_id = $1`,
+      [cashSessionId],
+    ),
+    db.query(
+      `SELECT
+         COALESCE(SUM(total_paid) FILTER (WHERE payment_method='CASH'),     0)::float8 AS commissions_cash,
+         COALESCE(SUM(total_paid) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS commissions_transfer
+       FROM commission_liquidations
+       WHERE cash_session_id = $1`,
+      [cashSessionId],
+    ),
+    db.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN source_method='CASH'     THEN -amount
+                           WHEN target_method='CASH'     THEN  amount
+                           ELSE 0 END), 0)::float8 AS conversions_cash_delta,
+         COALESCE(SUM(CASE WHEN source_method='TRANSFER' THEN -amount
+                           WHEN target_method='TRANSFER' THEN  amount
+                           ELSE 0 END), 0)::float8 AS conversions_transfer_delta
+       FROM cash_conversions
+       WHERE cash_session_id = $1`,
+      [cashSessionId],
+    ),
+  ]);
+
   return {
-    drops_cash:           dropsRes.rows[0].drops_cash,
-    drops_transfer:       dropsRes.rows[0].drops_transfer,
-    drops_active_count:   dropsRes.rows[0].drops_active_count,
-    drops_reversed_count: dropsRes.rows[0].drops_reversed_count,
-    // Stubs para Fase 2 — quedan en cero hasta que los movimientos referencien cash_session_id.
-    collections_payments_cash:        0,
-    collections_payments_transfer:    0,
-    collections_down_payments_cash:   0,
-    collections_down_payments_transfer: 0,
-    outflows_expenses_cash:           0,
-    outflows_expenses_transfer:       0,
-    outflows_commissions_cash:        0,
-    outflows_commissions_transfer:    0,
-    conversions_cash_delta:           0,
-    conversions_transfer_delta:       0,
+    drops_cash:                          drops.rows[0].drops_cash,
+    drops_transfer:                      drops.rows[0].drops_transfer,
+    drops_active_count:                  drops.rows[0].drops_active_count,
+    drops_reversed_count:                drops.rows[0].drops_reversed_count,
+    collections_payments_cash:           payments.rows[0].payments_cash,
+    collections_payments_transfer:       payments.rows[0].payments_transfer,
+    collections_down_payments_cash:      downPays.rows[0].down_payments_cash,
+    collections_down_payments_transfer:  downPays.rows[0].down_payments_transfer,
+    outflows_expenses_cash:              expenses.rows[0].expenses_cash,
+    outflows_expenses_transfer:          expenses.rows[0].expenses_transfer,
+    outflows_commissions_cash:           commissions.rows[0].commissions_cash,
+    outflows_commissions_transfer:       commissions.rows[0].commissions_transfer,
+    conversions_cash_delta:              conversions.rows[0].conversions_cash_delta,
+    conversions_transfer_delta:          conversions.rows[0].conversions_transfer_delta,
   };
 };
 
