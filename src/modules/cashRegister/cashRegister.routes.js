@@ -35,5 +35,29 @@ router.post('/close',
   validate,
   controller.close
 );
+router.post('/conversions',
+  [
+    body('criteria')
+      .isIn(['DAILY', 'COMPANY'])
+      .withMessage('criteria debe ser DAILY o COMPANY.'),
+    body('source_method')
+      .isIn(['CASH', 'TRANSFER'])
+      .withMessage('source_method debe ser CASH o TRANSFER.'),
+    body('amount')
+      .isFloat({ gt: 0 })
+      .withMessage('amount debe ser un número mayor a 0.'),
+    body('notes')
+      .optional({ nullable: true })
+      .isString()
+      .isLength({ max: 300 })
+      .withMessage('notes no puede superar los 300 caracteres.'),
+    body('register_date')
+      .optional({ nullable: true })
+      .isISO8601()
+      .withMessage('register_date debe ser una fecha válida en formato YYYY-MM-DD.'),
+  ],
+  validate,
+  controller.createConversion
+);
 
 module.exports = router;

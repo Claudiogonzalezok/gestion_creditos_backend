@@ -54,5 +54,6 @@ router.get('/upcoming',
 );
 
 router.get('/alerts/overdue-48h', controller.getPaymentsOverdue48h);
+router.get('/cash-conversions', dateRangeRules, validate, controller.getCashConversionsReport);
 
 module.exports = router;

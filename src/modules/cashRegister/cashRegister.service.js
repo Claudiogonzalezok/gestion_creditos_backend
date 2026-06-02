@@ -137,4 +137,46 @@ const getById = async (id) => {
   return register;
 };
 
-module.exports = { getDashboard, getPreClose, close, getAll, getById, getActiveJornadaDate };
+/**
+ * Registra una conversión interna entre efectivo y transferencia para la jornada activa.
+ * @param {object} data - Datos de conversión enviados por el cliente.
+ * @param {string} adminId - Usuario ADMIN que ejecuta la conversión.
+ * @returns {Promise<object>} Conversión creada.
+ */
+const createConversion = async (data, adminId) => {
+  const registerDate = data.register_date || (await getActiveJornadaDate());
+
+  const existing = await queries.findByDate(registerDate);
+  if (existing)
+    throw { status: 409, message: `La caja del ${registerDate} ya está cerrada. No se pueden registrar conversiones.` };
+
+  const amount = parseFloat(data.amount);
+  if (!Number.isFinite(amount) || amount <= 0)
+    throw { status: 422, message: 'El monto de conversión debe ser mayor a 0.' };
+
+  const sourceMethod = data.source_method;
+  const targetMethod = sourceMethod === 'CASH' ? 'TRANSFER' : 'CASH';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const conversion = await queries.createConversion(client, {
+      registerDate,
+      criteria: data.criteria,
+      sourceMethod,
+      targetMethod,
+      amount,
+      notes: data.notes,
+      createdBy: adminId,
+    });
+    await client.query('COMMIT');
+    return conversion;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
+module.exports = { getDashboard, getPreClose, close, getAll, getById, getActiveJornadaDate, createConversion };

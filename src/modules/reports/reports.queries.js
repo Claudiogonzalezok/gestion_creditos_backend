@@ -478,6 +478,48 @@ const getPaymentsOverdue48h = async () => {
   return r.rows;
 };
 
+/**
+ * Obtiene el reporte de conversiones de caja por rango de fechas.
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<object>} Resumen y detalle diario de conversiones.
+ */
+const getCashConversionsReport = async (dateFrom, dateTo) => {
+  const summaryResult = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total_conversions,
+       COALESCE(SUM(amount), 0)::float8 AS total_amount,
+       COALESCE(SUM(amount) FILTER (WHERE source_method = 'CASH'), 0)::float8 AS cash_to_transfer,
+       COALESCE(SUM(amount) FILTER (WHERE source_method = 'TRANSFER'), 0)::float8 AS transfer_to_cash
+     FROM cash_conversions
+     WHERE register_date BETWEEN $1::date AND $2::date`,
+    [dateFrom, dateTo],
+  );
+
+  const detailResult = await pool.query(
+    `SELECT
+       cc.id,
+       cc.register_date::text,
+       cc.criteria,
+       cc.source_method,
+       cc.target_method,
+       cc.amount::float8,
+       cc.notes,
+       cc.created_at,
+       u.full_name AS created_by_name
+     FROM cash_conversions cc
+     JOIN users u ON u.id = cc.created_by
+     WHERE cc.register_date BETWEEN $1::date AND $2::date
+     ORDER BY cc.register_date DESC, cc.created_at DESC`,
+    [dateFrom, dateTo],
+  );
+
+  return {
+    summary: summaryResult.rows[0],
+    rows: detailResult.rows,
+  };
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -488,4 +530,5 @@ module.exports = {
   getSummaryReport,
   getSellersReport,
   getPaymentsOverdue48h,
+  getCashConversionsReport,
 };
