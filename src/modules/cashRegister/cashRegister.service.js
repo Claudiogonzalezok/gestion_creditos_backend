@@ -1,3 +1,14 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// @deprecated MÓDULO LEGACY (cashRegister.service)
+// ═══════════════════════════════════════════════════════════════════════════
+// Mantenido por compat con el dashboard antiguo y los flujos pre-Fase 1+2+3.
+// La autoridad operativa pasó a businessDays + cashSessions + cashAccounts.
+// NO agregar lógica nueva ni nuevas dependencias acá.
+// La excepción es getActiveJornadaDate, que se mantiene exportada (migrada
+// internamente al nuevo modelo) porque varios callers viejos la consumen.
+// Eliminación prevista en feat/cash-system-cleanup.
+// ═══════════════════════════════════════════════════════════════════════════
+
 const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
 const businessDaysQueries = require('../businessDays/businessDays.queries');

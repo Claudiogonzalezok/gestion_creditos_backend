@@ -1,3 +1,25 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// @deprecated MÓDULO LEGACY (cash_registers + cash_movements + dashboard)
+// ═══════════════════════════════════════════════════════════════════════════
+// Post-Fase 1+2+3 + auditoría IMP-1/IMP-8 (Camino 2 — deprecación blanda):
+//
+//   La autoridad operativa pasó a:
+//     - business_days  (estado contable de la jornada)
+//     - cash_sessions  (caja física de cada usuario)
+//     - cash_account_movements (libro contable de Caja General y futuras cuentas)
+//
+//   Este módulo (cash_registers + cash_movements) se mantiene SOLO por
+//   compatibilidad temporal con consumers existentes (dashboard antiguo,
+//   reportes). NO se debe agregar lógica nueva ni nuevas dependencias acá.
+//
+//   La eliminación definitiva está planificada en la rama futura
+//   feat/cash-system-cleanup, una vez que el frontend y los procesos hayan
+//   migrado al nuevo modelo.
+//
+//   Ver auditoría completa en docs/audit-cash-2026-06-02.md (sección
+//   "Bloque D — IMP-1 + IMP-8") y reporte final tras este commit.
+// ═══════════════════════════════════════════════════════════════════════════
+
 const pool = require('../../config/db');
 
 // ── Dashboard del día — única query con CTEs ──────────────────
