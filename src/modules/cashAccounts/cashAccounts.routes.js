@@ -10,8 +10,10 @@ router.use(authorize('ADMIN'));
 
 const idParam = [param('id').isUUID().withMessage('El id debe ser un UUID válido.')];
 
-const PUBLIC_TYPES = ['SUPPLIER_PAYMENT', 'SALARY_PAYMENT', 'EXPENSE', 'ADJUSTMENT'];
-const ALL_TYPES    = ['DROP_IN', ...PUBLIC_TYPES];
+// IMP-6: SALARY_PAYMENT excluido del POST público (única vía:
+// commissions.liquidate). Sí se acepta como filtro de listado.
+const PUBLIC_TYPES = ['SUPPLIER_PAYMENT', 'EXPENSE', 'ADJUSTMENT'];
+const ALL_TYPES    = ['DROP_IN', 'SALARY_PAYMENT', ...PUBLIC_TYPES];
 
 router.get('/', controller.getAll);
 

@@ -10,7 +10,10 @@ const FIXED_DIRECTION = {
   EXPENSE:          'OUT',
 };
 
-const PUBLIC_MOVEMENT_TYPES = ['SUPPLIER_PAYMENT', 'SALARY_PAYMENT', 'EXPENSE', 'ADJUSTMENT'];
+// IMP-6: SALARY_PAYMENT NO se acepta desde el endpoint público — debe pasar
+// por commissions.liquidate, que es la única fuente con trazabilidad de
+// período liquidado y mata el riesgo de doble pago (manual + liquidación).
+const PUBLIC_MOVEMENT_TYPES = ['SUPPLIER_PAYMENT', 'EXPENSE', 'ADJUSTMENT'];
 
 const err = (status, message, code) => {
   const e = new Error(message);

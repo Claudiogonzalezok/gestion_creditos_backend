@@ -104,9 +104,11 @@ describe('O — Caja General (cash_accounts)', () => {
       return { acc, admin };
     };
 
+    // SALARY_PAYMENT no aparece acá porque IMP-6 lo sacó del endpoint público.
+    // Su bloqueo por saldo se prueba indirectamente vía commissions.liquidate
+    // (suite cash-accounts-integration).
     it.each([
       ['SUPPLIER_PAYMENT'],
-      ['SALARY_PAYMENT'],
       ['EXPENSE'],
     ])('%s con saldo insuficiente lanza 409 INSUFFICIENT_BALANCE y no toca el balance', async (type) => {
       const { acc, admin } = await buildLowFundsAccount(100);
@@ -193,6 +195,16 @@ describe('O — Caja General (cash_accounts)', () => {
       });
     });
 
+    it('IMP-6: SALARY_PAYMENT no se acepta desde el endpoint público (única vía: commissions.liquidate)', async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: 'ADMIN' });
+      await expect(cashAccountsService.registerMovement(acc.id, {
+        movementType: 'SALARY_PAYMENT', amount: 1000, beneficiaryName: 'X',
+      }, asUser(admin))).rejects.toMatchObject({
+        status: 422, code: 'INVALID_MOVEMENT_TYPE',
+      });
+    });
+
     it('amount <= 0 lanza 422 INVALID_AMOUNT', async () => {
       const acc = await getGeneralCashAccount();
       const admin = await createUserFixture({ role: 'ADMIN' });
@@ -249,7 +261,19 @@ describe('O — Caja General (cash_accounts)', () => {
       await cashAccountsService.registerMovement(acc.id, { movementType: 'ADJUSTMENT', direction: 'IN', amount: 10000, description: 'seed' }, asUser(admin));
       await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', amount: 1000, beneficiaryName: 'P1' }, asUser(admin));
       await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', amount: 500,  beneficiaryName: 'P2' }, asUser(admin));
-      await cashAccountsService.registerMovement(acc.id, { movementType: 'SALARY_PAYMENT',   amount: 800,  beneficiaryName: 'Empl' }, asUser(admin));
+      // SALARY_PAYMENT no se acepta desde endpoint público (IMP-6). Lo
+      // insertamos directo para mantener cobertura de filter por movement_type.
+      await pool.query(
+        `INSERT INTO cash_account_movements
+           (cash_account_id, movement_type, direction, amount, description,
+            beneficiary_name, created_by)
+         VALUES ($1,'SALARY_PAYMENT','OUT',800,'simulación liquidación','Empl',$2)`,
+        [acc.id, admin.id],
+      );
+      await pool.query(
+        `UPDATE cash_accounts SET current_balance = current_balance - 800 WHERE id = $1`,
+        [acc.id],
+      );
       await cashAccountsService.registerMovement(acc.id, { movementType: 'EXPENSE',          amount: 200 }, asUser(admin));
     };
 
