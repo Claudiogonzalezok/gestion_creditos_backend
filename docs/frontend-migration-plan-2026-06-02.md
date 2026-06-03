@@ -2,9 +2,13 @@
 
 **Fecha:** 2026-06-02
 **Repo frontend:** `D:\gestion-creditos-f` (Angular + PrimeNG)
-**Estado:** plan inicial — pendiente auditoría real del código frontend antes de ejecutar.
+**Estado:** ⚠️ **OBSOLETO — reemplazado por `docs/frontend-migration-plan-v4.md`** (2026-06-03).
 
-> ⚠️ Las pantallas listadas en la sección 3 son **estimaciones** basadas en el shape de los endpoints legacy. Antes de arrancar F1 se debe hacer una auditoría del repo frontend para identificar el inventario exacto de consumers y ajustar las fases si hace falta.
+> Este plan fue redactado antes de que el modelo de Caja se simplificara a V4
+> (analisis-caja.md V4 + commits feat/cash-model-v4). En V4 los cobradores no
+> operan caja y no existen rendiciones, lo que elimina la pantalla "Mi caja"
+> de cobradores y reduce el alcance. Usar el plan V4 para cualquier nueva
+> planificación. Se conserva este archivo como historial.
 
 ## 1. Objetivo
 
