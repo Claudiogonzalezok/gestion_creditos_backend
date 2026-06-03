@@ -116,6 +116,53 @@ describe('M — Jornadas (business_days)', () => {
       .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/CLOSED/) });
   });
 
+  // ── V4: GET active (jornada del día) ─────────────────────────────────
+  describe('getActive (V4)', () => {
+    it('devuelve null cuando no hay jornada activa', async () => {
+      const active = await businessDays.getActive();
+      expect(active).toBeNull();
+    });
+
+    it('devuelve la jornada OPEN con session_counts', async () => {
+      const u = await createUserFixture({ role: 'ADMIN' });
+      const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+
+      const active = await businessDays.getActive();
+      expect(active).not.toBeNull();
+      expect(active.id).toBe(s.business_day_id);
+      expect(active.status).toBe('OPEN');
+      expect(active.session_counts).toMatchObject({
+        open_count: 1, pending_count: 0, closed_count: 0, total_count: 1,
+      });
+    });
+
+    it('sigue devolviendo la jornada cuando está en READY_TO_CLOSE', async () => {
+      const u = await createUserFixture({ role: 'ADMIN' });
+      const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.close(s.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u));
+
+      const active = await businessDays.getActive();
+      expect(active).not.toBeNull();
+      expect(active.status).toBe('READY_TO_CLOSE');
+      expect(active.session_counts.closed_count).toBe(1);
+    });
+
+    it('devuelve null cuando la jornada está CLOSED', async () => {
+      const u  = await createUserFixture({ role: 'ADMIN' });
+      const sv = await createUserFixture({ role: 'ADMIN' });
+      const s  = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.close(s.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u));
+      await businessDays.close(s.business_day_id, {}, asUser(sv));
+
+      const active = await businessDays.getActive();
+      expect(active).toBeNull();
+    });
+  });
+
   // ── IMP-5: force-close para jornadas trabadas con cajas PENDING ───────
   describe('force-close (IMP-5)', () => {
     it('cierra una jornada que tiene cajas PENDING_RECONCILIATION', async () => {

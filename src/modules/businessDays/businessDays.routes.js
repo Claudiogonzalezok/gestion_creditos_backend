@@ -18,6 +18,12 @@ router.get('/',
   controller.getAll,
 );
 
+router.get('/active',
+  [query('branch_id').optional().isUUID()],
+  validate,
+  controller.getActive,
+);
+
 router.get('/:id',
   [param('id').isUUID()],
   validate,

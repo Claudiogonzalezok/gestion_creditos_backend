@@ -24,6 +24,12 @@ const getAll = async (req, res) => {
   } catch (err) { return handleError(res, err); }
 };
 
+const getActive = async (req, res) => {
+  try {
+    return response.success(res, await service.getActive(req.query.branch_id));
+  } catch (err) { return handleError(res, err); }
+};
+
 const close = async (req, res) => {
   try {
     const data = await service.close(req.params.id, req.body, req.user);
@@ -45,4 +51,4 @@ const audit = async (req, res) => {
   } catch (err) { return handleError(res, err); }
 };
 
-module.exports = { getById, getAll, close, forceClose, audit };
+module.exports = { getById, getAll, getActive, close, forceClose, audit };
