@@ -75,7 +75,7 @@ describe('I — Capa live separada en findById', () => {
 
     it('expone el estado VIVO de la cuota tras un pago parcial aprobado', async () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet();
-      await openSessionFor(collector);
+      // V4: solo el admin abre caja operativa; el cobrador no opera caja.
       await openSessionFor(admin);
 
       // Snapshot al generar: PENDING, amount_paid 0.
@@ -98,7 +98,7 @@ describe('I — Capa live separada en findById', () => {
 
     it('has_pending_payment refleja pre-carga viva (no el snapshot congelado)', async () => {
       const { collector, inst, sheet } = await seedScenarioWithSheet();
-      await openSessionFor(collector);
+      // V4: pre-carga no requiere caja.
 
       // En el snapshot, has_pending_payment quedó congelado en false.
       expect(itemFor(sheet, inst.id).has_pending_payment).toBe(false);

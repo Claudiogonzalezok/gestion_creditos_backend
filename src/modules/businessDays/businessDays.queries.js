@@ -141,6 +141,27 @@ const forceClose = async (client, id, { closedBy, observations }) => {
   return r.rows[0] || null;
 };
 
+/**
+ * V4.4: revierte una jornada de READY_TO_CLOSE a OPEN. Idempotente:
+ * solo afecta filas que estén exactamente en READY_TO_CLOSE.
+ *
+ * Pensado para `cashSessions.service.open`: si la jornada quedó en
+ * READY_TO_CLOSE (porque se cerraron todas las cajas previas) y se intenta
+ * abrir una caja nueva, la jornada vuelve a OPEN para reflejar que sigue
+ * operativa. ready_to_close_at se preserva como auditoría del momento en
+ * que la jornada estuvo "lista para cerrar" la última vez.
+ */
+const revertToOpen = async (client, id) => {
+  const r = await client.query(
+    `UPDATE business_days
+     SET status = 'OPEN'
+     WHERE id = $1 AND status = 'READY_TO_CLOSE'
+     RETURNING id, status, business_date, branch_id`,
+    [id],
+  );
+  return r.rows[0] || null;
+};
+
 /** READY_TO_CLOSE → CLOSED (supervisor). */
 const close = async (client, id, { closedBy, observations }) => {
   const r = await client.query(
@@ -260,6 +281,7 @@ module.exports = {
   create,
   countSessionsByStatus,
   maybeTransitionToReadyToClose,
+  revertToOpen,
   forceClose,
   close,
   audit,

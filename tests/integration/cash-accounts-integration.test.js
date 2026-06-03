@@ -126,16 +126,25 @@ describe('P — Integración Caja General (drops + commissions)', () => {
       expect(bal.current_balance).toBe(700);
     });
 
-    it('múltiples drops acumulan correctamente el balance', async () => {
+    it('V4: múltiples drops en turnos secuenciales acumulan correctamente el balance', async () => {
+      // V4: una caja OPEN por jornada. Múltiples drops vienen de turnos
+      // secuenciales (caja A cierra → caja B abre → caja A reopen no aplica
+      // porque ya está CLOSED → para un 3er drop hay caja A2 después).
       const acc = await getGeneralCashAccount();
-      const c1 = await createUserFixture({ role: 'COLLECTOR' });
-      const c2 = await createUserFixture({ role: 'COLLECTOR' });
-      const s1 = await cashSessionsService.open({ opening_amount: 0 }, asUser(c1));
-      const s2 = await cashSessionsService.open({ opening_amount: 0 }, asUser(c2));
+      const u1 = await createUserFixture({ role: 'ADMIN' });
+      const u2 = await createUserFixture({ role: 'ADMIN' });
 
-      await cashSessionsService.addDrop(s1.id, { amount: 1000, payment_method: 'CASH' }, asUser(c1));
-      await cashSessionsService.addDrop(s2.id, { amount: 500,  payment_method: 'CASH' }, asUser(c2));
-      await cashSessionsService.addDrop(s1.id, { amount: 250,  payment_method: 'TRANSFER' }, asUser(c1));
+      // Turno 1
+      const s1 = await cashSessionsService.open({ opening_amount: 0 }, asUser(u1));
+      await cashSessionsService.addDrop(s1.id, { amount: 1000, payment_method: 'CASH' }, asUser(u1));
+      await cashSessionsService.addDrop(s1.id, { amount: 250,  payment_method: 'TRANSFER' }, asUser(u1));
+      await cashSessionsService.close(s1.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }, { payment_method: 'TRANSFER', declared_amount: 0 }],
+      }, asUser(u1));
+
+      // Turno 2
+      const s2 = await cashSessionsService.open({ opening_amount: 0 }, asUser(u2));
+      await cashSessionsService.addDrop(s2.id, { amount: 500, payment_method: 'CASH' }, asUser(u2));
 
       const bal = await cashAccountsService.getBalance(acc.id);
       expect(bal.current_balance).toBe(1750);
