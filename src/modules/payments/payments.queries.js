@@ -143,11 +143,19 @@ const lockAndGetCredit = async (client, creditId) => {
   return r.rows[0] || null;
 };
 
-const approve = async (client, id, adminId) => {
+const approve = async (client, id, adminId, cashSessionId = null) => {
+  // V4.2: cash_session_id se setea al aprobar (no al crear). En V4.3 el caller
+  // pasará la caja activa de la jornada; por ahora puede pasar la caja del
+  // admin que aprueba (comportamiento equivalente al Fase 2 pre-V4 en la
+  // práctica, ya que ambos son la misma caja cuando el admin opera la jornada).
   await client.query(
-    `UPDATE payments SET status = 'APPROVED', approved_by = $1, approved_at = NOW()
+    `UPDATE payments
+     SET status = 'APPROVED',
+         approved_by = $1,
+         approved_at = NOW(),
+         cash_session_id = COALESCE($3, cash_session_id)
      WHERE id = $2`,
-    [adminId, id]
+    [adminId, id, cashSessionId]
   );
 };
 

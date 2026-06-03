@@ -283,38 +283,31 @@ const create = async (data, requestingUser) => {
       };
   }
 
-  // Pre-check amistoso para mensaje temprano. Re-validación bajo lock dentro
-  // de la tx (IMP-2): cierra la ventana TOCTOU entre el lookup y el INSERT.
-  const sessionPreCheck = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
-  if (!sessionPreCheck)
-    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
-
-  // Envolver INSERT + hook de management_status en una sola tx para que el
-  // hook no quede colgado si el payment falla y viceversa.
-  let payment;
-  await withTransaction(async (client) => {
-    const session = await cashSessionsQueries.lockOpenSessionForUser(client, requestingUser.id);
-    if (!session)
-      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
-
-    payment = await queries.create({
-      installment_id:     data.installment_id,
-      collector_id:       requestingUser.id,
-      amount_received:    data.amount_received,
-      payment_method:     data.payment_method,
-      transfer_reference: data.transfer_reference,
-      notes:              data.notes,
-      next_visit_date:    data.next_visit_date,
-      cash_session_id:    session.id,
-    }, client);
-
-    // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
-    // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
-    // si fue pago parcial.
-    await collectionsQueries.updateManagementStatusForActiveTodaySheet(
-      requestingUser.id, data.installment_id, 'VISITED', client,
-    );
+  // V4.2: la pre-carga NO requiere caja abierta. El cobrador es un actor de
+  // campo, no opera caja. `cash_session_id` queda NULL hasta que el admin
+  // apruebe (en `approve` se imputa a la caja activa de la jornada, V4.3).
+  // Se eliminó el wrap withTransaction de IMP-2 porque ya no hay lock de
+  // caja que proteger en este flujo — el INSERT del payment y el hook de
+  // management_status son operaciones independientes; un fallo del hook no
+  // debe revertir el payment (es un side-effect de UI, no contable).
+  const payment = await queries.create({
+    installment_id:     data.installment_id,
+    collector_id:       requestingUser.id,
+    amount_received:    data.amount_received,
+    payment_method:     data.payment_method,
+    transfer_reference: data.transfer_reference,
+    notes:              data.notes,
+    next_visit_date:    data.next_visit_date,
+    cash_session_id:    null, // V4.2: se llena en approve.
   });
+
+  // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
+  // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
+  // si fue pago parcial. Si el hook falla, el payment ya está persistido —
+  // es aceptable (la planilla puede recomputarse manualmente).
+  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+    requestingUser.id, data.installment_id, 'VISITED',
+  );
 
   return payment;
 };
@@ -344,6 +337,29 @@ const approve = async (id, adminId) => {
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
   await withTransaction(async (client) => {
+    // V4: resolver la caja activa de la jornada bajo lock. Si no hay caja
+    // operativa abierta, no se puede aprobar — el dinero no tiene dónde
+    // imputarse. Devuelve 409 NO_ACTIVE_SESSION.
+    const businessDayQ = require('../businessDays/businessDays.queries');
+    const branch = await businessDayQ.findDefaultBranch(client);
+    const activeJornadaDate = await businessDayQ.findActiveJornadaDate(branch.id, client);
+    const businessDay = activeJornadaDate
+      ? await client.query(
+          `SELECT id FROM business_days WHERE business_date=$1::date AND branch_id=$2 LIMIT 1`,
+          [activeJornadaDate, branch.id],
+        ).then(r => r.rows[0])
+      : null;
+    const activeSession = businessDay
+      ? await cashSessionsQueries.lockActiveSessionByBusinessDay(client, businessDay.id)
+      : null;
+    if (!activeSession) {
+      throw {
+        status: 409,
+        message: 'No hay caja operativa abierta. Abrí una caja para aprobar cobros.',
+        code: 'NO_ACTIVE_SESSION',
+      };
+    }
+
     // Lock exclusivo sobre el payment para serializar aprobaciones concurrentes
     const payment = await queries.lockAndGetPayment(client, id);
     if (!payment) throw { status: 404, message: 'Cobro no encontrado.' };
@@ -356,8 +372,8 @@ const approve = async (id, adminId) => {
     if (amountPaid >= amountDue)
       throw { status: 409, message: 'Esta cuota ya se encuentra totalmente pagada.' };
 
-    // 1. Marcar el payment como APPROVED
-    await queries.approve(client, id, adminId);
+    // 1. Marcar el payment como APPROVED + imputar a la caja activa de la jornada.
+    await queries.approve(client, id, adminId, activeSession.id);
 
     // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
     await _applyPaymentToInstallments(client, payment, parseFloat(payment.amount_received), adminId, id, graceDays);

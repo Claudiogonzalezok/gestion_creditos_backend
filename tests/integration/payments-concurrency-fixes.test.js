@@ -17,6 +17,7 @@ const {
 } = require('./helpers/fixtures');
 const { today, daysAgo } = require('./helpers/dates');
 const paymentsService = require('../../src/modules/payments/payments.service');
+const cashSessionsService = require('../../src/modules/cashSessions/cashSessions.service');
 
 setupTestSuite();
 
@@ -26,10 +27,16 @@ const reloadPayment = async (id) => {
   return r.rows[0] || null;
 };
 
+// V4: approve requiere caja operativa abierta en la jornada. Helper
+// que abre una caja con el admin como responsable operativo del turno.
+const openOperatingSession = (admin) =>
+  cashSessionsService.open({ opening_amount: 0 }, { id: admin.id, role: admin.role });
+
 describe('F — fixes de concurrencia en pagos', () => {
   describe('BUG #2 — approve sobre cuota REFINANCED/PAID', () => {
     it('falla con 409 si la cuota fue REFINANCED entre create y approve', async () => {
       const admin = await createUserFixture({ role: 'ADMIN' });
+      await openOperatingSession(admin);
       const inst  = await createInstallmentFixture({
         due_date:        today(),
         original_amount: 1000,
@@ -62,6 +69,7 @@ describe('F — fixes de concurrencia en pagos', () => {
 
     it('falla con 409 si la cuota ya está PAID (race con otra aprobación)', async () => {
       const admin = await createUserFixture({ role: 'ADMIN' });
+      await openOperatingSession(admin);
       const inst  = await createInstallmentFixture({
         due_date:        today(),
         original_amount: 1000,
@@ -97,6 +105,7 @@ describe('F — fixes de concurrencia en pagos', () => {
 
     it('approve happy-path sigue funcionando (regression)', async () => {
       const admin = await createUserFixture({ role: 'ADMIN' });
+      await openOperatingSession(admin);
       const inst  = await createInstallmentFixture({
         due_date:        today(),
         original_amount: 1000,
@@ -125,6 +134,7 @@ describe('F — fixes de concurrencia en pagos', () => {
       // pre-seteando amount_paid = amount_due con status != PAID (poco realista
       // pero ejercita la defensa).
       const admin = await createUserFixture({ role: 'ADMIN' });
+      await openOperatingSession(admin);
       const inst  = await createInstallmentFixture({
         due_date:        today(),
         original_amount: 1000,
