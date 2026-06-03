@@ -1,3 +1,16 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// @deprecated TABLA LEGACY (cash_movements)
+// ═══════════════════════════════════════════════════════════════════════════
+// Cache derivado de payments — duplica información que ya vive en
+// payments.cash_session_id + cash_sessions.closure_snapshot (Fase 2+).
+//
+// Mantenida porque el dashboard antiguo de cash_registers la consume y
+// payments.service la sigue poblando dentro de la tx de approve/reverse
+// (no agregar lógica nueva, no agregar nuevas dependencias).
+//
+// Eliminación prevista en feat/cash-system-cleanup.
+// ═══════════════════════════════════════════════════════════════════════════
+
 const pool = require('../../config/db');
 
 /**

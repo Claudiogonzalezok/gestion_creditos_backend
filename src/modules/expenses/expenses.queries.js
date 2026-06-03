@@ -42,11 +42,14 @@ const findById = async (id) => {
   const r = await pool.query(
     `SELECT e.id, e.amount::float8, e.description, e.expense_date,
             e.payment_method, e.transfer_reference, e.created_at,
+            e.cash_session_id,
+            cs.status AS cash_session_status,
             u.full_name AS created_by_name,
             ec.id AS category_id, ec.name AS category_name
      FROM expenses e
      JOIN users u ON u.id = e.created_by
      LEFT JOIN expense_categories ec ON ec.id = e.category_id
+     LEFT JOIN cash_sessions cs ON cs.id = e.cash_session_id
      WHERE e.id = $1`,
     [id]
   );
@@ -67,8 +70,8 @@ const findActiveCategoryById = async (id) => {
  * @param {{ amount: number, categoryId: string|null, expenseDate: string, createdBy: string }} params
  * @returns {Promise<object|null>}
  */
-const findRecentDuplicate = async ({ amount, categoryId, expenseDate, createdBy }) => {
-  const r = await pool.query(
+const findRecentDuplicate = async ({ amount, categoryId, expenseDate, createdBy }, db = pool) => {
+  const r = await db.query(
     `SELECT id FROM expenses
      WHERE created_by  = $1
        AND amount      = $2
@@ -81,12 +84,12 @@ const findRecentDuplicate = async ({ amount, categoryId, expenseDate, createdBy 
   return r.rows[0] || null;
 };
 
-const create = async ({ amount, description, expenseDate, paymentMethod, transferReference, categoryId, createdBy, registerDate }) => {
-  const r = await pool.query(
-    `INSERT INTO expenses (amount, description, expense_date, payment_method, transfer_reference, category_id, created_by, register_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, amount::float8, description, expense_date, payment_method, transfer_reference, category_id, created_at`,
-    [amount, description, expenseDate, paymentMethod, transferReference || null, categoryId || null, createdBy, registerDate]
+const create = async ({ amount, description, expenseDate, paymentMethod, transferReference, categoryId, createdBy, registerDate, cashSessionId }, db = pool) => {
+  const r = await db.query(
+    `INSERT INTO expenses (amount, description, expense_date, payment_method, transfer_reference, category_id, created_by, register_date, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, amount::float8, description, expense_date, payment_method, transfer_reference, category_id, cash_session_id, created_at`,
+    [amount, description, expenseDate, paymentMethod, transferReference || null, categoryId || null, createdBy, registerDate, cashSessionId || null]
   );
   return r.rows[0];
 };

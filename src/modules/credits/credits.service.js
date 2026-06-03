@@ -6,7 +6,7 @@ const puQueries   = require('../productUnits/productUnits.queries');
 const { getValue }= require('../systemConfig/systemConfig.queries');
 const { withTransaction } = require('../../utils/transaction');
 const { localDate } = require('../../utils/date');
-const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -21,10 +21,15 @@ const {
   getActiveHolidayKeysInRange,
 } = require('../../utils/businessDay');
 
+/**
+ * IMP-1: consulta business_days (autoridad post-rediseño). Cae al día actual
+ * si no hay jornada abierta.
+ */
 const getActiveJornadaDate = async () => {
-  const today = localDate();
-  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
-  return jornadaDate || today;
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
 };
 
 /**
@@ -242,10 +247,27 @@ const create = async (data, requestingUser) => {
   if (!data.unit_ids || data.unit_ids.length === 0)
     throw { status: 400, message: 'Las ventas a crédito deben incluir al menos una unidad de producto.' };
 
+  // Dedupe defensivo: si el frontend manda el mismo unitId dos veces, evita
+  // que ambos pasen el SELECT FOR UPDATE (el lock no se bloquea contra la
+  // misma tx) y el segundo intente reservar algo ya reservado por el primero.
+  const uniqueUnitIds = [...new Set(data.unit_ids)];
+  if (uniqueUnitIds.length !== data.unit_ids.length)
+    throw { status: 400, message: 'No se pueden repetir unidades en una misma venta.' };
+
   return withTransaction(async (client) => {
     let totalAmount = 0;
+    // Cache de precios durante la validación: se usa en la fase de reserva
+    // sin re-consultar la DB, manteniendo consistencia con lo que se vio bajo
+    // el lock.
+    const priceByUnit = new Map();
+    const titleByUnit = new Map();
 
-    for (const unitId of data.unit_ids) {
+    for (const unitId of uniqueUnitIds) {
+      // SELECT FOR UPDATE OF pu: bloquea la fila de product_units hasta el
+      // COMMIT/ROLLBACK. Cierra la TOCTOU entre la validación de AVAILABLE y
+      // la transición a RESERVED. Dos requests concurrentes para la misma
+      // unidad serializan: el segundo espera, y al leer ve el status ya
+      // RESERVED por el primero → 409.
       const unitRes = await client.query(
         `SELECT pu.id, pu.status,
                 pv.id AS variant_id, pv.current_price::float8, pv.product_id,
@@ -254,7 +276,8 @@ const create = async (data, requestingUser) => {
          FROM product_units    pu
          JOIN product_variants pv ON pv.id = pu.variant_id
          JOIN products         p  ON p.id  = pv.product_id
-         WHERE pu.id = $1`,
+         WHERE pu.id = $1
+         FOR UPDATE OF pu`,
         [unitId]
       );
       const unit = unitRes.rows[0];
@@ -281,6 +304,8 @@ const create = async (data, requestingUser) => {
         };
 
       totalAmount += unit.current_price;
+      priceByUnit.set(unitId, unit.current_price);
+      titleByUnit.set(unitId, unit.title);
     }
 
     const downPayment = parseFloat(data.down_payment || 0);
@@ -306,17 +331,19 @@ const create = async (data, requestingUser) => {
       notes:                                    data.notes,
     });
 
-    // Vincular unidades al crédito (precio de la variante) y marcarlas RESERVED
-    for (const unitId of data.unit_ids) {
-      const priceRes = await client.query(
-        `SELECT pv.current_price::float8
-         FROM product_units pu
-         JOIN product_variants pv ON pv.id = pu.variant_id
-         WHERE pu.id = $1`,
-        [unitId]
-      );
-      await queries.createCreditUnit(client, credit.id, unitId, priceRes.rows[0].current_price);
-      await puQueries.updateStatus(client, unitId, 'RESERVED');
+    // Vincular unidades al crédito (precio congelado del SELECT bajo lock) y
+    // hacer la transición AVAILABLE → RESERVED con guard SQL: si por alguna
+    // razón la fila ya no está AVAILABLE, transitionStatus devuelve false y
+    // abortamos con 409 (la transacción rollback libera todo lo previo).
+    for (const unitId of uniqueUnitIds) {
+      await queries.createCreditUnit(client, credit.id, unitId, priceByUnit.get(unitId));
+      const reserved = await puQueries.transitionStatus(client, unitId, 'AVAILABLE', 'RESERVED');
+      if (!reserved) {
+        throw {
+          status: 409,
+          message: `La unidad "${titleByUnit.get(unitId)}" cambió de estado durante la operación. Reintentá la venta.`,
+        };
+      }
     }
 
     return sanitizeCredit(credit);
@@ -567,7 +594,27 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
   const registerDate = await getActiveJornadaDate();
 
+  // Si el crédito implica un movimiento de caja (downPayment o prepaid), el
+  // admin que aprueba debe tener caja OPEN para imputar ese ingreso.
+  // IMP-2: pre-check amistoso fuera de la tx + re-validación bajo lock adentro.
+  const needsAdminCashSession = downPayment > 0 || credit.prepaid_installments > 0;
+  if (needsAdminCashSession) {
+    const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+    const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+    if (!adminSessionPreCheck)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
+  }
+
   await withTransaction(async (client) => {
+    let adminCashSessionId = null;
+    if (needsAdminCashSession) {
+      const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+      const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+      if (!adminSession)
+        throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
+      adminCashSessionId = adminSession.id;
+    }
+
     await queries.approve(client, id, adminId, null, installmentsCount);
 
     for (const [, g] of productGroups) {
@@ -589,6 +636,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         approvedBy:        adminId,
         paymentType:       'PREPAID_INSTALLMENT',
         registerDate,
+        cashSessionId:     adminCashSessionId,
       });
       // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
       // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
@@ -606,6 +654,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         transferReference: credit.down_payment_transfer_reference || null,
         approvedBy:        adminId,
         registerDate,
+        cashSessionId:     adminCashSessionId,
       });
     }
 

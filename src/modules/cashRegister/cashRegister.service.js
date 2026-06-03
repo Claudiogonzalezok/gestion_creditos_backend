@@ -1,17 +1,29 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// @deprecated MÓDULO LEGACY (cashRegister.service)
+// ═══════════════════════════════════════════════════════════════════════════
+// Mantenido por compat con el dashboard antiguo y los flujos pre-Fase 1+2+3.
+// La autoridad operativa pasó a businessDays + cashSessions + cashAccounts.
+// NO agregar lógica nueva ni nuevas dependencias acá.
+// La excepción es getActiveJornadaDate, que se mantiene exportada (migrada
+// internamente al nuevo modelo) porque varios callers viejos la consumen.
+// Eliminación prevista en feat/cash-system-cleanup.
+// ═══════════════════════════════════════════════════════════════════════════
+
 const pool    = require('../../config/db');
 const queries = require('./cashRegister.queries');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const { localDate } = require('../../utils/date');
 
 /**
- * Determina la fecha de la jornada comercial activa.
- * Busca la fecha más reciente con actividad sin cierre de caja.
- * Si no hay jornada sin cerrar en los últimos 14 días, retorna el día de hoy como fallback.
- * @returns {Promise<string>} Fecha YYYY-MM-DD de la jornada activa.
+ * IMP-1: consulta business_days (autoridad post-rediseño). Cae al día actual
+ * si no hay jornada abierta. La búsqueda legacy
+ * cashRegister.queries.findUnclosedJornadaDate queda como deprecated.
  */
 const getActiveJornadaDate = async () => {
-  const today = localDate();
-  const jornadaDate = await queries.findUnclosedJornadaDate(today);
-  return jornadaDate || today;
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
 };
 
 const getDashboard = async (date) => {
@@ -85,7 +97,10 @@ const close = async (data, adminId) => {
       closedBy:         adminId,
     });
 
-    await queries.linkLiquidations(client, register.id, registerDate);
+    // CRIT-2 (Fase 3): NO se llama linkLiquidations. Las liquidaciones de
+    // comisiones ahora son tesorería (Caja General) y no deben quedar
+    // enlazadas al cierre legacy de cash_registers — eso producía un cierre
+    // "apropiado" de movimientos que ya estaban imputados a cash_account_movements.
 
     await client.query('COMMIT');
     return register;
@@ -150,6 +165,12 @@ const createConversion = async (data, adminId) => {
   if (existing)
     throw { status: 409, message: `La caja del ${registerDate} ya está cerrada. No se pueden registrar conversiones.` };
 
+  const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
+  // IMP-2: pre-check + re-validación bajo lock dentro de la tx.
+  const sessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!sessionPreCheck)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar una conversión.' };
+
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
     throw { status: 422, message: 'El monto de conversión debe ser mayor a 0.' };
@@ -160,6 +181,11 @@ const createConversion = async (data, adminId) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const session = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+    if (!session) {
+      await client.query('ROLLBACK');
+      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar una conversión.' };
+    }
     const conversion = await queries.createConversion(client, {
       registerDate,
       criteria: data.criteria,
@@ -167,6 +193,7 @@ const createConversion = async (data, adminId) => {
       targetMethod,
       amount,
       notes: data.notes,
+      cashSessionId: session.id,
       createdBy: adminId,
     });
     await client.query('COMMIT');

@@ -1,22 +1,23 @@
 const pool                  = require('../../config/db');
 const queries               = require('./payments.queries');
 const cashMovementsQueries  = require('./cash_movements.queries');
-const cashRegisterQueries   = require('../cashRegister/cashRegister.queries');
+const cashSessionsQueries   = require('../cashSessions/cashSessions.queries');
+const businessDaysQueries   = require('../businessDays/businessDays.queries');
 const collectionsQueries    = require('../collections/collections.queries');
 const { getValue }          = require('../systemConfig/systemConfig.queries');
 const { withTransaction }   = require('../../utils/transaction');
 const { localDate }         = require('../../utils/date');
 
 /**
- * Determina la fecha de la jornada comercial activa.
- * Duplicado local para evitar dependencia circular con cashRegister.service.
- * Reutiliza cashRegisterQueries.findUnclosedJornadaDate, que ya es importado.
- * @returns {Promise<string>} Fecha YYYY-MM-DD de la jornada activa.
+ * IMP-1: determina la fecha de la jornada comercial activa consultando
+ * business_days (autoridad post-rediseño). Cae al día actual si no hay
+ * jornada abierta (la próxima operación creará una).
  */
 const getActiveJornadaDate = async () => {
-  const today = localDate();
-  const jornadaDate = await cashRegisterQueries.findUnclosedJornadaDate(today);
-  return jornadaDate || today;
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -26,19 +27,37 @@ const getActiveJornadaDate = async () => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Valida que la caja del día no esté cerrada.
- * La existencia de un registro en cash_registers para la fecha = caja cerrada.
- * Debe llamarse ANTES de iniciar la transacción de pago.
+ * IMP-1: valida que la jornada (business_day) de la fecha NO esté CLOSED/AUDITED.
+ *
+ * Autoridad post-rediseño: business_days. Reemplaza el check legacy contra
+ * cash_registers.findByDate, que mantenía un sistema paralelo de cierre.
+ *
+ * NOTA: esta función valida UNA condición — la jornada mutable. La segunda
+ * condición operativa (existe cash_session OPEN para el owner) la valida cada
+ * caller vía cashSessionsQueries.findOpenByOwner + lockOpenSessionForUser
+ * (IMP-2). No se duplica acá para no asumir cuál es el owner.
+ *
  * @param {string} date - Fecha contable 'YYYY-MM-DD'.
- * @throws {{ status: 409, message }} si la caja del día está cerrada.
+ * @throws {{ status: 409, message }} si la jornada está CLOSED o AUDITED.
  */
 const _validateCajaOpen = async (date) => {
-  const closed = await cashRegisterQueries.findByDate(date);
-  if (closed)
-    throw {
-      status: 409,
-      message: `La caja del ${date} ya fue cerrada. No es posible registrar cobros para ese día.`,
-    };
+  const branch = await businessDaysQueries.findDefaultBranch();
+  if (!branch) return; // sin sucursales no hay nada que validar.
+  const mutable = await businessDaysQueries.isJornadaMutable(date, branch.id);
+  // Si la jornada NO existe (mutable=false por ausencia), permitir: la próxima
+  // apertura de caja la creará. Solo bloqueamos si EXISTE y está terminal.
+  if (mutable) return;
+
+  // Re-consultar para distinguir "no existe" de "terminal".
+  const r = await pool.query(
+    `SELECT status FROM business_days WHERE business_date = $1::date AND branch_id = $2`,
+    [date, branch.id],
+  );
+  if (!r.rows.length) return;
+  throw {
+    status: 409,
+    message: `La jornada del ${date} ya está ${r.rows[0].status}. No es posible registrar cobros para ese día.`,
+  };
 };
 
 /**
@@ -264,22 +283,38 @@ const create = async (data, requestingUser) => {
       };
   }
 
-  const payment = await queries.create({
-    installment_id:     data.installment_id,
-    collector_id:       requestingUser.id,
-    amount_received:    data.amount_received,
-    payment_method:     data.payment_method,
-    transfer_reference: data.transfer_reference,
-    notes:              data.notes,
-    next_visit_date:    data.next_visit_date,
-  });
+  // Pre-check amistoso para mensaje temprano. Re-validación bajo lock dentro
+  // de la tx (IMP-2): cierra la ventana TOCTOU entre el lookup y el INSERT.
+  const sessionPreCheck = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
+  if (!sessionPreCheck)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
 
-  // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
-  // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
-  // si fue pago parcial.
-  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
-    requestingUser.id, data.installment_id, 'VISITED',
-  );
+  // Envolver INSERT + hook de management_status en una sola tx para que el
+  // hook no quede colgado si el payment falla y viceversa.
+  let payment;
+  await withTransaction(async (client) => {
+    const session = await cashSessionsQueries.lockOpenSessionForUser(client, requestingUser.id);
+    if (!session)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro.' };
+
+    payment = await queries.create({
+      installment_id:     data.installment_id,
+      collector_id:       requestingUser.id,
+      amount_received:    data.amount_received,
+      payment_method:     data.payment_method,
+      transfer_reference: data.transfer_reference,
+      notes:              data.notes,
+      next_visit_date:    data.next_visit_date,
+      cash_session_id:    session.id,
+    }, client);
+
+    // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
+    // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
+    // si fue pago parcial.
+    await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+      requestingUser.id, data.installment_id, 'VISITED', client,
+    );
+  });
 
   return payment;
 };
@@ -410,6 +445,12 @@ const adminDirect = async (data, adminId) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
 
+  // Pre-check amistoso (mensaje claro temprano). La validación bajo lock se
+  // hace dentro de la tx para cerrar la ventana TOCTOU (IMP-2).
+  const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSessionPreCheck)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
+
   // Días de gracia para el recálculo de status post-aplicación del pago
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
@@ -441,6 +482,11 @@ const adminDirect = async (data, adminId) => {
 
   let newPaymentId;
   await withTransaction(async (client) => {
+    // IMP-2: re-validar caja OPEN bajo lock dentro de la tx.
+    const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+    if (!adminSession)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
+
     // Lock sobre la cuota principal
     const lockedInst = await queries.lockAndGetInstallment(client, data.installment_id);
     if (!lockedInst) throw { status: 404, message: 'Cuota no encontrada.' };
@@ -453,6 +499,7 @@ const adminDirect = async (data, adminId) => {
       paymentMethod:     data.payment_method,
       transferReference: data.transfer_reference,
       notes:             data.notes,
+      cashSessionId:     adminSession.id,
     });
     newPaymentId = created.id;
 
@@ -505,7 +552,18 @@ const reverse = async (id, reason, adminId) => {
   // Días de gracia para el recálculo de status tras restaurar amount_paid
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
+  // Pre-check amistoso (mensaje claro temprano). Re-validación bajo lock
+  // dentro de la tx (IMP-2). La reversión se imputa a la caja OPEN del admin
+  // que revierte, no al cash_session_id del payment original (probablemente CLOSED).
+  const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
+  if (!adminSessionPreCheck)
+    throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
+
   await withTransaction(async (client) => {
+    const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
+    if (!adminSession)
+      throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
+
     const payment = await queries.lockAndGetPayment(client, id);
     if (!payment)               throw { status: 404, message: 'Cobro no encontrado.' };
     if (payment.status !== 'APPROVED')
@@ -547,6 +605,7 @@ const reverse = async (id, reason, adminId) => {
         paymentMethod:     p.payment_method,
         transferReference: p.transfer_reference,
         reason,
+        cashSessionId:     adminSession.id,
         originalPaymentId: p.id,
       });
 
