@@ -525,7 +525,24 @@ const reverseDrop = async (sessionId, dropId, data, requestingUser) => {
 
 // ── Listados / detalle ────────────────────────────────────────────────────
 
-const getActive = async (ownerUserId) => queries.findOpenByOwner(ownerUserId);
+/**
+ * V4: devuelve la caja operativa activa de la jornada actual (sucursal default).
+ *
+ * Reemplaza el concepto viejo "mi caja" (que en V4 ya no existe — los cobradores
+ * no tienen caja, y la caja es de la jornada no del usuario). El parámetro
+ * `_ownerUserId` se acepta por compat con callers viejos del controller pero
+ * se ignora: la caja activa es única por jornada.
+ *
+ * Devuelve null si no hay caja activa (jornada cerrada o sin abrir todavía).
+ */
+const getActive = async (/* _ownerUserId */) => {
+  const branch = await bdQueries.findDefaultBranch();
+  if (!branch) return null;
+  const businessDay = await bdQueries.findActiveBusinessDay(branch.id);
+  if (!businessDay) return null;
+  return queries.findActiveSessionByBusinessDay(businessDay.id);
+};
+
 const getById   = async (id) => {
   const s = await queries.findByIdWithDetails(id);
   if (!s) throw { status: 404, message: 'Caja no encontrada.' };

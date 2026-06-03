@@ -73,9 +73,10 @@ describe('N — Integración movimientos ↔ caja (V4.2)', () => {
     expect(row.rows[0].cash_session_id).toBeNull();
   });
 
-  it('aprobación imputa el cobro a la caja OPEN del admin que aprueba', async () => {
-    // Comportamiento intermedio (post V4.2, pre V4.3): approve sigue usando
-    // findOpenByOwner(admin). En V4.3 esto pasará a "caja activa de la jornada".
+  it('aprobación imputa el cobro a la caja activa de la jornada', async () => {
+    // V4: approve resuelve lockActiveSessionForCurrentJornada y le imputa
+    // el cobro. En este test el admin abre la única caja del día, así que
+    // la caja activa coincide con la del admin.
     const { collector, inst } = await seedCollectorWithInstallment();
     const admin = await createUserFixture({ role: 'ADMIN' });
     const adminSession = await cashSessions.open({ opening_amount: 0 }, asUser(admin));

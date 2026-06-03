@@ -33,9 +33,9 @@ const getActiveJornadaDate = async () => {
  * cash_registers.findByDate, que mantenía un sistema paralelo de cierre.
  *
  * NOTA: esta función valida UNA condición — la jornada mutable. La segunda
- * condición operativa (existe cash_session OPEN para el owner) la valida cada
- * caller vía cashSessionsQueries.findOpenByOwner + lockOpenSessionForUser
- * (IMP-2). No se duplica acá para no asumir cuál es el owner.
+ * condición operativa (existe cash_session OPEN en la jornada) la valida cada
+ * caller vía cashSessionsQueries.lockActiveSessionForCurrentJornada (V4).
+ * No se duplica acá para no acoplar este check a la resolución de caja.
  *
  * @param {string} date - Fecha contable 'YYYY-MM-DD'.
  * @throws {{ status: 409, message }} si la jornada está CLOSED o AUDITED.

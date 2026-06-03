@@ -27,7 +27,14 @@ jest.mock('../cashRegister/cashRegister.queries', () => ({
 jest.mock('../businessDays/businessDays.queries', () => ({
   findDefaultBranch: jest.fn(),
   findActiveJornadaDate: jest.fn(),
+  findActiveBusinessDay: jest.fn(),
   isJornadaMutable: jest.fn(),
+}));
+
+jest.mock('../cashSessions/cashSessions.queries', () => ({
+  findActiveSessionByBusinessDay: jest.fn(),
+  lockActiveSessionByBusinessDay: jest.fn(),
+  lockActiveSessionForCurrentJornada: jest.fn(),
 }));
 
 jest.mock('../collections/collections.queries', () => ({
@@ -50,6 +57,7 @@ const queries = require('./payments.queries');
 const cashMovementsQueries = require('./cash_movements.queries');
 const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
 const businessDaysQueries = require('../businessDays/businessDays.queries');
+const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
 const { withTransaction } = require('../../utils/transaction');
 const service = require('./payments.service');
 
@@ -64,7 +72,14 @@ describe('payments.service holiday-related behavior', () => {
     cashRegisterQueries.findByDate.mockResolvedValue(null);
     businessDaysQueries.findDefaultBranch.mockResolvedValue({ id: 'branch-hq' });
     businessDaysQueries.findActiveJornadaDate.mockResolvedValue('2026-05-01');
+    businessDaysQueries.findActiveBusinessDay.mockResolvedValue({
+      id: 'bday-1', business_date: '2026-05-01', branch_id: 'branch-hq', status: 'OPEN',
+    });
     businessDaysQueries.isJornadaMutable.mockResolvedValue(true);
+    cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
+      id: 'cs-1', business_day_id: 'bday-1', owner_user_id: 'admin-1',
+      opening_amount: 0, status: 'OPEN',
+    });
     queries.lockAndGetCredit.mockResolvedValue({ id: 'credit-1', status: 'ACTIVE' });
     queries.countPendingInstallments.mockResolvedValue(1);
     queries.findById.mockResolvedValue({ id: 'payment-1', status: 'APPROVED' });
@@ -107,7 +122,7 @@ describe('payments.service holiday-related behavior', () => {
 
     await service.approve('payment-1', 'admin-1');
 
-    expect(queries.approve).toHaveBeenCalledWith(client, 'payment-1', 'admin-1');
+    expect(queries.approve).toHaveBeenCalledWith(client, 'payment-1', 'admin-1', 'cs-1');
     expect(queries.shiftInstallmentDates).not.toHaveBeenCalled();
     expect(cashMovementsQueries.create).toHaveBeenCalled();
   });

@@ -3,36 +3,6 @@ const pool = require('../../config/db');
 // ── Cash sessions ───────────────────────────────────────────────────────────
 
 /**
- * @deprecated V4: el modelo operativo dejó de ser "una caja por usuario".
- *   En el modelo V4, la unicidad es por jornada (no por owner). Usar
- *   `findActiveSessionByBusinessDay` para obtener la caja operativa activa
- *   de una jornada. Esta función queda temporalmente disponible para no
- *   romper callers durante la transición V4.x. Eliminar en V4.6 cuando
- *   no quede ningún consumer.
- *
- * Busca la caja OPEN del owner (solo una posible por el unique index parcial viejo).
- * @param {string} ownerUserId
- * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
- */
-const findOpenByOwner = async (ownerUserId, db = pool) => {
-  const r = await db.query(
-    `SELECT id, business_day_id, owner_user_id, opened_at, opened_by,
-            opening_amount::float8 AS opening_amount,
-            status, closed_at, closed_by,
-            closure_snapshot,
-            closure_total_difference::float8 AS closure_total_difference,
-            closure_difference_status,
-            pending_reconciliation_at, pending_reconciliation_reason,
-            reconciled_at, reconciled_by, observations
-     FROM cash_sessions
-     WHERE owner_user_id = $1 AND status = 'OPEN'
-     LIMIT 1`,
-    [ownerUserId],
-  );
-  return r.rows[0] || null;
-};
-
-/**
  * Lookup por id, sin joins. Para detalle completo usar findByIdWithDetails.
  */
 const findById = async (id, db = pool) => {
@@ -68,28 +38,7 @@ const findByIdWithDetails = async (id) => {
   };
 };
 
-/**
- * @deprecated V4: ya no se busca caja "por owner". Usar
- *   `lockActiveSessionByBusinessDay` para obtener bajo lock la caja activa
- *   de una jornada. Esta función queda temporalmente para no romper
- *   callers durante la transición V4.x. Eliminar en V4.6.
- *
- * Lock + read de la caja OPEN del owner dentro de una transacción. Cierra la
- * ventana TOCTOU entre el lookup amistoso y el INSERT.
- */
-const lockOpenSessionForUser = async (client, ownerUserId) => {
-  const r = await client.query(
-    `SELECT id, business_day_id, owner_user_id,
-            opening_amount::float8 AS opening_amount, status
-     FROM cash_sessions
-     WHERE owner_user_id = $1 AND status = 'OPEN'
-     FOR UPDATE`,
-    [ownerUserId],
-  );
-  return r.rows[0] || null;
-};
-
-// ── V4: caja operativa por jornada (autoridad nueva) ──────────────────────
+// ── V4: caja operativa por jornada (autoridad única) ──────────────────────
 
 /**
  * V4: devuelve la caja operativa activa de una jornada.
@@ -97,9 +46,6 @@ const lockOpenSessionForUser = async (client, ownerUserId) => {
  * En el modelo V4 la unicidad es por business_day_id (índice único parcial
  * `one_open_session_per_business_day_idx` creado en migración 027). Por lo
  * tanto, este query devuelve a lo sumo una fila.
- *
- * Reemplaza conceptualmente a `findOpenByOwner`: ya no importa quién es el
- * owner — importa cuál es la caja activa de la jornada en curso.
  *
  * @param {string} businessDayId
  * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
@@ -497,8 +443,6 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
 };
 
 module.exports = {
-  findOpenByOwner,              // @deprecated V4
-  lockOpenSessionForUser,       // @deprecated V4
   findActiveSessionByBusinessDay,
   lockActiveSessionByBusinessDay,
   lockActiveSessionForCurrentJornada,
