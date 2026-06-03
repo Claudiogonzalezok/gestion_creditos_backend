@@ -137,16 +137,40 @@ const lockAndGetById = async (client, id) => {
  * @param {string} [filters.branchId]
  */
 const findAll = async (filters = {}) => {
+  // F2-0: `summary` agrega los totales del cierre (collections, expenses,
+  // drops, difference) en una sola estructura. Es objeto JSONB construido
+  // desde el closure_snapshot del cierre — los consumers NO tocan
+  // closure_snapshot directamente, así la API queda estable frente a la
+  // futura evolución del snapshot (v2) y la incorporación de nuevos
+  // métodos de pago/métricas.
+  //
+  // summary es NULL en sesiones OPEN o PENDING (sin snapshot aún).
   let q = `
     SELECT cs.id, cs.business_day_id, cs.owner_user_id, cs.opened_at, cs.opened_by,
            cs.opening_amount::float8 AS opening_amount,
-           cs.status, cs.closed_at, cs.closed_by,
+           cs.status, cs.shift_label,
+           cs.closed_at, cs.closed_by,
            cs.closure_total_difference::float8 AS closure_total_difference,
            cs.closure_difference_status,
            cs.pending_reconciliation_at, cs.pending_reconciliation_reason,
            cs.reconciled_at, cs.reconciled_by, cs.observations,
            bd.business_date, bd.branch_id,
-           u.full_name AS owner_name
+           u.full_name AS owner_name,
+           CASE WHEN cs.closure_snapshot IS NOT NULL THEN jsonb_build_object(
+             'collections',
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'transfer')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'transfer')::float8, 0),
+             'expenses',
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'transfer')::float8, 0),
+             'drops',
+               COALESCE((cs.closure_snapshot -> 'drops' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'drops' ->> 'transfer')::float8, 0),
+             'difference',
+               COALESCE(cs.closure_total_difference::float8, 0)
+           ) END AS summary
     FROM cash_sessions cs
     JOIN business_days bd ON bd.id = cs.business_day_id
     JOIN users u          ON u.id  = cs.owner_user_id
