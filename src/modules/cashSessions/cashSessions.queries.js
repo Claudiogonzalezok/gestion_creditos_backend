@@ -3,7 +3,14 @@ const pool = require('../../config/db');
 // ── Cash sessions ───────────────────────────────────────────────────────────
 
 /**
- * Busca la caja OPEN del owner (solo una posible por la unique index parcial).
+ * @deprecated V4: el modelo operativo dejó de ser "una caja por usuario".
+ *   En el modelo V4, la unicidad es por jornada (no por owner). Usar
+ *   `findActiveSessionByBusinessDay` para obtener la caja operativa activa
+ *   de una jornada. Esta función queda temporalmente disponible para no
+ *   romper callers durante la transición V4.x. Eliminar en V4.6 cuando
+ *   no quede ningún consumer.
+ *
+ * Busca la caja OPEN del owner (solo una posible por el unique index parcial viejo).
  * @param {string} ownerUserId
  * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
  */
@@ -62,13 +69,13 @@ const findByIdWithDetails = async (id) => {
 };
 
 /**
- * Lock + read de la caja OPEN del owner dentro de una transacción. Cierra la
- * ventana TOCTOU entre el lookup amistoso (findOpenByOwner desde pool) y el
- * INSERT del movimiento: si otra request transicionó la caja a PENDING o
- * CLOSED entre ambos pasos, este lookup la NO retorna y el caller falla con
- * 409 sin haber imputado nada.
+ * @deprecated V4: ya no se busca caja "por owner". Usar
+ *   `lockActiveSessionByBusinessDay` para obtener bajo lock la caja activa
+ *   de una jornada. Esta función queda temporalmente para no romper
+ *   callers durante la transición V4.x. Eliminar en V4.6.
  *
- * Devuelve la sesión OPEN bajo lock, o null si no existe.
+ * Lock + read de la caja OPEN del owner dentro de una transacción. Cierra la
+ * ventana TOCTOU entre el lookup amistoso y el INSERT.
  */
 const lockOpenSessionForUser = async (client, ownerUserId) => {
   const r = await client.query(
@@ -78,6 +85,58 @@ const lockOpenSessionForUser = async (client, ownerUserId) => {
      WHERE owner_user_id = $1 AND status = 'OPEN'
      FOR UPDATE`,
     [ownerUserId],
+  );
+  return r.rows[0] || null;
+};
+
+// ── V4: caja operativa por jornada (autoridad nueva) ──────────────────────
+
+/**
+ * V4: devuelve la caja operativa activa de una jornada.
+ *
+ * En el modelo V4 la unicidad es por business_day_id (índice único parcial
+ * `one_open_session_per_business_day_idx` creado en migración 027). Por lo
+ * tanto, este query devuelve a lo sumo una fila.
+ *
+ * Reemplaza conceptualmente a `findOpenByOwner`: ya no importa quién es el
+ * owner — importa cuál es la caja activa de la jornada en curso.
+ *
+ * @param {string} businessDayId
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
+ */
+const findActiveSessionByBusinessDay = async (businessDayId, db = pool) => {
+  const r = await db.query(
+    `SELECT id, business_day_id, owner_user_id, opened_at, opened_by,
+            opening_amount::float8 AS opening_amount, status
+     FROM cash_sessions
+     WHERE business_day_id = $1 AND status = 'OPEN'
+     LIMIT 1`,
+    [businessDayId],
+  );
+  return r.rows[0] || null;
+};
+
+/**
+ * V4: lock + read de la caja activa de una jornada dentro de una tx.
+ *
+ * Equivalente transaccional de `findActiveSessionByBusinessDay`. Sirve para
+ * que los flujos de aprobación/gasto/conversión imputen el movimiento bajo
+ * lock y eviten la race "otra request cerró la caja mientras imputaba".
+ *
+ * Devuelve la caja OPEN bajo `FOR UPDATE`, o null si no hay caja activa en
+ * la jornada (en cuyo caso el caller debe lanzar 409 NO_ACTIVE_SESSION).
+ *
+ * @param {import('pg').PoolClient} client - cliente con tx activa.
+ * @param {string} businessDayId
+ */
+const lockActiveSessionByBusinessDay = async (client, businessDayId) => {
+  const r = await client.query(
+    `SELECT id, business_day_id, owner_user_id,
+            opening_amount::float8 AS opening_amount, status
+     FROM cash_sessions
+     WHERE business_day_id = $1 AND status = 'OPEN'
+     FOR UPDATE`,
+    [businessDayId],
   );
   return r.rows[0] || null;
 };
@@ -413,8 +472,10 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
 };
 
 module.exports = {
-  findOpenByOwner,
-  lockOpenSessionForUser,
+  findOpenByOwner,              // @deprecated V4
+  lockOpenSessionForUser,       // @deprecated V4
+  findActiveSessionByBusinessDay,
+  lockActiveSessionByBusinessDay,
   findById,
   findByIdWithDetails,
   lockAndGetById,
