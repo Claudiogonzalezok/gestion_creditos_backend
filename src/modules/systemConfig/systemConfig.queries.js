@@ -1,4 +1,7 @@
-const pool = require('../../config/db');
+const pool  = require('../../config/db');
+const cache = require('../../utils/cache');
+
+const CACHE_PREFIX = 'system_config:';
 
 const DEFAULT_VALUES = {
   commission_rate:           { value: '0.08',   description: 'Tasa de comisión por venta (0.08 = 8%)' },
@@ -40,6 +43,7 @@ const update = async (key, value, userId) => {
      RETURNING key, value, description, updated_at`,
     [value, userId, key]
   );
+  cache.invalidate(CACHE_PREFIX + key);
   return result.rows[0] || null;
 };
 
@@ -53,15 +57,27 @@ const resetToDefault = async (key, userId) => {
      RETURNING key, value, description, updated_at`,
     [def.value, userId, key]
   );
+  cache.invalidate(CACHE_PREFIX + key);
   return result.rows[0] || null;
 };
 
-// Utilitario para que otros módulos lean un parámetro directamente
+/**
+ * Lee un parámetro de configuración con caché en memoria (TTL 5 min).
+ * Usado por módulos internos en rutas de alta frecuencia.
+ * @param {string} key
+ * @returns {Promise<string|null>}
+ */
 const getValue = async (key) => {
+  const cacheKey = CACHE_PREFIX + key;
+  const cached   = cache.get(cacheKey);
+  if (cached !== undefined) return cached;
+
   const result = await pool.query(
     `SELECT value FROM system_config WHERE key = $1`, [key]
   );
-  return result.rows[0]?.value ?? DEFAULT_VALUES[key]?.value ?? null;
+  const value = result.rows[0]?.value ?? DEFAULT_VALUES[key]?.value ?? null;
+  cache.set(cacheKey, value);
+  return value;
 };
 
 module.exports = { findAll, findByKey, update, resetToDefault, getValue, DEFAULT_VALUES };

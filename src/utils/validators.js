@@ -251,12 +251,15 @@ const credits = {
       .withMessage('El método de pago del enganche debe ser CASH o TRANSFER.'),
     body('down_payment_transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 100 }).withMessage('La referencia del enganche no puede superar los 100 caracteres.'),
-    body('prepaid_installments').not().exists()
-      .withMessage('El adelanto de cuotas ya no se registra al crear el crédito. Debe ingresarse desde Cobros.'),
-    body('prepaid_installments_method').not().exists()
-      .withMessage('El método del adelanto de cuotas ya no se informa al crear el crédito.'),
-    body('prepaid_installments_transfer_reference').not().exists()
-      .withMessage('La referencia del adelanto de cuotas ya no se informa al crear el crédito.'),
+    body('prepaid_installments').optional({ nullable: true })
+      .isInt({ min: 1, max: 120 })
+      .withMessage('La cantidad de cuotas adelantadas debe ser un entero entre 1 y 120.'),
+    body('prepaid_installments_method')
+      .if((val, { req }) => parseInt(req.body.prepaid_installments, 10) >= 1)
+      .isIn(['CASH','TRANSFER'])
+      .withMessage('El método de pago del adelanto debe ser CASH o TRANSFER.'),
+    body('prepaid_installments_transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 100 }).withMessage('La referencia del adelanto no puede superar los 100 caracteres.'),
     body('notes').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las notas no pueden superar los 500 caracteres.'),
   ],

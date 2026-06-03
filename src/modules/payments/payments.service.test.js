@@ -24,6 +24,12 @@ jest.mock('../cashRegister/cashRegister.queries', () => ({
   findUnclosedJornadaDate: jest.fn().mockResolvedValue(null),
 }));
 
+jest.mock('../businessDays/businessDays.queries', () => ({
+  findDefaultBranch: jest.fn(),
+  findActiveJornadaDate: jest.fn(),
+  isJornadaMutable: jest.fn(),
+}));
+
 jest.mock('../collections/collections.queries', () => ({
   updateManagementStatusForActiveTodaySheet: jest.fn().mockResolvedValue(),
 }));
@@ -43,6 +49,7 @@ jest.mock('../../utils/date', () => ({
 const queries = require('./payments.queries');
 const cashMovementsQueries = require('./cash_movements.queries');
 const cashRegisterQueries = require('../cashRegister/cashRegister.queries');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const { withTransaction } = require('../../utils/transaction');
 const service = require('./payments.service');
 
@@ -55,6 +62,9 @@ describe('payments.service holiday-related behavior', () => {
     // Devuelve { rows: [] } para cualquier client.query (ej: SELECT status FROM installments)
     client.query.mockResolvedValue({ rows: [] });
     cashRegisterQueries.findByDate.mockResolvedValue(null);
+    businessDaysQueries.findDefaultBranch.mockResolvedValue({ id: 'branch-hq' });
+    businessDaysQueries.findActiveJornadaDate.mockResolvedValue('2026-05-01');
+    businessDaysQueries.isJornadaMutable.mockResolvedValue(true);
     queries.lockAndGetCredit.mockResolvedValue({ id: 'credit-1', status: 'ACTIVE' });
     queries.countPendingInstallments.mockResolvedValue(1);
     queries.findById.mockResolvedValue({ id: 'payment-1', status: 'APPROVED' });
@@ -97,7 +107,6 @@ describe('payments.service holiday-related behavior', () => {
 
     await service.approve('payment-1', 'admin-1');
 
-    expect(cashRegisterQueries.findByDate).toHaveBeenCalledWith('2026-05-01');
     expect(queries.approve).toHaveBeenCalledWith(client, 'payment-1', 'admin-1');
     expect(queries.shiftInstallmentDates).not.toHaveBeenCalled();
     expect(cashMovementsQueries.create).toHaveBeenCalled();

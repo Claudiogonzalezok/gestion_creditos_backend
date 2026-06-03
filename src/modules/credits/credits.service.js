@@ -190,9 +190,6 @@ const sanitizeCredit = (credit) => {
   }
   if (credit.type === 'SALE') {
     delete credit.interest_rate;
-    delete credit.prepaid_installments;
-    delete credit.prepaid_installments_method;
-    delete credit.prepaid_installments_transfer_reference;
   }
   return decorateSaleCredit(credit);
 };
@@ -312,8 +309,11 @@ const create = async (data, requestingUser) => {
     }
 
     const downPayment = parseFloat(data.down_payment || 0);
+    const prepaidInstallments = parseInt(data.prepaid_installments || 0, 10);
     if (downPayment >= totalAmount)
       throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
+    if (prepaidInstallments >= data.installments_count)
+      throw { status: 400, message: 'Las cuotas adelantadas deben ser menores a la cantidad total de cuotas.' };
 
     const credit = await queries.create(client, {
       customer_id:                              data.customer_id,
@@ -323,9 +323,9 @@ const create = async (data, requestingUser) => {
       down_payment:                             downPayment,
       down_payment_method:                      data.down_payment_method                      || null,
       down_payment_transfer_reference:          data.down_payment_transfer_reference          || null,
-      prepaid_installments:                     0,
-      prepaid_installments_method:              null,
-      prepaid_installments_transfer_reference:  null,
+      prepaid_installments:                     prepaidInstallments,
+      prepaid_installments_method:              data.prepaid_installments_method             || null,
+      prepaid_installments_transfer_reference:  data.prepaid_installments_transfer_reference || null,
       installments_count:                       data.installments_count,
       payment_frequency:                        data.payment_frequency,
       notes:                                    data.notes,

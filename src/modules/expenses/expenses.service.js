@@ -42,6 +42,14 @@ const create = async (data, requestingUser) => {
     if (!session)
       throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un gasto.' };
 
+    const duplicate = await queries.findRecentDuplicate({
+      amount:      parseFloat(data.amount),
+      categoryId:  data.category_id || null,
+      expenseDate: data.expense_date,
+      createdBy:   requestingUser.id,
+    }, client);
+    if (duplicate) throw { status: 409, message: 'Ya existe un gasto idéntico registrado en los últimos 30 segundos. Verificá antes de reintentar.' };
+
     return queries.create({
       amount:            parseFloat(data.amount),
       description:       data.description,
@@ -57,12 +65,6 @@ const create = async (data, requestingUser) => {
 };
 
 /**
- * Actualiza un gasto validando que no pertenezca a una caja ya cerrada.
- * @param {string} id
- * @param {{ amount: number|string, description: string, expense_date?: string, payment_method: 'CASH'|'TRANSFER', transfer_reference?: string|null, category_id?: string|null }} data
- * @returns {Promise<object>}
- */
-/**
  * IMP-7: un gasto queda inmutable cuando su caja contable (cash_session) está
  * CLOSED — fuente de verdad post-Fase 2/3. Se mantiene además el check legacy
  * sobre cash_registers para gastos pre-Fase 2 que pudieran no tener
@@ -76,6 +78,12 @@ const assertExpenseMutable = async (expense) => {
     throw { status: 409, message: 'No se puede modificar un gasto que ya fue incluido en un cierre de caja.' };
 };
 
+/**
+ * Actualiza un gasto validando que no pertenezca a una caja ya cerrada.
+ * @param {string} id
+ * @param {{ amount: number|string, description: string, expense_date?: string, payment_method: 'CASH'|'TRANSFER', transfer_reference?: string|null, category_id?: string|null }} data
+ * @returns {Promise<object>}
+ */
 const update = async (id, data) => {
   const expense = await queries.findById(id);
   if (!expense) throw { status: 404, message: 'Gasto no encontrado.' };

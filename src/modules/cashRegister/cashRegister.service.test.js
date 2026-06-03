@@ -31,7 +31,13 @@ jest.mock('../../utils/date', () => ({
   localDate: jest.fn(),
 }));
 
+jest.mock('../businessDays/businessDays.queries', () => ({
+  findDefaultBranch: jest.fn(),
+  findActiveJornadaDate: jest.fn(),
+}));
+
 const queries       = require('./cashRegister.queries');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const { localDate } = require('../../utils/date');
 const service       = require('./cashRegister.service');
 
@@ -56,7 +62,8 @@ describe('CA-02 — close() con jornada anterior a hoy', () => {
     localDate.mockReturnValue(TODAY);
 
     // La jornada activa es AYER (hay actividad sin cerrar del día anterior)
-    queries.findUnclosedJornadaDate.mockResolvedValue(YESTERDAY);
+    businessDaysQueries.findDefaultBranch.mockResolvedValue({ id: 'branch-hq' });
+    businessDaysQueries.findActiveJornadaDate.mockResolvedValue(YESTERDAY);
 
     // La caja de ayer NO está cerrada todavía
     queries.findByDate.mockResolvedValue(null);
@@ -104,20 +111,23 @@ describe('CA-02 — close() con jornada anterior a hoy', () => {
 // ── getActiveJornadaDate: comportamiento base ─────────────────────────────────
 
 describe('getActiveJornadaDate()', () => {
-  beforeEach(() => jest.clearAllMocks());
+  beforeEach(() => {
+    jest.clearAllMocks();
+    businessDaysQueries.findDefaultBranch.mockResolvedValue({ id: 'branch-hq' });
+  });
 
   it('retorna la jornada de ayer cuando hay actividad sin cerrar', async () => {
     localDate.mockReturnValue('2026-05-29');
-    queries.findUnclosedJornadaDate.mockResolvedValue('2026-05-28');
+    businessDaysQueries.findActiveJornadaDate.mockResolvedValue('2026-05-28');
 
     const date = await service.getActiveJornadaDate();
     expect(date).toBe('2026-05-28');
-    expect(queries.findUnclosedJornadaDate).toHaveBeenCalledWith('2026-05-29');
+    expect(businessDaysQueries.findActiveJornadaDate).toHaveBeenCalledWith('branch-hq');
   });
 
   it('retorna hoy como fallback cuando no hay jornada sin cerrar', async () => {
     localDate.mockReturnValue('2026-05-29');
-    queries.findUnclosedJornadaDate.mockResolvedValue(null);
+    businessDaysQueries.findActiveJornadaDate.mockResolvedValue(null);
 
     const date = await service.getActiveJornadaDate();
     expect(date).toBe('2026-05-29');

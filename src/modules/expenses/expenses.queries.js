@@ -64,6 +64,26 @@ const findActiveCategoryById = async (id) => {
   return r.rows[0] || null;
 };
 
+/**
+ * Busca un gasto idéntico registrado por el mismo usuario en los últimos 30 segundos.
+ * Previene duplicados por doble envío o reintentos de red.
+ * @param {{ amount: number, categoryId: string|null, expenseDate: string, createdBy: string }} params
+ * @returns {Promise<object|null>}
+ */
+const findRecentDuplicate = async ({ amount, categoryId, expenseDate, createdBy }, db = pool) => {
+  const r = await db.query(
+    `SELECT id FROM expenses
+     WHERE created_by  = $1
+       AND amount      = $2
+       AND expense_date = $3
+       AND (category_id = $4 OR (category_id IS NULL AND $4 IS NULL))
+       AND created_at  >= NOW() - INTERVAL '30 seconds'
+     LIMIT 1`,
+    [createdBy, amount, expenseDate, categoryId || null]
+  );
+  return r.rows[0] || null;
+};
+
 const create = async ({ amount, description, expenseDate, paymentMethod, transferReference, categoryId, createdBy, registerDate, cashSessionId }, db = pool) => {
   const r = await db.query(
     `INSERT INTO expenses (amount, description, expense_date, payment_method, transfer_reference, category_id, created_by, register_date, cash_session_id)
@@ -98,4 +118,4 @@ const remove = async (id) => {
   return r.rowCount > 0;
 };
 
-module.exports = { findAll, findById, findActiveCategoryById, hasCashRegister, create, update, remove };
+module.exports = { findAll, findById, findActiveCategoryById, hasCashRegister, findRecentDuplicate, create, update, remove };

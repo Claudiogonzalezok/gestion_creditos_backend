@@ -7,18 +7,19 @@ Gestiona el ciclo completo de préstamos en efectivo y ventas de productos a cr�
 
 ## Stack tecnológico
 
-| Capa | Tecnología |
-|------|-----------|
-| Runtime | Node.js 20+ |
-| Framework | Express 4 |
-| Base de datos | PostgreSQL 18 |
-| Driver | pg (sin ORM) |
-| Autenticación | JWT (jsonwebtoken) |
-| Hashing | bcryptjs |
-| Validación | express-validator |
-| Scheduler | node-cron |
-| Seguridad | helmet, cors |
-| Logger | morgan |
+| Capa          | Tecnología                       |
+| ------------- | -------------------------------- |
+| Runtime       | Node.js 20+                      |
+| Framework     | Express 5                        |
+| Base de datos | PostgreSQL 18                    |
+| Driver        | pg (sin ORM)                     |
+| Autenticación | JWT (jsonwebtoken)               |
+| Hashing       | bcryptjs                         |
+| Validación    | express-validator                |
+| Scheduler     | node-cron                        |
+| Seguridad     | helmet, cors, express-rate-limit |
+| Logger        | morgan                           |
+| Docs          | swagger-ui-express               |
 
 ---
 
@@ -29,12 +30,11 @@ src/
 ├── app.js
 ├── config/
 │   ├── db.js
-│   └── migrations/
-│       └── 001_create_tables.sql        # Estructura completa (20 tablas)
+│   └── migrations/                      # Archivos .sql numerados (idempotentes)
 ├── jobs/
-│   ├── overdueInstallments.job.js       # Cron 02:00 — mora automática
-│   ├── creditExpiry.job.js              # Cron 03:00 — expiración de pre-operaciones
-│   ├── weeklyCommissionCycle.job.js     # Cron sábado 23:59 — cierre semanal
+│   ├── overdueInstallments.job.js        # Cron 02:00 — mora automática
+│   ├── creditExpiry.job.js               # Cron 03:00 — expiración de pre-operaciones
+│   ├── weeklyCommissionCycle.job.js      # Cron sábado 23:59 — cierre semanal
 │   └── tokenCleanup.job.js              # Cron 04:00 — limpieza de blacklist JWT
 ├── middlewares/
 │   ├── auth.middleware.js
@@ -44,29 +44,43 @@ src/
 │   ├── users/
 │   ├── customers/
 │   ├── products/
-│   ├── productRates/                    # Tasas de interés por producto (SALE)
+│   ├── productBrands/                   # Marcas de producto
+│   ├── productCategories/               # Categorías de producto
+│   ├── productVariants/                 # Variantes (color, talle, etc.)
+│   ├── productUnits/                    # Unidades físicas (AVAILABLE → RESERVED → SOLD)
+│   ├── productRates/                    # Tasas por producto (SALE)
 │   ├── interestRates/                   # Tasas para préstamos en efectivo (LOAN)
 │   ├── credits/
 │   ├── installments/
 │   ├── payments/
 │   ├── collections/
+│   ├── collectionAttempts/              # Intentos de cobro fallidos
 │   ├── commissions/
 │   ├── cashRegister/
-│   ├── expenses/                        # Gastos operativos del negocio
+│   ├── expenses/
+│   ├── expenseCategories/               # Categorías de gastos
+│   ├── holidays/                        # Feriados y días no hábiles
 │   ├── reports/
 │   ├── systemConfig/
+│   ├── cronLogs/                        # Log de ejecución de cron jobs
 │   └── portal/
 ├── scripts/
 │   ├── migration.run.js                 # Setup seguro: crea BD si no existe + migraciones pendientes
-│   └── db.reset.js                      # Reset destructivo: borra, recrea y migra desde cero
+│   ├── db.reset.js                      # Reset destructivo: borra, recrea y migra desde cero
+│   ├── db.studio.js                     # Explorador de BD liviano en consola
+│   └── run-cron.js                      # Ejecuta un cron job manualmente
 ├── seeds/
 │   ├── 01_admin.seed.js
 │   ├── 02_system_config.seed.js
 │   ├── 03_interest_rates.seed.js
 │   └── index.seed.js
 └── utils/
+    ├── businessDay.js                   # Cálculo de días hábiles (considera feriados)
+    ├── cache.js                         # Cache en memoria con TTL (Map + sentinel undefined)
     ├── creditCalculator.js
+    ├── cronLogger.js                    # Helper para registrar ejecuciones de cron en BD
     ├── date.js                          # localDate() con timezone Argentina
+    ├── installmentSql.js                # Helpers SQL para cuotas
     ├── jwt.js
     ├── response.js
     ├── tempPassword.js
@@ -80,59 +94,81 @@ src/
 Request → Router → Controller → Service → Queries → PostgreSQL
 ```
 
+### Cache en memoria (`utils/cache.js`)
+
+Cache con TTL sin dependencias externas (no requiere Redis). Vive en el proceso Node.js.
+
+| TTL                 | Uso                               |
+| ------------------- | --------------------------------- |
+| `TTL.SHORT` (5 min) | `system_config`                   |
+| `TTL.LONG` (30 min) | `interest_rates`, `product_rates` |
+
+- `get(key)` devuelve `undefined` para miss (no `null` — `null` es un valor legítimo cacheado).
+- `invalidateByPrefix(prefix)` limpia todas las variantes de un mismo recurso.
+- Mutaciones invalidan el cache vía `invalidateByPrefix` antes de retornar.
+
 ---
 
 ## Roles
 
-| Rol | Descripción |
-|-----|-------------|
-| `ADMIN` | Acceso total. Aprueba operaciones, cierra caja, liquida comisiones. |
-| `SELLER` | Crea clientes y pre-operaciones. Ve sus propios créditos y comisiones. |
-| `COLLECTOR` | Registra cobros. Ve sus planillas y clientes asignados (sin ver domicilios). |
-| `SELLER_COLLECTOR` | Puede vender Y cobrar. Tiene sueldo fijo + comisiones. |
-| `CLIENT` | Acceso al portal público (cronograma de cuotas, deuda). |
+| Rol                | Descripción                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `ADMIN`            | Acceso total. Aprueba operaciones, cierra caja, liquida comisiones.          |
+| `SELLER`           | Crea clientes y pre-operaciones. Ve sus propios créditos y comisiones.       |
+| `COLLECTOR`        | Registra cobros. Ve sus planillas y clientes asignados (sin ver domicilios). |
+| `SELLER_COLLECTOR` | Puede vender Y cobrar. Tiene sueldo fijo + comisiones.                       |
+| `CLIENT`           | Acceso al portal público (cronograma de cuotas, deuda).                      |
 
 ---
 
-## Base de datos — 20 tablas
+## Base de datos
 
-| # | Tabla | Descripción |
-|---|-------|-------------|
-| 1 | `users` | Usuarios internos |
-| 2 | `customers` | Clientes del negocio |
-| 3 | `products` | Catálogo de productos |
-| 4 | `stock_movements` | Historial de stock |
-| 5 | `interest_rates` | Coeficientes para LOAN (por rango de monto) |
-| 6 | `product_rates` | Coeficientes para SALE (por producto + frecuencia + cuotas) |
-| 7 | `credits` | Créditos SALE y LOAN |
-| 8 | `credit_products` | Productos en ventas a crédito |
-| 9 | `installments` | Cuotas del cronograma |
-| 10 | `payments` | Pre-cargas de cobro (doble control) |
-| 11 | `credit_down_payments` | Enganches y cuotas prepagadas al aprobar (impactan en caja) |
-| 12 | `cash_registers` | Cierres de caja diarios |
-| 13 | `collection_sheets` | Planillas de cobro |
-| 14 | `collection_sheet_details` | Detalle de cuotas por planilla |
-| 15 | `token_blacklist` | Tokens JWT revocados |
-| 16 | `salaries` | Sueldos fijos semanales |
-| 17 | `commissions` | Comisiones por ventas SALE |
-| 18 | `commission_liquidations` | Liquidaciones semanales |
-| 19 | `expenses` | Gastos operativos del negocio |
-| 20 | `system_config` | Parámetros configurables |
+| #   | Tabla                      | Descripción                                                 |
+| --- | -------------------------- | ----------------------------------------------------------- |
+| 1   | `users`                    | Usuarios internos                                           |
+| 2   | `customers`                | Clientes del negocio                                        |
+| 3   | `products`                 | Catálogo de productos                                       |
+| 4   | `product_brands`           | Marcas de producto                                          |
+| 5   | `product_categories`       | Categorías de producto                                      |
+| 6   | `product_variants`         | Variantes por producto                                      |
+| 7   | `product_units`            | Unidades físicas individuales                               |
+| 8   | `stock_movements`          | Historial de stock                                          |
+| 9   | `interest_rates`           | Coeficientes para LOAN (por rango de monto)                 |
+| 10  | `product_rates`            | Coeficientes para SALE (por producto + frecuencia + cuotas) |
+| 11  | `credits`                  | Créditos SALE y LOAN                                        |
+| 12  | `credit_products`          | Productos en ventas a crédito                               |
+| 13  | `installments`             | Cuotas del cronograma                                       |
+| 14  | `payments`                 | Pre-cargas de cobro (doble control)                         |
+| 15  | `credit_down_payments`     | Enganches y cuotas prepagadas al aprobar (impactan en caja) |
+| 16  | `cash_registers`           | Cierres de caja diarios                                     |
+| 17  | `collection_sheets`        | Planillas de cobro                                          |
+| 18  | `collection_sheet_details` | Detalle de cuotas por planilla                              |
+| 19  | `collection_attempts`      | Intentos de cobro registrados por el cobrador               |
+| 20  | `token_blacklist`          | Tokens JWT revocados                                        |
+| 21  | `salaries`                 | Sueldos fijos semanales                                     |
+| 22  | `commissions`              | Comisiones por ventas SALE                                  |
+| 23  | `commission_liquidations`  | Liquidaciones semanales                                     |
+| 24  | `expenses`                 | Gastos operativos del negocio                               |
+| 25  | `expense_categories`       | Categorías de gastos                                        |
+| 26  | `system_config`            | Parámetros configurables                                    |
+| 27  | `holidays`                 | Feriados y días no hábiles                                  |
+| 28  | `cron_execution_log`       | Log de ejecuciones de cron jobs                             |
 
 ### Campos clave en `credits`
 
-| Campo | Tipo | Descripción |
-|-------|------|-------------|
-| `down_payment` | NUMERIC | Enganche entregado al crear la venta |
-| `down_payment_method` | VARCHAR | CASH o TRANSFER |
-| `down_payment_transfer_reference` | VARCHAR | Referencia si fue transferencia |
-| `prepaid_installments` | SMALLINT | Cuotas pagadas por adelantado al momento de la venta |
-| `prepaid_installments_method` | VARCHAR | CASH o TRANSFER |
-| `interest_rate` | NUMERIC | Coeficiente LOAN (NULL para SALE) |
+| Campo                             | Tipo     | Descripción                                          |
+| --------------------------------- | -------- | ---------------------------------------------------- |
+| `down_payment`                    | NUMERIC  | Enganche entregado al crear la venta                 |
+| `down_payment_method`             | VARCHAR  | CASH o TRANSFER                                      |
+| `down_payment_transfer_reference` | VARCHAR  | Referencia si fue transferencia                      |
+| `prepaid_installments`            | SMALLINT | Cuotas pagadas por adelantado al momento de la venta |
+| `prepaid_installments_method`     | VARCHAR  | CASH o TRANSFER                                      |
+| `interest_rate`                   | NUMERIC  | Coeficiente LOAN (NULL para SALE)                    |
 
 ### `credit_down_payments` — separado de `payments`
 
 Los enganches y las cuotas prepagadas **no van a la tabla `payments`** (que es solo para el flujo de doble control del cobrador). Van a `credit_down_payments` con `payment_type`:
+
 - `DOWN_PAYMENT` — enganche al crear la venta
 - `PREPAID_INSTALLMENT` — cuotas adelantadas al crear la venta
 
@@ -199,20 +235,30 @@ JWT_EXPIRY_PORTAL=30m
 
 ALLOWED_ORIGINS=http://localhost:4200
 BCRYPT_SALT_ROUNDS=10
+
+DISABLE_LOGIN_RATE_LIMIT=false   # Poner true en entorno e2e
 ```
 
 > `JWT_EXPIRY_INTERNAL` y `JWT_EXPIRY_PORTAL` son valores por defecto. Los valores reales se leen dinámicamente de `system_config` en cada login.
 
 ### Scripts npm
 
-| Comando | Descripción |
-|---|---|
-| `npm run db:setup` | Primer setup: crea la BD si no existe + migraciones + seed |
-| `npm run db:reset` | ⚠️ Reset total: borra todo, recrea, migra y seedea |
-| `npm run migration:run` | Solo aplica migraciones nuevas (no destructivo) |
-| `npm run seed` | Solo ejecuta el seed (raramente necesario por separado) |
-| `npm run dev` | Servidor en modo desarrollo con hot reload |
-| `npm start` | Servidor en modo producción |
+| Comando                    | Descripción                                                |
+| -------------------------- | ---------------------------------------------------------- |
+| `npm run db:setup`         | Primer setup: crea la BD si no existe + migraciones + seed |
+| `npm run db:reset`         | ⚠️ Reset total: borra todo, recrea, migra y seedea         |
+| `npm run migration:run`    | Solo aplica migraciones nuevas (no destructivo)            |
+| `npm run seed`             | Solo ejecuta el seed                                       |
+| `npm run dev`              | Servidor en modo desarrollo con hot reload                 |
+| `npm run dev:e2e`          | Servidor sin rate limit en login (para tests e2e)          |
+| `npm start`                | Servidor en modo producción                                |
+| `npm run test:unit`        | Tests unitarios con Jest (mock de BD)                      |
+| `npm run test:integration` | Tests de integración con BD real (Docker)                  |
+| `npm run test:all`         | Unit + integration en secuencia                            |
+| `npm run test:db:up`       | Levanta BD PostgreSQL de test en Docker                    |
+| `npm run test:db:down`     | Baja y elimina el contenedor de test                       |
+| `npm run cron:run`         | Ejecuta un cron job manualmente                            |
+| `npm run db:studio`        | Explorador de BD liviano en consola                        |
 
 ### Migration runner
 
@@ -229,14 +275,15 @@ Contraseña: Admin1234
 
 ---
 
-## Entornos paralelos
+## Tests
 
-| | Producción | Pruebas |
-|---|---|---|
-| BD | `gestion_creditos` | `gestion_creditos_test` |
-| Puerto | 3000 | 3001 |
-| Comando | `npm run dev` | `npm run dev:test` |
-| Semillas | `npm run seed` | `npm run seed:test` |
+### Unitarios (`test:unit`)
+
+Usan Jest con mocks de `../../config/db`. Cada suite hace `cache.clearAll()` en `beforeEach` para aislar el estado en memoria. Archivos `.test.js` junto al módulo que prueban.
+
+### Integración (`test:integration`)
+
+Corren contra una BD PostgreSQL real levantada en Docker (`docker-compose.test.yml`). Requieren `npm run test:db:up` antes de ejecutarlos. Usan `supertest` sobre la app Express completa.
 
 ---
 
@@ -290,6 +337,48 @@ PATCH  /api/products/:id/stock
 PATCH  /api/products/:id/deactivate | activate
 ```
 
+### Marcas de producto
+
+```
+GET    /api/product-brands                 → ADMIN, SELLER, SELLER_COLLECTOR
+GET    /api/product-brands/:id
+POST   /api/product-brands                 → ADMIN
+PUT    /api/product-brands/:id             → ADMIN
+PATCH  /api/product-brands/:id/deactivate  → ADMIN
+PATCH  /api/product-brands/:id/activate    → ADMIN
+```
+
+### Categorías de producto
+
+```
+GET    /api/product-categories             → ADMIN, SELLER, SELLER_COLLECTOR
+POST   /api/product-categories             → ADMIN
+PUT    /api/product-categories/:id         → ADMIN
+PATCH  /api/product-categories/:id/deactivate | activate → ADMIN
+```
+
+### Variantes de producto
+
+```
+GET    /api/product-variants?product_id=uuid&status=ACTIVE   → ADMIN, SELLER, SELLER_COLLECTOR
+GET    /api/product-variants/:id
+POST   /api/product-variants               → ADMIN
+POST   /api/product-variants/bulk          → ADMIN (creación masiva)
+PUT    /api/product-variants/:id           → ADMIN
+PATCH  /api/product-variants/:id/deactivate | activate → ADMIN
+```
+
+### Unidades de producto
+
+```
+GET    /api/product-units?variant_id=uuid&product_id=uuid&status=AVAILABLE   → ADMIN, SELLER, SELLER_COLLECTOR
+GET    /api/product-units/:id
+POST   /api/product-units                  → ADMIN
+POST   /api/product-units/bulk             → ADMIN (creación masiva)
+PATCH  /api/product-units/:id              → ADMIN (actualiza unit_code / notes)
+PATCH  /api/product-units/:id/deactivate | activate → ADMIN
+```
+
 ### Tasas por producto
 
 ```
@@ -324,6 +413,7 @@ PATCH  /api/credits/:id/early-settlement
 ```
 
 **Body crear SALE:**
+
 ```json
 {
   "customer_id": "uuid",
@@ -340,6 +430,7 @@ PATCH  /api/credits/:id/early-settlement
 ```
 
 **Body cotizador SALE:**
+
 ```json
 {
   "type": "SALE",
@@ -382,6 +473,15 @@ GET    /api/collections/:id
 POST   /api/collections
 ```
 
+### Intentos de cobro
+
+```
+GET    /api/collection-attempts?collector_id=uuid&installment_id=uuid   → ADMIN, COLLECTOR, SELLER_COLLECTOR
+GET    /api/collection-attempts/:id
+POST   /api/collection-attempts        → Registra intento (con resultado, notas, etc.)
+PATCH  /api/collection-attempts/:id/void → Anula un intento
+```
+
 ### Comisiones
 
 ```
@@ -398,11 +498,30 @@ PUT    /api/commissions/salary/:userId
 ```
 GET    /api/expenses                  → Listado paginado con filtro por fecha
 GET    /api/expenses/:id
-POST   /api/expenses                  → Body: amount, description, payment_method
+POST   /api/expenses                  → Body: amount, description, payment_method, category_id
 DELETE /api/expenses/:id              → Solo si no está en un cierre de caja
 ```
 
-Los gastos aparecen como egreso en el dashboard y en el cierre de caja del día en que se registran.
+### Categorías de gastos
+
+```
+GET    /api/expense-categories        → ADMIN
+POST   /api/expense-categories        → ADMIN
+PATCH  /api/expense-categories/:id/activate | deactivate → ADMIN
+```
+
+### Feriados
+
+```
+GET    /api/holidays?type=NATIONAL&active=true&affects_due_dates=true   → ADMIN
+GET    /api/holidays/:id              → ADMIN
+POST   /api/holidays                  → ADMIN
+POST   /api/holidays/duplicate-year/preview → Vista previa de duplicación anual
+POST   /api/holidays/duplicate-year         → Duplica feriados al año siguiente
+PUT    /api/holidays/:id              → ADMIN
+```
+
+Tipos válidos: `EXTRAORDINARY`, `NATIONAL`, `LOCAL`, `BANKING`.
 
 ### Caja diaria
 
@@ -416,6 +535,7 @@ POST   /api/cash-register/close       → Body: declared_cash, observations, for
 El campo `force: true` permite cerrar aunque haya pre-cargas PENDING del día. Sin `force`, el sistema avisa cuántas pre-cargas quedan pendientes.
 
 El dashboard incluye:
+
 - Cobros aprobados (payments APPROVED)
 - Enganches y cuotas prepagadas (credit_down_payments)
 - Gastos del día (expenses)
@@ -434,7 +554,6 @@ GET    /api/reports/upcoming?days=30
 GET    /api/reports/summary
 ```
 
-**Nuevos:**
 - `summary` — resumen ejecutivo del día actual en una sola query
 - `upcoming` — vencimientos próximos por día y por cliente
 - `products` — incluye `low_stock`, `active_rates_count` y desglose de tasas configuradas
@@ -521,12 +640,15 @@ El cierre vincula automáticamente las liquidaciones del día como egresos.
 
 ## Cron jobs
 
-| Job | Horario | Acción |
-|-----|---------|--------|
-| `overdueInstallments` | `0 2 * * *` | PENDING → OVERDUE + mora diaria |
-| `creditExpiry` | `0 3 * * *` | Expira créditos en PENDING_APPROVAL |
+| Job                     | Horario                | Acción                                   |
+| ----------------------- | ---------------------- | ---------------------------------------- |
+| `overdueInstallments`   | `0 2 * * *`            | PENDING → OVERDUE + mora diaria          |
+| `creditExpiry`          | `0 3 * * *`            | Expira créditos en PENDING_APPROVAL      |
 | `weeklyCommissionCycle` | `59 23 * * {closeDay}` | Log de cierre semanal (día configurable) |
-| `tokenCleanup` | `0 4 * * *` | Elimina tokens expirados de blacklist |
+| `tokenCleanup`          | `0 4 * * *`            | Elimina tokens expirados de blacklist    |
+
+Cada ejecución queda registrada en `cron_execution_log` (estado, duración, error si hubo).  
+`npm run cron:run` permite disparar un job manualmente en desarrollo.
 
 ---
 
@@ -535,6 +657,7 @@ El cierre vincula automáticamente las liquidaciones del día como egresos.
 - **JWT doble secreto:** `sistema-interno` y `portal-cliente`. Un token no funciona en el otro sistema.
 - **Blacklist:** tokens revocados en `token_blacklist`. El cron job los limpia automáticamente.
 - **Bloqueo por intentos:** configurable en `system_config.login_max_attempts` (default 3).
+- **Rate limit:** `express-rate-limit` en los endpoints de login. Desactivable con `DISABLE_LOGIN_RATE_LIMIT=true` para entornos e2e.
 - **Contraseña temporal:** `is_temp_password = true` bloquea todos los endpoints salvo `/me/change-password`.
 - **Invalidación por rol:** `force_relogin_at` invalida tokens emitidos antes del cambio de rol.
 - **Expiración dinámica:** el tiempo de expiración del JWT se lee de `system_config` en cada login.
@@ -548,14 +671,14 @@ El cierre vincula automáticamente las liquidaciones del día como egresos.
 { "ok": false, "message": "Error", "errors": [{ "field": "x", "message": "y" }] }
 ```
 
-| HTTP | Uso |
-|------|-----|
-| 200 | Éxito |
-| 201 | Creación |
-| 400 | Validación |
-| 401 | No autenticado |
-| 403 | Sin permisos |
-| 404 | No encontrado |
-| 409 | Conflicto de negocio |
-| 422 | Monto supera saldo disponible |
-| 500 | Error interno |
+| HTTP | Uso                           |
+| ---- | ----------------------------- |
+| 200  | Éxito                         |
+| 201  | Creación                      |
+| 400  | Validación                    |
+| 401  | No autenticado                |
+| 403  | Sin permisos                  |
+| 404  | No encontrado                 |
+| 409  | Conflicto de negocio          |
+| 422  | Monto supera saldo disponible |
+| 500  | Error interno                 |

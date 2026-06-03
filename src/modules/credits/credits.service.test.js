@@ -36,6 +36,11 @@ jest.mock('../cashRegister/cashRegister.queries', () => ({
   findUnclosedJornadaDate: jest.fn().mockResolvedValue(null),
 }));
 
+jest.mock('../businessDays/businessDays.queries', () => ({
+  findDefaultBranch: jest.fn(),
+  findActiveJornadaDate: jest.fn(),
+}));
+
 jest.mock('../../utils/businessDay', () => {
   const actual = jest.requireActual('../../utils/businessDay');
   return {
@@ -51,6 +56,7 @@ const prQueries = require('../productRates/productRates.queries');
 const puQueries = require('../productUnits/productUnits.queries');
 const { getValue } = require('../systemConfig/systemConfig.queries');
 const { withTransaction } = require('../../utils/transaction');
+const businessDaysQueries = require('../businessDays/businessDays.queries');
 const { getActiveHolidayKeysInRange } = require('../../utils/businessDay');
 const service = require('./credits.service');
 
@@ -71,6 +77,8 @@ describe('credits.service holiday integration', () => {
     withTransaction.mockImplementation(async (callback) => callback(client));
     getActiveHolidayKeysInRange.mockResolvedValue(new Set(['2026-05-01']));
     getValue.mockResolvedValue('0.08');
+    businessDaysQueries.findDefaultBranch.mockResolvedValue({ id: 'branch-hq' });
+    businessDaysQueries.findActiveJornadaDate.mockResolvedValue('2026-04-24');
   });
 
   afterEach(() => {
