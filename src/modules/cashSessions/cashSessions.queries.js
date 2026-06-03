@@ -142,6 +142,31 @@ const lockActiveSessionByBusinessDay = async (client, businessDayId) => {
 };
 
 /**
+ * V4: lock de la caja activa de la jornada actual (sucursal default + jornada
+ * no terminal más reciente).
+ *
+ * Helper de conveniencia para los services que imputan movimientos a "la caja
+ * operativa del momento" sin necesidad de saber sucursal ni id de jornada.
+ *
+ * Devuelve la caja OPEN bajo FOR UPDATE, o null si:
+ *   · no hay sucursal default configurada (caso patológico),
+ *   · no hay jornada activa (todas CLOSED/AUDITED, o ninguna creada),
+ *   · no hay caja OPEN en la jornada activa.
+ *
+ * El caller debe lanzar 409 NO_ACTIVE_SESSION si devuelve null.
+ *
+ * @param {import('pg').PoolClient} client - cliente con tx activa.
+ */
+const lockActiveSessionForCurrentJornada = async (client) => {
+  const bdQueries = require('../businessDays/businessDays.queries');
+  const branch = await bdQueries.findDefaultBranch(client);
+  if (!branch) return null;
+  const businessDay = await bdQueries.findActiveBusinessDay(branch.id, client);
+  if (!businessDay) return null;
+  return lockActiveSessionByBusinessDay(client, businessDay.id);
+};
+
+/**
  * Lock + read de la sesión para evitar transiciones concurrentes.
  */
 const lockAndGetById = async (client, id) => {
@@ -476,6 +501,7 @@ module.exports = {
   lockOpenSessionForUser,       // @deprecated V4
   findActiveSessionByBusinessDay,
   lockActiveSessionByBusinessDay,
+  lockActiveSessionForCurrentJornada,
   findById,
   findByIdWithDetails,
   lockAndGetById,

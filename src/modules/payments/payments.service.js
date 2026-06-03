@@ -337,21 +337,9 @@ const approve = async (id, adminId) => {
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
   await withTransaction(async (client) => {
-    // V4: resolver la caja activa de la jornada bajo lock. Si no hay caja
-    // operativa abierta, no se puede aprobar — el dinero no tiene dónde
-    // imputarse. Devuelve 409 NO_ACTIVE_SESSION.
-    const businessDayQ = require('../businessDays/businessDays.queries');
-    const branch = await businessDayQ.findDefaultBranch(client);
-    const activeJornadaDate = await businessDayQ.findActiveJornadaDate(branch.id, client);
-    const businessDay = activeJornadaDate
-      ? await client.query(
-          `SELECT id FROM business_days WHERE business_date=$1::date AND branch_id=$2 LIMIT 1`,
-          [activeJornadaDate, branch.id],
-        ).then(r => r.rows[0])
-      : null;
-    const activeSession = businessDay
-      ? await cashSessionsQueries.lockActiveSessionByBusinessDay(client, businessDay.id)
-      : null;
+    // V4: resolver la caja activa de la jornada actual bajo lock. Si no hay
+    // caja operativa abierta, el dinero no tiene dónde imputarse → 409.
+    const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
     if (!activeSession) {
       throw {
         status: 409,
@@ -461,11 +449,8 @@ const adminDirect = async (data, adminId) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
 
-  // Pre-check amistoso (mensaje claro temprano). La validación bajo lock se
-  // hace dentro de la tx para cerrar la ventana TOCTOU (IMP-2).
-  const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
-  if (!adminSessionPreCheck)
-    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
+  // V4.3: la caja activa se resuelve bajo lock dentro de la tx vía
+  // lockActiveSessionForCurrentJornada (no más por owner).
 
   // Días de gracia para el recálculo de status post-aplicación del pago
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
@@ -498,10 +483,14 @@ const adminDirect = async (data, adminId) => {
 
   let newPaymentId;
   await withTransaction(async (client) => {
-    // IMP-2: re-validar caja OPEN bajo lock dentro de la tx.
-    const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
-    if (!adminSession)
-      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un cobro directo.' };
+    // V4.3: imputar a la caja activa de la jornada (no al admin).
+    const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession)
+      throw {
+        status: 409,
+        message: 'No hay caja operativa abierta. Abrí una caja para registrar un cobro directo.',
+        code: 'NO_ACTIVE_SESSION',
+      };
 
     // Lock sobre la cuota principal
     const lockedInst = await queries.lockAndGetInstallment(client, data.installment_id);
@@ -515,7 +504,7 @@ const adminDirect = async (data, adminId) => {
       paymentMethod:     data.payment_method,
       transferReference: data.transfer_reference,
       notes:             data.notes,
-      cashSessionId:     adminSession.id,
+      cashSessionId:     activeSession.id,
     });
     newPaymentId = created.id;
 
@@ -568,17 +557,18 @@ const reverse = async (id, reason, adminId) => {
   // Días de gracia para el recálculo de status tras restaurar amount_paid
   const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
 
-  // Pre-check amistoso (mensaje claro temprano). Re-validación bajo lock
-  // dentro de la tx (IMP-2). La reversión se imputa a la caja OPEN del admin
-  // que revierte, no al cash_session_id del payment original (probablemente CLOSED).
-  const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
-  if (!adminSessionPreCheck)
-    throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
+  // V4.3: la reversión se imputa a la CAJA ACTIVA de la jornada (no a la del
+  // admin que revierte, ni al cash_session_id del payment original que
+  // probablemente esté CLOSED). Si no hay caja activa → 409.
 
   await withTransaction(async (client) => {
-    const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
-    if (!adminSession)
-      throw { status: 409, message: 'Tenés que abrir una caja antes de revertir un cobro.' };
+    const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession)
+      throw {
+        status: 409,
+        message: 'No hay caja operativa abierta. Abrí una caja para revertir cobros.',
+        code: 'NO_ACTIVE_SESSION',
+      };
 
     const payment = await queries.lockAndGetPayment(client, id);
     if (!payment)               throw { status: 404, message: 'Cobro no encontrado.' };
@@ -621,7 +611,7 @@ const reverse = async (id, reason, adminId) => {
         paymentMethod:     p.payment_method,
         transferReference: p.transfer_reference,
         reason,
-        cashSessionId:     adminSession.id,
+        cashSessionId:     activeSession.id,
         originalPaymentId: p.id,
       });
 

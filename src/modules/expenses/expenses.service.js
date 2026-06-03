@@ -29,18 +29,19 @@ const create = async (data, requestingUser) => {
     const category = await queries.findActiveCategoryById(data.category_id);
     if (!category) throw { status: 422, message: 'La categoría seleccionada no existe o está inactiva.' };
   }
-  // Pre-check amistoso + re-validación bajo lock en la tx (IMP-2).
-  const sessionPreCheck = await cashSessionsQueries.findOpenByOwner(requestingUser.id);
-  if (!sessionPreCheck)
-    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un gasto.' };
 
   const registerDate = await getActiveJornadaDate();
 
   const { withTransaction } = require('../../utils/transaction');
   return withTransaction(async (client) => {
-    const session = await cashSessionsQueries.lockOpenSessionForUser(client, requestingUser.id);
-    if (!session)
-      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar un gasto.' };
+    // V4.3: imputar a la caja activa de la jornada (no a la caja del admin).
+    const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession)
+      throw {
+        status: 409,
+        message: 'No hay caja operativa abierta. Abrí una caja para registrar gastos.',
+        code: 'NO_ACTIVE_SESSION',
+      };
 
     const duplicate = await queries.findRecentDuplicate({
       amount:      parseFloat(data.amount),
@@ -59,7 +60,7 @@ const create = async (data, requestingUser) => {
       categoryId:        data.category_id || null,
       createdBy:         requestingUser.id,
       registerDate,
-      cashSessionId:     session.id,
+      cashSessionId:     activeSession.id,
     }, client);
   });
 };

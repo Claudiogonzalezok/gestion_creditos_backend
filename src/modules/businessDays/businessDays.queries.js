@@ -195,6 +195,27 @@ const findActiveJornadaDate = async (branchId, db = pool) => {
 };
 
 /**
+ * V4.3: devuelve la jornada activa más reciente de la sucursal (status no
+ * terminal: OPEN o READY_TO_CLOSE). Pensado para que los services resuelvan
+ * "¿qué business_day debe recibir este movimiento?" sin tener que armar el
+ * cálculo a mano.
+ *
+ * Devuelve null si no hay jornada activa.
+ */
+const findActiveBusinessDay = async (branchId, db = pool) => {
+  const r = await db.query(
+    `SELECT id, business_date, branch_id, status
+     FROM business_days
+     WHERE branch_id = $1
+       AND status IN ('OPEN','READY_TO_CLOSE')
+     ORDER BY business_date DESC
+     LIMIT 1`,
+    [branchId],
+  );
+  return r.rows[0] || null;
+};
+
+/**
  * IMP-1: chequea si la jornada de (date, branchId) está en estado mutable
  * (OPEN o READY_TO_CLOSE). Reemplaza a cashRegisterQueries.findByDate como
  * autoridad para validar si un movimiento puede afectar esa fecha.
@@ -244,5 +265,6 @@ module.exports = {
   audit,
   findAll,
   findActiveJornadaDate,
+  findActiveBusinessDay,
   isJornadaMutable,
 };

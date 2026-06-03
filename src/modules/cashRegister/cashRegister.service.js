@@ -166,10 +166,6 @@ const createConversion = async (data, adminId) => {
     throw { status: 409, message: `La caja del ${registerDate} ya está cerrada. No se pueden registrar conversiones.` };
 
   const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
-  // IMP-2: pre-check + re-validación bajo lock dentro de la tx.
-  const sessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
-  if (!sessionPreCheck)
-    throw { status: 409, message: 'Tenés que abrir una caja antes de registrar una conversión.' };
 
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
@@ -181,10 +177,15 @@ const createConversion = async (data, adminId) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const session = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
-    if (!session) {
+    // V4.3: la conversión se imputa a la caja activa de la jornada (no del admin).
+    const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession) {
       await client.query('ROLLBACK');
-      throw { status: 409, message: 'Tenés que abrir una caja antes de registrar una conversión.' };
+      throw {
+        status: 409,
+        message: 'No hay caja operativa abierta. Abrí una caja para registrar conversiones.',
+        code: 'NO_ACTIVE_SESSION',
+      };
     }
     const conversion = await queries.createConversion(client, {
       registerDate,
@@ -193,7 +194,7 @@ const createConversion = async (data, adminId) => {
       targetMethod,
       amount,
       notes: data.notes,
-      cashSessionId: session.id,
+      cashSessionId: activeSession.id,
       createdBy: adminId,
     });
     await client.query('COMMIT');
