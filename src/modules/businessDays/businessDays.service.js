@@ -13,6 +13,30 @@ const getById = async (id) => {
 const getAll = async (filters) => queries.findAll(filters);
 
 /**
+ * V4: devuelve la jornada activa (status OPEN o READY_TO_CLOSE) más reciente de
+ * la sucursal default, junto con conteos de cajas por estado y datos del día.
+ *
+ * Pensado como endpoint de conveniencia para el frontend que necesita resolver
+ * "¿en qué jornada estamos operando?" en una sola request, sin tener que listar
+ * + filtrar por status. Devuelve null si no hay jornada activa (sucursal sin
+ * jornada abierta hoy).
+ *
+ * @param {string} [branchId] - opcional; si no se pasa, usa la sucursal default.
+ */
+const getActive = async (branchId) => {
+  let resolvedBranchId = branchId;
+  if (!resolvedBranchId) {
+    const def = await queries.findDefaultBranch();
+    if (!def) return null;
+    resolvedBranchId = def.id;
+  }
+  const day = await queries.findActiveBusinessDay(resolvedBranchId);
+  if (!day) return null;
+  const counts = await queries.countSessionsByStatus(day.id);
+  return { ...day, session_counts: counts };
+};
+
+/**
  * Cierra una jornada (status READY_TO_CLOSE → CLOSED). Manual: requiere
  * supervisor. La transición automática a READY_TO_CLOSE se hace cuando todas
  * las cajas pasan a CLOSED — ver businessDays.queries.maybeTransitionToReadyToClose.
@@ -91,4 +115,4 @@ const audit = async (id, data, requestingUser) => {
   return queries.findById(id);
 };
 
-module.exports = { getById, getAll, close, forceClose, audit };
+module.exports = { getById, getAll, getActive, close, forceClose, audit };

@@ -160,7 +160,7 @@ describe('H — Hook management_status (planilla del día)', () => {
   describe('payments.create', () => {
     it('crear pre-carga (PENDING) → planilla queda en VISITED', async () => {
       const { collector, inst, sheet } = await seedScenarioWithSheet();
-      await openSessionFor(collector);
+      // V4: pre-carga no requiere caja.
 
       await paymentsService.create(
         {
@@ -181,7 +181,7 @@ describe('H — Hook management_status (planilla del día)', () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet({
         amountDue: 1000,
       });
-      await openSessionFor(collector);
+      // V4: el cobrador NO opera caja; solo el admin (caja operativa por jornada).
       await openSessionFor(admin);
 
       const payment = await paymentsService.create(
@@ -204,7 +204,7 @@ describe('H — Hook management_status (planilla del día)', () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet({
         amountDue: 1000,
       });
-      await openSessionFor(collector);
+      // V4: el cobrador NO opera caja; solo el admin (caja operativa por jornada).
       await openSessionFor(admin);
 
       const payment = await paymentsService.create(
@@ -228,7 +228,7 @@ describe('H — Hook management_status (planilla del día)', () => {
       const { admin, collector, inst, sheet } = await seedScenarioWithSheet({
         amountDue: 1000,
       });
-      await openSessionFor(collector);
+      // V4: el cobrador NO opera caja; solo el admin (caja operativa por jornada).
       await openSessionFor(admin);
 
       const payment = await paymentsService.create(

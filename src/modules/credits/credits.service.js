@@ -594,25 +594,22 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
   const registerDate = await getActiveJornadaDate();
 
-  // Si el crédito implica un movimiento de caja (downPayment o prepaid), el
-  // admin que aprueba debe tener caja OPEN para imputar ese ingreso.
-  // IMP-2: pre-check amistoso fuera de la tx + re-validación bajo lock adentro.
-  const needsAdminCashSession = downPayment > 0 || credit.prepaid_installments > 0;
-  if (needsAdminCashSession) {
-    const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
-    const adminSessionPreCheck = await cashSessionsQueries.findOpenByOwner(adminId);
-    if (!adminSessionPreCheck)
-      throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
-  }
+  // V4.3: si el crédito implica un movimiento de caja (downPayment o prepaid),
+  // se imputa a la CAJA ACTIVA de la jornada (no a la caja del admin).
+  const needsActiveSession = downPayment > 0 || credit.prepaid_installments > 0;
 
   await withTransaction(async (client) => {
-    let adminCashSessionId = null;
-    if (needsAdminCashSession) {
+    let activeCashSessionId = null;
+    if (needsActiveSession) {
       const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
-      const adminSession = await cashSessionsQueries.lockOpenSessionForUser(client, adminId);
-      if (!adminSession)
-        throw { status: 409, message: 'Tenés que abrir una caja antes de aprobar un crédito con enganche o cuotas adelantadas.' };
-      adminCashSessionId = adminSession.id;
+      const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+      if (!activeSession)
+        throw {
+          status: 409,
+          message: 'No hay caja operativa abierta. Abrí una caja para aprobar un crédito con enganche o cuotas adelantadas.',
+          code: 'NO_ACTIVE_SESSION',
+        };
+      activeCashSessionId = activeSession.id;
     }
 
     await queries.approve(client, id, adminId, null, installmentsCount);
@@ -636,7 +633,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         approvedBy:        adminId,
         paymentType:       'PREPAID_INSTALLMENT',
         registerDate,
-        cashSessionId:     adminCashSessionId,
+        cashSessionId:     activeCashSessionId,
       });
       // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
       // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
@@ -654,7 +651,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         transferReference: credit.down_payment_transfer_reference || null,
         approvedBy:        adminId,
         registerDate,
-        cashSessionId:     adminCashSessionId,
+        cashSessionId:     activeCashSessionId,
       });
     }
 

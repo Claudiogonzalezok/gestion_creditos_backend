@@ -3,29 +3,6 @@ const pool = require('../../config/db');
 // ── Cash sessions ───────────────────────────────────────────────────────────
 
 /**
- * Busca la caja OPEN del owner (solo una posible por la unique index parcial).
- * @param {string} ownerUserId
- * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
- */
-const findOpenByOwner = async (ownerUserId, db = pool) => {
-  const r = await db.query(
-    `SELECT id, business_day_id, owner_user_id, opened_at, opened_by,
-            opening_amount::float8 AS opening_amount,
-            status, closed_at, closed_by,
-            closure_snapshot,
-            closure_total_difference::float8 AS closure_total_difference,
-            closure_difference_status,
-            pending_reconciliation_at, pending_reconciliation_reason,
-            reconciled_at, reconciled_by, observations
-     FROM cash_sessions
-     WHERE owner_user_id = $1 AND status = 'OPEN'
-     LIMIT 1`,
-    [ownerUserId],
-  );
-  return r.rows[0] || null;
-};
-
-/**
  * Lookup por id, sin joins. Para detalle completo usar findByIdWithDetails.
  */
 const findById = async (id, db = pool) => {
@@ -61,25 +38,78 @@ const findByIdWithDetails = async (id) => {
   };
 };
 
+// ── V4: caja operativa por jornada (autoridad única) ──────────────────────
+
 /**
- * Lock + read de la caja OPEN del owner dentro de una transacción. Cierra la
- * ventana TOCTOU entre el lookup amistoso (findOpenByOwner desde pool) y el
- * INSERT del movimiento: si otra request transicionó la caja a PENDING o
- * CLOSED entre ambos pasos, este lookup la NO retorna y el caller falla con
- * 409 sin haber imputado nada.
+ * V4: devuelve la caja operativa activa de una jornada.
  *
- * Devuelve la sesión OPEN bajo lock, o null si no existe.
+ * En el modelo V4 la unicidad es por business_day_id (índice único parcial
+ * `one_open_session_per_business_day_idx` creado en migración 027). Por lo
+ * tanto, este query devuelve a lo sumo una fila.
+ *
+ * @param {string} businessDayId
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
  */
-const lockOpenSessionForUser = async (client, ownerUserId) => {
+const findActiveSessionByBusinessDay = async (businessDayId, db = pool) => {
+  const r = await db.query(
+    `SELECT id, business_day_id, owner_user_id, opened_at, opened_by,
+            opening_amount::float8 AS opening_amount, status
+     FROM cash_sessions
+     WHERE business_day_id = $1 AND status = 'OPEN'
+     LIMIT 1`,
+    [businessDayId],
+  );
+  return r.rows[0] || null;
+};
+
+/**
+ * V4: lock + read de la caja activa de una jornada dentro de una tx.
+ *
+ * Equivalente transaccional de `findActiveSessionByBusinessDay`. Sirve para
+ * que los flujos de aprobación/gasto/conversión imputen el movimiento bajo
+ * lock y eviten la race "otra request cerró la caja mientras imputaba".
+ *
+ * Devuelve la caja OPEN bajo `FOR UPDATE`, o null si no hay caja activa en
+ * la jornada (en cuyo caso el caller debe lanzar 409 NO_ACTIVE_SESSION).
+ *
+ * @param {import('pg').PoolClient} client - cliente con tx activa.
+ * @param {string} businessDayId
+ */
+const lockActiveSessionByBusinessDay = async (client, businessDayId) => {
   const r = await client.query(
     `SELECT id, business_day_id, owner_user_id,
             opening_amount::float8 AS opening_amount, status
      FROM cash_sessions
-     WHERE owner_user_id = $1 AND status = 'OPEN'
+     WHERE business_day_id = $1 AND status = 'OPEN'
      FOR UPDATE`,
-    [ownerUserId],
+    [businessDayId],
   );
   return r.rows[0] || null;
+};
+
+/**
+ * V4: lock de la caja activa de la jornada actual (sucursal default + jornada
+ * no terminal más reciente).
+ *
+ * Helper de conveniencia para los services que imputan movimientos a "la caja
+ * operativa del momento" sin necesidad de saber sucursal ni id de jornada.
+ *
+ * Devuelve la caja OPEN bajo FOR UPDATE, o null si:
+ *   · no hay sucursal default configurada (caso patológico),
+ *   · no hay jornada activa (todas CLOSED/AUDITED, o ninguna creada),
+ *   · no hay caja OPEN en la jornada activa.
+ *
+ * El caller debe lanzar 409 NO_ACTIVE_SESSION si devuelve null.
+ *
+ * @param {import('pg').PoolClient} client - cliente con tx activa.
+ */
+const lockActiveSessionForCurrentJornada = async (client) => {
+  const bdQueries = require('../businessDays/businessDays.queries');
+  const branch = await bdQueries.findDefaultBranch(client);
+  if (!branch) return null;
+  const businessDay = await bdQueries.findActiveBusinessDay(branch.id, client);
+  if (!businessDay) return null;
+  return lockActiveSessionByBusinessDay(client, businessDay.id);
 };
 
 /**
@@ -107,16 +137,40 @@ const lockAndGetById = async (client, id) => {
  * @param {string} [filters.branchId]
  */
 const findAll = async (filters = {}) => {
+  // F2-0: `summary` agrega los totales del cierre (collections, expenses,
+  // drops, difference) en una sola estructura. Es objeto JSONB construido
+  // desde el closure_snapshot del cierre — los consumers NO tocan
+  // closure_snapshot directamente, así la API queda estable frente a la
+  // futura evolución del snapshot (v2) y la incorporación de nuevos
+  // métodos de pago/métricas.
+  //
+  // summary es NULL en sesiones OPEN o PENDING (sin snapshot aún).
   let q = `
     SELECT cs.id, cs.business_day_id, cs.owner_user_id, cs.opened_at, cs.opened_by,
            cs.opening_amount::float8 AS opening_amount,
-           cs.status, cs.closed_at, cs.closed_by,
+           cs.status, cs.shift_label,
+           cs.closed_at, cs.closed_by,
            cs.closure_total_difference::float8 AS closure_total_difference,
            cs.closure_difference_status,
            cs.pending_reconciliation_at, cs.pending_reconciliation_reason,
            cs.reconciled_at, cs.reconciled_by, cs.observations,
            bd.business_date, bd.branch_id,
-           u.full_name AS owner_name
+           u.full_name AS owner_name,
+           CASE WHEN cs.closure_snapshot IS NOT NULL THEN jsonb_build_object(
+             'collections',
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'transfer')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'transfer')::float8, 0),
+             'expenses',
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'transfer')::float8, 0),
+             'drops',
+               COALESCE((cs.closure_snapshot -> 'drops' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'drops' ->> 'transfer')::float8, 0),
+             'difference',
+               COALESCE(cs.closure_total_difference::float8, 0)
+           ) END AS summary
     FROM cash_sessions cs
     JOIN business_days bd ON bd.id = cs.business_day_id
     JOIN users u          ON u.id  = cs.owner_user_id
@@ -413,8 +467,9 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
 };
 
 module.exports = {
-  findOpenByOwner,
-  lockOpenSessionForUser,
+  findActiveSessionByBusinessDay,
+  lockActiveSessionByBusinessDay,
+  lockActiveSessionForCurrentJornada,
   findById,
   findByIdWithDetails,
   lockAndGetById,

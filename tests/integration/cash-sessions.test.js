@@ -51,13 +51,30 @@ describe('L — Cajas (cash_sessions)', () => {
       expect(s2.id).not.toBe(s1.id);
     });
 
-    it('dos cobradores pueden tener su propia caja OPEN en paralelo', async () => {
+    it('V4: dos cajas OPEN en paralelo en la misma jornada → 409 (una OPEN por jornada)', async () => {
       const u1 = await createUserFixture({ role: 'ADMIN' });
       const u2 = await createUserFixture({ role: 'ADMIN' });
+      await cashSessions.open({ opening_amount: 0 }, asUser(u1));
+      await expect(cashSessions.open({ opening_amount: 0 }, asUser(u2)))
+        .rejects.toMatchObject({ status: 409, code: 'ACTIVE_SESSION_IN_BUSINESS_DAY' });
+    });
+
+    it('V4: turnos múltiples secuenciales en la misma jornada', async () => {
+      // Caja A: usuario 1, abre y cierra.
+      const u1 = await createUserFixture({ role: 'ADMIN' });
       const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
+      await cashSessions.close(s1.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u1));
+
+      // Caja B: usuario 2, abre nueva caja DESPUÉS del cierre de A en la misma jornada.
+      const u2 = await createUserFixture({ role: 'ADMIN' });
       const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
-      expect(s1.id).not.toBe(s2.id);
-      expect(s1.business_day_id).toBe(s2.business_day_id); // misma jornada
+      expect(s2.business_day_id).toBe(s1.business_day_id);
+      expect(s2.id).not.toBe(s1.id);
+
+      // La jornada estaba en READY_TO_CLOSE tras cerrar s1; al abrir s2 vuelve a OPEN.
+      expect(s2.business_day.status).toBe('OPEN');
     });
   });
 

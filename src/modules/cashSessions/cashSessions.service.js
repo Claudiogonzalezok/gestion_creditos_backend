@@ -97,15 +97,30 @@ const resolveOrCreateBusinessDay = async (client, branchId) => {
 // ── Apertura ───────────────────────────────────────────────────────────────
 
 /**
- * Abre una caja para el owner (default: el usuario que ejecuta la acción).
- * Falla si ese owner ya tiene una caja OPEN (la unique index parcial blinda
- * además a nivel DB).
+ * V4.4: abre una caja operativa para la jornada.
+ *
+ * Reglas (V4 — directiva arquitectónica oficial):
+ *   1. owner_user_id deja de representar al "dueño del dinero" — pasa a ser
+ *      el cajero responsable del turno. El nombre del campo se conserva por
+ *      compat de schema; la semántica cambia.
+ *   2. Solo puede existir UNA caja OPEN simultáneamente por business_day
+ *      (independientemente del owner). Si ya hay otra OPEN en la jornada,
+ *      esta apertura falla con 409 ACTIVE_SESSION_IN_BUSINESS_DAY.
+ *   3. Si la jornada está en READY_TO_CLOSE (porque la caja anterior cerró
+ *      y todas estaban CLOSED), abrir una nueva caja la revierte a OPEN.
+ *      Esto permite jornadas multi-turno (8-12, 16-22, 23-04 etc.) sin
+ *      cerrar formalmente la jornada entre cajas.
+ *
+ * El invariante "una OPEN por jornada" será endurecido a nivel DB con la
+ * migración 027 (V4.5). Hasta entonces el chequeo a nivel service es la
+ * única protección.
  *
  * @param {object} data
  * @param {number} data.opening_amount
- * @param {string} [data.owner_user_id]
+ * @param {string} [data.owner_user_id]   (cajero del turno)
  * @param {string} [data.branch_id]
  * @param {string} [data.observations]
+ * @param {string} [data.shift_label]
  * @param {object} requestingUser
  */
 const open = async (data, requestingUser) => {
@@ -126,20 +141,33 @@ const open = async (data, requestingUser) => {
       branchId = def.id;
     }
 
-    // Bloqueo de "una OPEN por owner" — pre-chequeo amistoso + la unique index
-    // como cinturón de seguridad.
-    const open = await queries.findOpenByOwner(ownerUserId, client);
-    if (open) {
+    // Resolver o crear la jornada del día.
+    const businessDay = await resolveOrCreateBusinessDay(client, branchId);
+    if (['CLOSED', 'AUDITED'].includes(businessDay.status))
       throw {
         status: 409,
-        message: `El operador ya tiene una caja abierta (id ${open.id}). Cerrala o pasala a PENDING antes de abrir otra.`,
-        existing_session_id: open.id,
+        message: `La jornada del ${businessDay.business_date} ya está ${businessDay.status}. No se pueden abrir nuevas cajas.`,
+      };
+
+    // V4.4: unicidad por jornada (no por owner). Solo una OPEN simultánea
+    // por business_day. Si la jornada está en READY_TO_CLOSE, la revertimos
+    // a OPEN porque va a tener una caja activa nueva.
+    const existingActive = await queries.findActiveSessionByBusinessDay(
+      businessDay.id, client,
+    );
+    if (existingActive) {
+      throw {
+        status: 409,
+        message: `Ya hay una caja operativa abierta en la jornada (id ${existingActive.id}). Cerrala antes de abrir otra.`,
+        code: 'ACTIVE_SESSION_IN_BUSINESS_DAY',
+        existing_session_id: existingActive.id,
       };
     }
 
-    const businessDay = await resolveOrCreateBusinessDay(client, branchId);
-    if (['CLOSED', 'AUDITED'].includes(businessDay.status))
-      throw { status: 409, message: `La jornada del ${businessDay.business_date} ya está ${businessDay.status}. No se pueden abrir nuevas cajas.` };
+    if (businessDay.status === 'READY_TO_CLOSE') {
+      const reverted = await bdQueries.revertToOpen(client, businessDay.id);
+      if (reverted) businessDay.status = 'OPEN';
+    }
 
     try {
       const session = await queries.create(client, {
@@ -152,7 +180,14 @@ const open = async (data, requestingUser) => {
       return { ...session, business_day: businessDay };
     } catch (err) {
       if (err.code === '23505') {
-        throw { status: 409, message: 'Otra sesión OPEN del mismo owner fue creada en simultáneo. Reintentá.' };
+        // V4.5 (migración 027) reemplaza one_open_session_per_owner_idx por
+        // one_open_session_per_business_day_idx → este error pasa a indicar
+        // que otra request abrió la caja primero.
+        throw {
+          status: 409,
+          message: 'Otra caja operativa fue abierta en la jornada en simultáneo. Reintentá.',
+          code: 'ACTIVE_SESSION_IN_BUSINESS_DAY',
+        };
       }
       throw err;
     }
@@ -490,7 +525,24 @@ const reverseDrop = async (sessionId, dropId, data, requestingUser) => {
 
 // ── Listados / detalle ────────────────────────────────────────────────────
 
-const getActive = async (ownerUserId) => queries.findOpenByOwner(ownerUserId);
+/**
+ * V4: devuelve la caja operativa activa de la jornada actual (sucursal default).
+ *
+ * Reemplaza el concepto viejo "mi caja" (que en V4 ya no existe — los cobradores
+ * no tienen caja, y la caja es de la jornada no del usuario). El parámetro
+ * `_ownerUserId` se acepta por compat con callers viejos del controller pero
+ * se ignora: la caja activa es única por jornada.
+ *
+ * Devuelve null si no hay caja activa (jornada cerrada o sin abrir todavía).
+ */
+const getActive = async (/* _ownerUserId */) => {
+  const branch = await bdQueries.findDefaultBranch();
+  if (!branch) return null;
+  const businessDay = await bdQueries.findActiveBusinessDay(branch.id);
+  if (!businessDay) return null;
+  return queries.findActiveSessionByBusinessDay(businessDay.id);
+};
+
 const getById   = async (id) => {
   const s = await queries.findByIdWithDetails(id);
   if (!s) throw { status: 404, message: 'Caja no encontrada.' };

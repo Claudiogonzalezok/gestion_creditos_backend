@@ -1,6 +1,13 @@
-// Bloque N — Integración Fase 2 (movimientos ↔ caja)
+// Bloque N — Integración movimientos ↔ caja (post-V4.2)
+//
 // Verifica que el snapshot/totales de la caja reflejan los movimientos reales
 // imputados vía cash_session_id (payments, gastos, drops).
+//
+// V4.2 (este commit): la pre-carga del cobrador YA NO exige caja propia.
+//   `cash_session_id` del payment queda NULL al crear y se llena al aprobar.
+// V4.3 (próxima fase): aprobación pasará a imputar a la caja ACTIVA de la
+//   jornada en lugar de a la caja del admin que aprueba. Hasta entonces, los
+//   tests 3 y 4 validan el comportamiento intermedio (aprobación → caja del admin).
 
 const { pool, setupTestSuite } = require('./helpers/db');
 const {
@@ -37,20 +44,23 @@ const seedCollectorWithInstallment = async () => {
   return { collector, customer, credit, inst };
 };
 
-describe('N — Integración Fase 2: movimientos ↔ caja', () => {
-  it('payments.create exige caja OPEN del cobrador', async () => {
+describe('N — Integración movimientos ↔ caja (V4.2)', () => {
+  it('V4.2: payments.create NO exige caja del cobrador', async () => {
     const { collector, inst } = await seedCollectorWithInstallment();
-    await expect(paymentsService.create({
+    // El cobrador puede pre-cargar sin tener caja abierta (V4: cobradores
+    // no operan caja).
+    const payment = await paymentsService.create({
       installment_id:  inst.id,
       amount_received: 500,
       payment_method:  'CASH',
       next_visit_date: today(),
-    }, asUser(collector))).rejects.toMatchObject({ status: 409 });
+    }, asUser(collector));
+    expect(payment.id).toBeDefined();
+    expect(payment.status).toBe('PENDING');
   });
 
-  it('payment.create vincula cash_session_id a la caja OPEN del cobrador', async () => {
+  it('V4.2: payments.create deja cash_session_id en NULL (se llena al aprobar)', async () => {
     const { collector, inst } = await seedCollectorWithInstallment();
-    const session = await cashSessions.open({ opening_amount: 0 }, asUser(collector));
 
     const payment = await paymentsService.create({
       installment_id:  inst.id,
@@ -60,14 +70,16 @@ describe('N — Integración Fase 2: movimientos ↔ caja', () => {
     }, asUser(collector));
 
     const row = await pool.query(`SELECT cash_session_id FROM payments WHERE id = $1`, [payment.id]);
-    expect(row.rows[0].cash_session_id).toBe(session.id);
+    expect(row.rows[0].cash_session_id).toBeNull();
   });
 
-  it('snapshot/totales suman el pago APROBADO vinculado a la caja', async () => {
+  it('aprobación imputa el cobro a la caja activa de la jornada', async () => {
+    // V4: approve resuelve lockActiveSessionForCurrentJornada y le imputa
+    // el cobro. En este test el admin abre la única caja del día, así que
+    // la caja activa coincide con la del admin.
     const { collector, inst } = await seedCollectorWithInstallment();
-    const collectorSession = await cashSessions.open({ opening_amount: 100 }, asUser(collector));
     const admin = await createUserFixture({ role: 'ADMIN' });
-    await cashSessions.open({ opening_amount: 0 }, asUser(admin));
+    const adminSession = await cashSessions.open({ opening_amount: 0 }, asUser(admin));
 
     const payment = await paymentsService.create({
       installment_id:  inst.id,
@@ -76,19 +88,21 @@ describe('N — Integración Fase 2: movimientos ↔ caja', () => {
     }, asUser(collector));
     await paymentsService.approve(payment.id, admin.id);
 
-    const totals = await cashSessionsQueries.computeSessionTotals(collectorSession.id);
+    const row = await pool.query(`SELECT cash_session_id FROM payments WHERE id = $1`, [payment.id]);
+    expect(row.rows[0].cash_session_id).toBe(adminSession.id);
+
+    const totals = await cashSessionsQueries.computeSessionTotals(adminSession.id);
     expect(totals.collections_payments_cash).toBeCloseTo(1000, 2);
     expect(totals.collections_payments_transfer).toBe(0);
 
-    const snap = await cashSessions.snapshot(collectorSession.id);
-    expect(snap.expected.cash).toBeCloseTo(1100, 2);   // opening 100 + cobro 1000
+    const snap = await cashSessions.snapshot(adminSession.id);
+    expect(snap.expected.cash).toBeCloseTo(1000, 2);
   });
 
-  it('cierre persiste snapshot con el ingreso real del cobro', async () => {
+  it('cierre de la caja del admin persiste snapshot con el ingreso real del cobro aprobado', async () => {
     const { collector, inst } = await seedCollectorWithInstallment();
-    const cs = await cashSessions.open({ opening_amount: 0 }, asUser(collector));
     const admin = await createUserFixture({ role: 'ADMIN' });
-    await cashSessions.open({ opening_amount: 0 }, asUser(admin));
+    const adminSession = await cashSessions.open({ opening_amount: 0 }, asUser(admin));
 
     const payment = await paymentsService.create({
       installment_id:  inst.id,
@@ -97,12 +111,12 @@ describe('N — Integración Fase 2: movimientos ↔ caja', () => {
     }, asUser(collector));
     await paymentsService.approve(payment.id, admin.id);
 
-    const closed = await cashSessions.close(cs.id, {
+    const closed = await cashSessions.close(adminSession.id, {
       declared: [
         { payment_method: 'CASH',     declared_amount: 1000 },
         { payment_method: 'TRANSFER', declared_amount: 0 },
       ],
-    }, asUser(collector));
+    }, asUser(admin));
 
     expect(closed.closure_snapshot.collections.payments.cash).toBeCloseTo(1000, 2);
     expect(closed.closure_snapshot.expected.cash).toBeCloseTo(1000, 2);

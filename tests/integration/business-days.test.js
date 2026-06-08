@@ -20,57 +20,50 @@ describe('M — Jornadas (business_days)', () => {
     expect(s.business_day.id).toBeDefined();
   });
 
-  it('aperturas del mismo día apuntan a la misma jornada', async () => {
+  it('V4: aperturas secuenciales del mismo día apuntan a la misma jornada', async () => {
+    // V4: una OPEN por jornada. La segunda apertura se hace tras cerrar la
+    // primera (turnos multi-cajero secuenciales son válidos).
     const u1 = await createUserFixture({ role: 'ADMIN' });
     const u2 = await createUserFixture({ role: 'ADMIN' });
     const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
+    await cashSessions.close(s1.id, {
+      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+    }, asUser(u1));
     const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
     expect(s1.business_day_id).toBe(s2.business_day_id);
   });
 
-  it('transición OPEN → READY_TO_CLOSE cuando todas las cajas están CLOSED', async () => {
-    const u1 = await createUserFixture({ role: 'ADMIN' });
-    const u2 = await createUserFixture({ role: 'ADMIN' });
-    const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
-    const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
+  it('V4: transición OPEN → READY_TO_CLOSE cuando la última caja cierra', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
 
-    await cashSessions.close(s1.id, {
-      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
-    }, asUser(u1));
-
-    // Mientras quede una caja OPEN la jornada NO transita.
-    let day = await businessDaysQueries.findById(s1.business_day_id);
+    // Mientras la caja esté OPEN, la jornada está OPEN.
+    let day = await businessDaysQueries.findById(s.business_day_id);
     expect(day.status).toBe('OPEN');
 
-    await cashSessions.close(s2.id, {
+    await cashSessions.close(s.id, {
       declared: [{ payment_method: 'CASH', declared_amount: 0 }],
-    }, asUser(u2));
+    }, asUser(u));
 
-    day = await businessDaysQueries.findById(s1.business_day_id);
+    day = await businessDaysQueries.findById(s.business_day_id);
     expect(day.status).toBe('READY_TO_CLOSE');
     expect(day.ready_to_close_at).not.toBeNull();
   });
 
-  it('una caja PENDING_RECONCILIATION bloquea la transición a READY_TO_CLOSE', async () => {
-    const u1 = await createUserFixture({ role: 'ADMIN' });
-    const u2 = await createUserFixture({ role: 'ADMIN' });
-    const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
-    const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
+  it('V4: caja PENDING_RECONCILIATION bloquea la transición a READY_TO_CLOSE', async () => {
+    const u = await createUserFixture({ role: 'ADMIN' });
+    const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+    await cashSessions.markPending(s.id, { reason: 'olvido' }, asUser(u));
 
-    await cashSessions.close(s1.id, {
-      declared: [{ payment_method: 'CASH', declared_amount: 0 }],
-    }, asUser(u1));
-    await cashSessions.markPending(s2.id, { reason: 'olvido' }, asUser(u2));
-
-    const day = await businessDaysQueries.findById(s1.business_day_id);
+    const day = await businessDaysQueries.findById(s.business_day_id);
     expect(day.status).toBe('OPEN'); // sigue OPEN porque hay pendiente
 
-    // Al reconciliar la PENDING, la jornada transita.
+    // Al reconciliar la PENDING, la jornada transita a READY_TO_CLOSE.
     const admin = await createUserFixture({ role: 'ADMIN' });
-    await cashSessions.reconcile(s2.id, {
+    await cashSessions.reconcile(s.id, {
       declared: [{ payment_method: 'CASH', declared_amount: 0 }],
     }, asUser(admin));
-    const dayAfter = await businessDaysQueries.findById(s1.business_day_id);
+    const dayAfter = await businessDaysQueries.findById(s.business_day_id);
     expect(dayAfter.status).toBe('READY_TO_CLOSE');
   });
 
@@ -121,6 +114,53 @@ describe('M — Jornadas (business_days)', () => {
     const u2 = await createUserFixture({ role: 'ADMIN' });
     await expect(cashSessions.open({ opening_amount: 0 }, asUser(u2)))
       .rejects.toMatchObject({ status: 409, message: expect.stringMatching(/CLOSED/) });
+  });
+
+  // ── V4: GET active (jornada del día) ─────────────────────────────────
+  describe('getActive (V4)', () => {
+    it('devuelve null cuando no hay jornada activa', async () => {
+      const active = await businessDays.getActive();
+      expect(active).toBeNull();
+    });
+
+    it('devuelve la jornada OPEN con session_counts', async () => {
+      const u = await createUserFixture({ role: 'ADMIN' });
+      const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+
+      const active = await businessDays.getActive();
+      expect(active).not.toBeNull();
+      expect(active.id).toBe(s.business_day_id);
+      expect(active.status).toBe('OPEN');
+      expect(active.session_counts).toMatchObject({
+        open_count: 1, pending_count: 0, closed_count: 0, total_count: 1,
+      });
+    });
+
+    it('sigue devolviendo la jornada cuando está en READY_TO_CLOSE', async () => {
+      const u = await createUserFixture({ role: 'ADMIN' });
+      const s = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.close(s.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u));
+
+      const active = await businessDays.getActive();
+      expect(active).not.toBeNull();
+      expect(active.status).toBe('READY_TO_CLOSE');
+      expect(active.session_counts.closed_count).toBe(1);
+    });
+
+    it('devuelve null cuando la jornada está CLOSED', async () => {
+      const u  = await createUserFixture({ role: 'ADMIN' });
+      const sv = await createUserFixture({ role: 'ADMIN' });
+      const s  = await cashSessions.open({ opening_amount: 0 }, asUser(u));
+      await cashSessions.close(s.id, {
+        declared: [{ payment_method: 'CASH', declared_amount: 0 }],
+      }, asUser(u));
+      await businessDays.close(s.business_day_id, {}, asUser(sv));
+
+      const active = await businessDays.getActive();
+      expect(active).toBeNull();
+    });
   });
 
   // ── IMP-5: force-close para jornadas trabadas con cajas PENDING ───────
