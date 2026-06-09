@@ -50,7 +50,11 @@ const findById = async (id) => {
             c.prepaid_installments::int, c.prepaid_installments_method,
             c.prepaid_installments_transfer_reference,
             c.installments_count::int, c.payment_frequency,
-            c.first_payment_date,
+            -- to_char evita que node-postgres devuelva la fecha como Date en
+            -- midnight UTC, que en TZ AR (GMT-3) cae al dia anterior al hacer
+            -- setHours local. Como string YYYY-MM-DD el parseLocalDateInput
+            -- reconstruye la fecha local sin sesgo.
+            to_char(c.first_payment_date, 'YYYY-MM-DD') AS first_payment_date,
             c.interest_rate::float8, c.status, c.rejection_reason, c.notes, c.created_by,
             c.created_at, c.approved_at, c.approved_by,
             c.settled_at, c.settlement_amount::float8, c.settlement_type,
@@ -152,7 +156,8 @@ const create = async (
                 down_payment_transfer_reference,
                 prepaid_installments::int, prepaid_installments_method,
                 prepaid_installments_transfer_reference,
-                installments_count::int, payment_frequency, first_payment_date,
+                installments_count::int, payment_frequency,
+                to_char(first_payment_date, 'YYYY-MM-DD') AS first_payment_date,
                 status, created_at`,
     [
       customer_id,
