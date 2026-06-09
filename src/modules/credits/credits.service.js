@@ -651,9 +651,17 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         registerDate,
         cashSessionId:     activeCashSessionId,
       });
-      // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
-      // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
-      // conservan sus fechas originales sin necesidad de reasignación.
+      // Correr las fechas de las cuotas pendientes: la primera no-pagada toma
+      // el lugar de la cuota 1 (first_payment_date), la siguiente la fecha de
+      // la cuota 2, etc. Reusa el helper de payments.queries que ya se usa
+      // para cobros adelantados post-aprobacion — mismo invariante: cuando
+      // hay adelanto, las cuotas restantes ocupan los huecos liberados.
+      // GREATEST(baseDueDate, CURRENT_DATE) del helper protege si el approve
+      // ocurre despues de first_payment_date (fecha en el pasado).
+      const paymentsQueries = require('../payments/payments.queries');
+      await paymentsQueries.shiftInstallmentDates(
+        client, id, credit.payment_frequency, credit.first_payment_date,
+      );
     }
 
     const unitIds = creditUnits.map((u) => u.unit_id);
