@@ -50,6 +50,11 @@ const findById = async (id) => {
             c.prepaid_installments::int, c.prepaid_installments_method,
             c.prepaid_installments_transfer_reference,
             c.installments_count::int, c.payment_frequency,
+            -- to_char evita que node-postgres devuelva la fecha como Date en
+            -- midnight UTC, que en TZ AR (GMT-3) cae al dia anterior al hacer
+            -- setHours local. Como string YYYY-MM-DD el parseLocalDateInput
+            -- reconstruye la fecha local sin sesgo.
+            to_char(c.first_payment_date, 'YYYY-MM-DD') AS first_payment_date,
             c.interest_rate::float8, c.status, c.rejection_reason, c.notes, c.created_by,
             c.created_at, c.approved_at, c.approved_by,
             c.settled_at, c.settlement_amount::float8, c.settlement_type,
@@ -136,6 +141,7 @@ const create = async (
     prepaid_installments_transfer_reference,
     installments_count,
     payment_frequency,
+    first_payment_date,
     notes,
   },
 ) => {
@@ -144,13 +150,15 @@ const create = async (
        (customer_id, created_by, type, total_amount,
         down_payment, down_payment_method, down_payment_transfer_reference,
         prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
-        installments_count, payment_frequency, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        installments_count, payment_frequency, first_payment_date, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
                 down_payment_transfer_reference,
                 prepaid_installments::int, prepaid_installments_method,
                 prepaid_installments_transfer_reference,
-                installments_count::int, payment_frequency, status, created_at`,
+                installments_count::int, payment_frequency,
+                to_char(first_payment_date, 'YYYY-MM-DD') AS first_payment_date,
+                status, created_at`,
     [
       customer_id,
       created_by,
@@ -164,6 +172,7 @@ const create = async (
       prepaid_installments_transfer_reference || null,
       installments_count,
       payment_frequency,
+      first_payment_date || null,
       notes || null,
     ],
   );
