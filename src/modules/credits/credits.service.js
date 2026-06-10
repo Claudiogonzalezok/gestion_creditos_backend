@@ -234,6 +234,7 @@ const create = async (data, requestingUser) => {
         down_payment:       0,
         installments_count: data.installments_count,
         payment_frequency:  data.payment_frequency,
+        first_payment_date: data.first_payment_date,
         notes:              data.notes,
       });
       delete credit.down_payment;
@@ -328,6 +329,7 @@ const create = async (data, requestingUser) => {
       prepaid_installments_transfer_reference:  data.prepaid_installments_transfer_reference || null,
       installments_count:                       data.installments_count,
       payment_frequency:                        data.payment_frequency,
+      first_payment_date:                       data.first_payment_date,
       notes:                                    data.notes,
     });
 
@@ -533,7 +535,14 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       throw { status: 409, message: 'No existe tasa de interés activa para esta combinación y monto.' };
 
     const installmentAmount = getInstallmentAmount(credit.total_amount, rateRecord.rate, installmentsCount);
-    const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+    // Ancla del cronograma: si el credito tiene first_payment_date persistido
+    // (elegido en el wizard), arrancamos desde ahi. Sino fallback a "hoy +
+    // frecuencia" (comportamiento legacy para creditos pre-migracion 028).
+    const baseDueDates = getDueDatesFromFirstPayment(
+      credit.first_payment_date,
+      installmentsCount,
+      credit.payment_frequency,
+    );
     const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
     await withTransaction(async (client) => {
@@ -590,7 +599,14 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     totalInstallment += getProductInstallmentContribution(netLine, g.rate, installmentsCount);
   }
 
-  const baseDueDates = getDueDates(new Date(), installmentsCount, credit.payment_frequency);
+  // Ancla del cronograma: si el credito tiene first_payment_date persistido
+  // (elegido en el wizard), arrancamos desde ahi. Sino fallback a "hoy +
+  // frecuencia" (comportamiento legacy para creditos pre-migracion 028).
+  const baseDueDates = getDueDatesFromFirstPayment(
+    credit.first_payment_date,
+    installmentsCount,
+    credit.payment_frequency,
+  );
   const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
   const registerDate = await getActiveJornadaDate();
 
@@ -635,9 +651,17 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         registerDate,
         cashSessionId:     activeCashSessionId,
       });
-      // No se llama shiftInstallmentDates: generateInstallments ya asignó fechas
-      // correctas a todas las cuotas. Las N primeras quedan PAID; las restantes
-      // conservan sus fechas originales sin necesidad de reasignación.
+      // Correr las fechas de las cuotas pendientes: la primera no-pagada toma
+      // el lugar de la cuota 1 (first_payment_date), la siguiente la fecha de
+      // la cuota 2, etc. Reusa el helper de payments.queries que ya se usa
+      // para cobros adelantados post-aprobacion — mismo invariante: cuando
+      // hay adelanto, las cuotas restantes ocupan los huecos liberados.
+      // GREATEST(baseDueDate, CURRENT_DATE) del helper protege si el approve
+      // ocurre despues de first_payment_date (fecha en el pasado).
+      const paymentsQueries = require('../payments/payments.queries');
+      await paymentsQueries.shiftInstallmentDates(
+        client, id, credit.payment_frequency, credit.first_payment_date,
+      );
     }
 
     const unitIds = creditUnits.map((u) => u.unit_id);
