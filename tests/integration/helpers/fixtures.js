@@ -212,9 +212,12 @@ const createPendingPaymentFixture = async (overrides = {}) => {
 
   const r = await pool.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
         notes, next_visit_date, status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     VALUES ($1, $2, $3,
+             CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
+             CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
+             $4, $5, $6, $7, $8)
      RETURNING id, installment_id, collector_id, amount_received::float8,
                payment_method, status, created_at`,
     [data.installment_id, data.collector_id, data.amount_received, data.payment_method,

@@ -936,9 +936,12 @@ const earlySettlement = async (
         Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
       const paymentResult = await client.query(
         `INSERT INTO payments
-           (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+           (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
             status, notes)
-         VALUES ($1, $2, $3, $4, $5, 'PENDING', 'Cancelación anticipada')
+         VALUES ($1, $2, $3,
+                 CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
+                 CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
+                 $4, $5, 'PENDING', 'Cancelación anticipada')
          RETURNING id`,
         [
           inst.id,
