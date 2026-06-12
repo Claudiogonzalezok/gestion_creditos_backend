@@ -1,4 +1,4 @@
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 // ── Cash sessions ───────────────────────────────────────────────────────────
 
@@ -26,7 +26,9 @@ const findByIdWithDetails = async (id) => {
   const session = await findById(id);
   if (!session) return null;
   const [owner, drops, details] = await Promise.all([
-    pool.query(`SELECT id, full_name, role FROM users WHERE id = $1`, [session.owner_user_id]),
+    pool.query(`SELECT id, full_name, role FROM users WHERE id = $1`, [
+      session.owner_user_id,
+    ]),
     findDropsBySession(id),
     findClosureDetailsBySession(id),
   ]);
@@ -52,10 +54,16 @@ const findByIdWithDetails = async (id) => {
  */
 const findActiveSessionByBusinessDay = async (businessDayId, db = pool) => {
   const r = await db.query(
-    `SELECT id, business_day_id, owner_user_id, opened_at, opened_by,
-            opening_amount::float8 AS opening_amount, status
-     FROM cash_sessions
-     WHERE business_day_id = $1 AND status = 'OPEN'
+    `SELECT cs.id, cs.business_day_id, cs.owner_user_id, cs.opened_at, cs.opened_by,
+            cs.opening_amount::float8 AS opening_amount, cs.status,
+            cs.closure_total_difference::float8 AS closure_total_difference,
+            CASE WHEN cs.closure_snapshot IS NOT NULL THEN (
+              SELECT COALESCE(SUM(d.declared_amount), 0)::float8
+              FROM cash_session_closure_details d
+              WHERE d.cash_session_id = cs.id
+            ) END AS cash_counted
+     FROM cash_sessions cs
+     WHERE cs.business_day_id = $1 AND cs.status = 'OPEN'
      LIMIT 1`,
     [businessDayId],
   );
@@ -104,7 +112,7 @@ const lockActiveSessionByBusinessDay = async (client, businessDayId) => {
  * @param {import('pg').PoolClient} client - cliente con tx activa.
  */
 const lockActiveSessionForCurrentJornada = async (client) => {
-  const bdQueries = require('../businessDays/businessDays.queries');
+  const bdQueries = require("../businessDays/businessDays.queries");
   const branch = await bdQueries.findDefaultBranch(client);
   if (!branch) return null;
   const businessDay = await bdQueries.findActiveBusinessDay(branch.id, client);
@@ -157,11 +165,13 @@ const findAll = async (filters = {}) => {
            bd.business_date, bd.branch_id,
            u.full_name AS owner_name,
            CASE WHEN cs.closure_snapshot IS NOT NULL THEN jsonb_build_object(
-             'collections',
-               COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'cash')::float8, 0) +
-               COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'transfer')::float8, 0) +
-               COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'cash')::float8, 0) +
-               COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'transfer')::float8, 0),
+              'collections',
+                COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'cash')::float8, 0) +
+                COALESCE((cs.closure_snapshot -> 'collections' -> 'payments'      ->> 'transfer')::float8, 0) +
+                COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'cash')::float8, 0) +
+                COALESCE((cs.closure_snapshot -> 'collections' -> 'down_payments' ->> 'transfer')::float8, 0) +
+                COALESCE((cs.closure_snapshot -> 'collections' -> 'manual_incomes' ->> 'cash')::float8, 0) +
+                COALESCE((cs.closure_snapshot -> 'collections' -> 'manual_incomes' ->> 'transfer')::float8, 0),
              'expenses',
                COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'cash')::float8, 0) +
                COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'transfer')::float8, 0),
@@ -176,16 +186,34 @@ const findAll = async (filters = {}) => {
     JOIN users u          ON u.id  = cs.owner_user_id
     WHERE 1=1`;
   const params = [];
-  if (filters.status)        { params.push(filters.status);        q += ` AND cs.status = $${params.length}`; }
-  if (filters.ownerUserId)   { params.push(filters.ownerUserId);   q += ` AND cs.owner_user_id = $${params.length}`; }
-  if (filters.businessDayId) { params.push(filters.businessDayId); q += ` AND cs.business_day_id = $${params.length}`; }
-  if (filters.businessDate)  { params.push(filters.businessDate);  q += ` AND bd.business_date = $${params.length}::date`; }
-  if (filters.branchId)      { params.push(filters.branchId);      q += ` AND bd.branch_id = $${params.length}`; }
+  if (filters.status) {
+    params.push(filters.status);
+    q += ` AND cs.status = $${params.length}`;
+  }
+  if (filters.ownerUserId) {
+    params.push(filters.ownerUserId);
+    q += ` AND cs.owner_user_id = $${params.length}`;
+  }
+  if (filters.businessDayId) {
+    params.push(filters.businessDayId);
+    q += ` AND cs.business_day_id = $${params.length}`;
+  }
+  if (filters.businessDate) {
+    params.push(filters.businessDate);
+    q += ` AND bd.business_date = $${params.length}::date`;
+  }
+  if (filters.branchId) {
+    params.push(filters.branchId);
+    q += ` AND bd.branch_id = $${params.length}`;
+  }
   q += ` ORDER BY cs.opened_at DESC`;
   return (await pool.query(q, params)).rows;
 };
 
-const create = async (client, { businessDayId, ownerUserId, openedBy, openingAmount, observations }) => {
+const create = async (
+  client,
+  { businessDayId, ownerUserId, openedBy, openingAmount, observations },
+) => {
   const r = await client.query(
     `INSERT INTO cash_sessions
        (business_day_id, owner_user_id, opened_by, opening_amount, observations)
@@ -202,7 +230,11 @@ const create = async (client, { businessDayId, ownerUserId, openedBy, openingAmo
  * Transición OPEN → CLOSED con snapshot y totales.
  * Guard SQL: solo procede si la sesión está en OPEN.
  */
-const close = async (client, id, { closedBy, snapshot, totalDifference, diffStatus }) => {
+const close = async (
+  client,
+  id,
+  { closedBy, snapshot, totalDifference, diffStatus },
+) => {
   const r = await client.query(
     `UPDATE cash_sessions
      SET status = 'CLOSED',
@@ -238,7 +270,11 @@ const markPending = async (client, id, { reason }) => {
 /**
  * Transición PENDING_RECONCILIATION → CLOSED por un supervisor/admin a posteriori.
  */
-const reconcile = async (client, id, { reconciledBy, snapshot, totalDifference, diffStatus }) => {
+const reconcile = async (
+  client,
+  id,
+  { reconciledBy, snapshot, totalDifference, diffStatus },
+) => {
   const r = await client.query(
     `UPDATE cash_sessions
      SET status = 'CLOSED',
@@ -262,13 +298,19 @@ const reconcile = async (client, id, { reconciledBy, snapshot, totalDifference, 
 
 const insertClosureDetails = async (client, cashSessionId, details) => {
   if (!details || !details.length) return [];
-  const values = details.map((_, i) => {
-    const b = i * 6;
-    return `($${b+1}, $${b+2}, $${b+3}, $${b+4}, $${b+5}, $${b+6})`;
-  }).join(', ');
+  const values = details
+    .map((_, i) => {
+      const b = i * 6;
+      return `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6})`;
+    })
+    .join(", ");
   const params = details.flatMap((d) => [
-    cashSessionId, d.payment_method, d.expected_amount, d.declared_amount,
-    d.difference, d.difference_status,
+    cashSessionId,
+    d.payment_method,
+    d.expected_amount,
+    d.declared_amount,
+    d.difference,
+    d.difference_status,
   ]);
   const r = await client.query(
     `INSERT INTO cash_session_closure_details
@@ -301,17 +343,28 @@ const findClosureDetailsBySession = async (cashSessionId) => {
 
 // ── Drops (retiros parciales) ──────────────────────────────────────────────
 
-const createDrop = async (client, cashSessionId, {
-  amount, paymentMethod, destination, destinationAccountId,
-  reason, receiptReference, performedBy,
-}) => {
+const createDrop = async (
+  client,
+  cashSessionId,
+  {
+    amount,
+    paymentMethod,
+    destination,
+    destinationAccountId,
+    reason,
+    receiptReference,
+    performedBy,
+  },
+) => {
   // destination_account_id es NOT NULL en DB (migración 025) y es responsabilidad
   // del service resolverlo antes de llamar (cashSessions.service.resolveDropDestinationAccount).
   // IMP-4: eliminado el COALESCE → SELECT fallback (era frágil: no filtraba
   // is_active y podía devolver NULL si todas las cuentas estaban inactivas,
   // produciendo un 500 confuso en vez del 409 ACCOUNT_INACTIVE del service).
   if (!destinationAccountId)
-    throw new Error('createDrop: destinationAccountId es obligatorio (resolverlo en el service).');
+    throw new Error(
+      "createDrop: destinationAccountId es obligatorio (resolverlo en el service).",
+    );
 
   const r = await client.query(
     `INSERT INTO cash_session_drops
@@ -322,9 +375,14 @@ const createDrop = async (client, cashSessionId, {
                destination, destination_account_id, reason, receipt_reference, status,
                performed_by, performed_at`,
     [
-      cashSessionId, amount, paymentMethod, destination,
+      cashSessionId,
+      amount,
+      paymentMethod,
+      destination,
       destinationAccountId,
-      reason || null, receiptReference || null, performedBy,
+      reason || null,
+      receiptReference || null,
+      performedBy,
     ],
   );
   return r.rows[0];
@@ -369,6 +427,37 @@ const findDropsBySession = async (cashSessionId) => {
   return r.rows;
 };
 
+// ── Ingresos manuales ──────────────────────────────────────────────────────
+
+/**
+ * Inserta una entrada manual de dinero imputada a una caja operativa.
+ * @param {import('pg').PoolClient} client - Cliente transaccional.
+ * @param {string} cashSessionId - Caja operativa OPEN.
+ * @param {object} data - Datos del ingreso manual.
+ */
+const createManualIncome = async (
+  client,
+  cashSessionId,
+  { amount, paymentMethod, description, receiptReference, createdBy },
+) => {
+  const r = await client.query(
+    `INSERT INTO cash_session_manual_incomes
+       (cash_session_id, amount, payment_method, description, receipt_reference, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, cash_session_id, amount::float8 AS amount, payment_method,
+               description, receipt_reference, created_by, created_at`,
+    [
+      cashSessionId,
+      amount,
+      paymentMethod,
+      description,
+      receiptReference || null,
+      createdBy,
+    ],
+  );
+  return r.rows[0];
+};
+
 // ── Totales calculados para X report y snapshot al cierre ──────────────────
 
 /**
@@ -394,20 +483,21 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
   // keys outflows_commissions_* se mantienen en 0 para preservar el formato
   // v1 del closure_snapshot. Cuando se versione el snapshot a v2, estas keys
   // pueden eliminarse del retorno.
-  const [drops, payments, downPays, expenses, conversions] = await Promise.all([
-    db.query(
-      `SELECT
+  const [drops, payments, downPays, manualIncomes, expenses, conversions] =
+    await Promise.all([
+      db.query(
+        `SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'     AND status='ACTIVE'), 0)::float8 AS drops_cash,
          COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER' AND status='ACTIVE'), 0)::float8 AS drops_transfer,
          COUNT(*) FILTER (WHERE status='ACTIVE')::int   AS drops_active_count,
          COUNT(*) FILTER (WHERE status='REVERSED')::int AS drops_reversed_count
        FROM cash_session_drops
        WHERE cash_session_id = $1`,
-      [cashSessionId],
-    ),
-    // payments: aprobados directos suman; reversiones (is_reversal=TRUE) restan.
-    db.query(
-      `SELECT
+        [cashSessionId],
+      ),
+      // payments: aprobados directos suman; reversiones (is_reversal=TRUE) restan.
+      db.query(
+        `SELECT
          COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
                   FILTER (WHERE payment_method='CASH'),     0)::float8 AS payments_cash,
          COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
@@ -415,27 +505,35 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
        FROM payments
        WHERE cash_session_id = $1
          AND status = 'APPROVED'`,
-      [cashSessionId],
-    ),
-    db.query(
-      `SELECT
+        [cashSessionId],
+      ),
+      db.query(
+        `SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS down_payments_cash,
          COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS down_payments_transfer
        FROM credit_down_payments
        WHERE cash_session_id = $1
          AND payment_type = 'DOWN_PAYMENT'`,
-      [cashSessionId],
-    ),
-    db.query(
-      `SELECT
+        [cashSessionId],
+      ),
+      db.query(
+        `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS manual_incomes_cash,
+         COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS manual_incomes_transfer
+       FROM cash_session_manual_incomes
+       WHERE cash_session_id = $1`,
+        [cashSessionId],
+      ),
+      db.query(
+        `SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS expenses_cash,
          COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS expenses_transfer
        FROM expenses
        WHERE cash_session_id = $1`,
-      [cashSessionId],
-    ),
-    db.query(
-      `SELECT
+        [cashSessionId],
+      ),
+      db.query(
+        `SELECT
          COALESCE(SUM(CASE WHEN source_method='CASH'     THEN -amount
                            WHEN target_method='CASH'     THEN  amount
                            ELSE 0 END), 0)::float8 AS conversions_cash_delta,
@@ -444,25 +542,28 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
                            ELSE 0 END), 0)::float8 AS conversions_transfer_delta
        FROM cash_conversions
        WHERE cash_session_id = $1`,
-      [cashSessionId],
-    ),
-  ]);
+        [cashSessionId],
+      ),
+    ]);
 
   return {
-    drops_cash:                          drops.rows[0].drops_cash,
-    drops_transfer:                      drops.rows[0].drops_transfer,
-    drops_active_count:                  drops.rows[0].drops_active_count,
-    drops_reversed_count:                drops.rows[0].drops_reversed_count,
-    collections_payments_cash:           payments.rows[0].payments_cash,
-    collections_payments_transfer:       payments.rows[0].payments_transfer,
-    collections_down_payments_cash:      downPays.rows[0].down_payments_cash,
-    collections_down_payments_transfer:  downPays.rows[0].down_payments_transfer,
-    outflows_expenses_cash:              expenses.rows[0].expenses_cash,
-    outflows_expenses_transfer:          expenses.rows[0].expenses_transfer,
-    outflows_commissions_cash:           0, // DEPRECATED: ahora se imputa a Caja General
-    outflows_commissions_transfer:       0, // DEPRECATED
-    conversions_cash_delta:              conversions.rows[0].conversions_cash_delta,
-    conversions_transfer_delta:          conversions.rows[0].conversions_transfer_delta,
+    drops_cash: drops.rows[0].drops_cash,
+    drops_transfer: drops.rows[0].drops_transfer,
+    drops_active_count: drops.rows[0].drops_active_count,
+    drops_reversed_count: drops.rows[0].drops_reversed_count,
+    collections_payments_cash: payments.rows[0].payments_cash,
+    collections_payments_transfer: payments.rows[0].payments_transfer,
+    collections_down_payments_cash: downPays.rows[0].down_payments_cash,
+    collections_down_payments_transfer: downPays.rows[0].down_payments_transfer,
+    collections_manual_incomes_cash: manualIncomes.rows[0].manual_incomes_cash,
+    collections_manual_incomes_transfer:
+      manualIncomes.rows[0].manual_incomes_transfer,
+    outflows_expenses_cash: expenses.rows[0].expenses_cash,
+    outflows_expenses_transfer: expenses.rows[0].expenses_transfer,
+    outflows_commissions_cash: 0, // DEPRECATED: ahora se imputa a Caja General
+    outflows_commissions_transfer: 0, // DEPRECATED
+    conversions_cash_delta: conversions.rows[0].conversions_cash_delta,
+    conversions_transfer_delta: conversions.rows[0].conversions_transfer_delta,
   };
 };
 
@@ -484,5 +585,6 @@ module.exports = {
   reverseDrop,
   findDropById,
   findDropsBySession,
+  createManualIncome,
   computeSessionTotals,
 };
