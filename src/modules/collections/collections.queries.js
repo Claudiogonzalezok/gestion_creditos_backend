@@ -1,4 +1,4 @@
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 // =============================================================================
 // SELECT_COLLECTION_REFERENCE — expresión derivada que arma una frase única
@@ -176,7 +176,8 @@ const CTE_LATEST_ANTECEDENT = `
 // 10. La agenda (latest_next_visit) considera pagos PENDING y APPROVED: un
 //     cobro PARCIAL aprobado conserva la fecha pactada con el cliente. Una
 //     visita pactada para HOY es trabajo "del día" → entra por TODAY y
-//     TODAY_AND_OVERDUE, NO por "solo vencidas" (OVERDUE).
+//     TODAY_AND_OVERDUE, NO por "solo vencidas" (OVERDUE). TODAY no incluye
+//     mora vieja sin agenda: eso pertenece al filtro OVERDUE.
 // =============================================================================
 
 /**
@@ -192,8 +193,13 @@ const CTE_LATEST_ANTECEDENT = `
  * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
  * @returns {Promise<Array>}
  */
-const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) => {
-  const params = [collectorId, date, filter || 'ALL_PENDING'];
+const findInstallmentsForSheet = async (
+  collectorId,
+  date,
+  filter,
+  db = pool,
+) => {
+  const params = [collectorId, date, filter || "ALL_PENDING"];
 
   const r = await db.query(
     `WITH
@@ -272,8 +278,6 @@ const findInstallmentsForSheet = async (collectorId, date, filter, db = pool) =>
         SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM overdue_unscheduled
       ),
       filter_today AS (
-        SELECT installment_id, 'OVERDUE_UNSCHEDULED' AS reason, 1 AS incl_prio FROM overdue_unscheduled
-        UNION ALL
         SELECT installment_id, 'DUE_TODAY'           AS reason, 2 AS incl_prio FROM due_today
         UNION ALL
         SELECT installment_id, 'SCHEDULED_VISIT'     AS reason, 3 AS incl_prio FROM scheduled_today
@@ -401,7 +405,7 @@ const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
             1
      RETURNING id, collector_id, sheet_date, filter_used, generated_by, status, created_at,
                snapshot_version`,
-    [collectorId, date, filter || 'ALL_PENDING', adminId]
+    [collectorId, date, filter || "ALL_PENDING", adminId],
   );
   return r.rows[0];
 };
@@ -440,24 +444,26 @@ const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
 const createDetails = async (sheetId, items, db = pool) => {
   if (!items.length) return;
   const COLS_PER_ROW = 26;
-  const values = items.map((_, i) => {
-    const b = i * COLS_PER_ROW;
-    const ph = [];
-    for (let n = 1; n <= COLS_PER_ROW; n++) ph.push(`$${b + n}`);
-    return `(${ph.join(', ')})`;
-  }).join(', ');
+  const values = items
+    .map((_, i) => {
+      const b = i * COLS_PER_ROW;
+      const ph = [];
+      for (let n = 1; n <= COLS_PER_ROW; n++) ph.push(`$${b + n}`);
+      return `(${ph.join(", ")})`;
+    })
+    .join(", ");
   const params = items.flatMap((item, i) => [
     sheetId,
     item.installment_id,
     i + 1,
-    item.amount_due,                                 // planned_amount
-    item.inclusion_criteria || 'DUE_DATE',
-    item.antecedent_type    || null,
-    item.antecedent_date    || null,
-    item.antecedent_notes   || null,
-    item.inclusion_reason   || null,
-    item.op_priority        ?? null,
-    item.remaining_amount   ?? null,
+    item.amount_due, // planned_amount
+    item.inclusion_criteria || "DUE_DATE",
+    item.antecedent_type || null,
+    item.antecedent_date || null,
+    item.antecedent_notes || null,
+    item.inclusion_reason || null,
+    item.op_priority ?? null,
+    item.remaining_amount ?? null,
     // Snapshots nuevos (migration 020)
     item.installment_number,
     item.due_date,
@@ -502,7 +508,7 @@ const createDetails = async (sheetId, items, db = pool) => {
 const markSheetAsRegenerated = async (id, client) => {
   await client.query(
     `UPDATE collection_sheets SET status = 'REGENERATED' WHERE id = $1`,
-    [id]
+    [id],
   );
 };
 
@@ -520,7 +526,7 @@ const closeSheet = async (id, adminId, db = pool) => {
      SET status = 'CLOSED', closed_at = NOW(), closed_by = $2
      WHERE id = $1 AND status = 'ACTIVE'
      RETURNING id`,
-    [id, adminId]
+    [id, adminId],
   );
   return r.rowCount > 0;
 };
@@ -534,7 +540,7 @@ const cancelSheet = async (id, db = pool) => {
     `UPDATE collection_sheets SET status = 'CANCELLED'
      WHERE id = $1 AND status = 'ACTIVE'
      RETURNING id`,
-    [id]
+    [id],
   );
   return r.rowCount > 0;
 };
@@ -560,8 +566,14 @@ const findAll = async ({ collectorId, date, includeRegenerated } = {}) => {
     LEFT JOIN collection_sheet_details csd ON csd.sheet_id = cs.id
     WHERE ${statusFilter}`;
   const params = [];
-  if (collectorId) { params.push(collectorId); q += ` AND cs.collector_id = $${params.length}`; }
-  if (date)        { params.push(date);        q += ` AND cs.sheet_date::date = $${params.length}::date`; }
+  if (collectorId) {
+    params.push(collectorId);
+    q += ` AND cs.collector_id = $${params.length}`;
+  }
+  if (date) {
+    params.push(date);
+    q += ` AND cs.sheet_date::date = $${params.length}::date`;
+  }
   q += ` GROUP BY cs.id, u.full_name ORDER BY cs.created_at DESC`;
   return (await pool.query(q, params)).rows;
 };
@@ -623,7 +635,7 @@ const findById = async (id) => {
      JOIN users u   ON u.id  = cs.collector_id
      JOIN users adm ON adm.id = cs.generated_by
      WHERE cs.id = $1`,
-    [id]
+    [id],
   );
   if (!sheetRes.rows.length) return null;
   // is_today es interno (decide si adjuntar capa live); no forma parte del contrato.
@@ -667,7 +679,7 @@ const findById = async (id) => {
        FROM collection_sheet_details csd
        WHERE csd.sheet_id = $1
        ORDER BY csd.order_number`,
-      [id]
+      [id],
     );
   } else {
     // ── Fallback LEGACY — solo para planillas pre-020. ─────────────────────
@@ -717,7 +729,7 @@ const findById = async (id) => {
        LEFT JOIN latest_antecedent la  ON la.installment_id  = i.id
        WHERE csd.sheet_id = $1
        ORDER BY csd.order_number`,
-      [id]
+      [id],
     );
   }
 
@@ -730,7 +742,7 @@ const findById = async (id) => {
   // sub-objeto `live` aparte, y SOLO cuando la planilla es operable hoy
   // (ACTIVE + sheet_date = CURRENT_DATE). Para planillas cerradas, regeneradas o
   // de otro día, live = null → el frontend la trata como documento read-only.
-  const liveEnabled = sheet.status === 'ACTIVE' && isToday === true;
+  const liveEnabled = sheet.status === "ACTIVE" && isToday === true;
   if (liveEnabled && items.length) {
     const installmentIds = items.map((it) => it.installment_id);
     const liveRes = await pool.query(
@@ -758,31 +770,34 @@ const findById = async (id) => {
          LIMIT 1
        ) ca ON TRUE
        WHERE i.id = ANY($1::uuid[])`,
-      [installmentIds]
+      [installmentIds],
     );
     const liveById = new Map(
-      liveRes.rows.map((r) => [r.installment_id, {
-        // Estado VIVO de la cuota — refleja el progreso real del día, a
-        // diferencia del snapshot (congelado al generar). El admin lo usa para
-        // mostrar el estado actual y filtrar por PARTIAL/PAID.
-        installment_status:  r.installment_status,
-        amount_due:          r.amount_due,
-        amount_paid:         r.amount_paid,
-        penalty_amount:      r.penalty_amount,
-        has_pending_payment: r.has_pending_payment,
-        today_attempt_id:    r.today_attempt_id,
-        today_attempt_type:  r.today_attempt_type,
-      }])
+      liveRes.rows.map((r) => [
+        r.installment_id,
+        {
+          // Estado VIVO de la cuota — refleja el progreso real del día, a
+          // diferencia del snapshot (congelado al generar). El admin lo usa para
+          // mostrar el estado actual y filtrar por PARTIAL/PAID.
+          installment_status: r.installment_status,
+          amount_due: r.amount_due,
+          amount_paid: r.amount_paid,
+          penalty_amount: r.penalty_amount,
+          has_pending_payment: r.has_pending_payment,
+          today_attempt_id: r.today_attempt_id,
+          today_attempt_type: r.today_attempt_type,
+        },
+      ]),
     );
     for (const it of items) {
       it.live = liveById.get(it.installment_id) || {
-        installment_status:  null,
-        amount_due:          null,
-        amount_paid:         null,
-        penalty_amount:      null,
+        installment_status: null,
+        amount_due: null,
+        amount_paid: null,
+        penalty_amount: null,
         has_pending_payment: false,
-        today_attempt_id:    null,
-        today_attempt_type:  null,
+        today_attempt_id: null,
+        today_attempt_type: null,
       };
     }
   } else {
@@ -807,7 +822,7 @@ const findUnassignedCustomersWithPending = async () => {
        AND c.status = 'ACTIVE'
        AND i.status IN ('PENDING','OVERDUE','PARTIAL')
      GROUP BY cu.id, cu.full_name
-     ORDER BY cu.full_name`
+     ORDER BY cu.full_name`,
   );
   return r.rows;
 };
@@ -855,7 +870,10 @@ const markAsSent = async (id, adminId) => {
  * @returns {Promise<boolean>} true si actualizó la fila de planilla.
  */
 const updateManagementStatusForActiveTodaySheet = async (
-  collectorId, installmentId, newStatus, db = pool,
+  collectorId,
+  installmentId,
+  newStatus,
+  db = pool,
 ) => {
   if (!collectorId || !installmentId || !newStatus) return false;
   const r = await db.query(
@@ -891,7 +909,9 @@ const updateManagementStatusForActiveTodaySheet = async (
  * @returns {Promise<boolean>} true si actualizó la fila de planilla.
  */
 const recalcManagementStatusForActiveTodaySheet = async (
-  collectorId, installmentId, db = pool,
+  collectorId,
+  installmentId,
+  db = pool,
 ) => {
   if (!collectorId || !installmentId) return false;
   const r = await db.query(
@@ -922,7 +942,12 @@ const recalcManagementStatusForActiveTodaySheet = async (
     [collectorId, installmentId],
   );
   const newStatus = r.rows[0].status;
-  return updateManagementStatusForActiveTodaySheet(collectorId, installmentId, newStatus, db);
+  return updateManagementStatusForActiveTodaySheet(
+    collectorId,
+    installmentId,
+    newStatus,
+    db,
+  );
 };
 
 module.exports = {
