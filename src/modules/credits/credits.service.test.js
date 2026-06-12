@@ -107,9 +107,11 @@ describe("credits.service holiday integration", () => {
     });
 
     expect(getActiveHolidayKeysInRange).toHaveBeenCalled();
+    // 2026-05-01 vie feriado → 2026-05-02 sabado HABIL (cliente decidio
+    // sabado operativo, 2026-06). 2026-05-08 vie habil sigue igual.
     expect(result.schedule.map((row) => row.due_date)).toEqual([
-      "2026-05-04",
-      "2026-05-08",
+      '2026-05-02',
+      '2026-05-08',
     ]);
   });
 
@@ -134,7 +136,7 @@ describe("credits.service holiday integration", () => {
 
     expect(queries.generateInstallments).toHaveBeenCalled();
     const dueDates = queries.generateInstallments.mock.calls[0][3].map(toKey);
-    expect(dueDates).toEqual(["2026-05-04", "2026-05-08"]);
+    expect(dueDates).toEqual(['2026-05-02', '2026-05-08']);
   });
 
   it("mueve al próximo día hábil las cuotas al aprobar una SALE con feriado cargado", async () => {
@@ -170,12 +172,8 @@ describe("credits.service holiday integration", () => {
 
     expect(queries.generateInstallments).toHaveBeenCalled();
     const dueDates = queries.generateInstallments.mock.calls[0][3].map(toKey);
-    expect(dueDates).toEqual(["2026-05-04", "2026-05-08"]);
-    expect(puQueries.updateStatusBulk).toHaveBeenCalledWith(
-      client,
-      ["unit-1"],
-      "SOLD",
-    );
+    expect(dueDates).toEqual(['2026-05-02', '2026-05-08']);
+    expect(puQueries.updateStatusBulk).toHaveBeenCalledWith(client, ['unit-1'], 'SOLD');
   });
 
   it("mueve al próximo día hábil el cronograma de una simulación SALE", async () => {
@@ -208,8 +206,8 @@ describe("credits.service holiday integration", () => {
     });
 
     expect(result.schedule.map((row) => row.due_date)).toEqual([
-      "2026-05-04",
-      "2026-05-08",
+      '2026-05-02',
+      '2026-05-08',
     ]);
   });
 
