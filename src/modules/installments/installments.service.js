@@ -1,8 +1,8 @@
 const pool            = require('../../config/db');
 const queries         = require('./installments.queries');
 const paymentsQueries = require('../payments/payments.queries');
+const paymentsService = require('../payments/payments.service');
 const { getValue }    = require('../systemConfig/systemConfig.queries');
-const { withTransaction } = require('../../utils/transaction');
 
 const getAll = async (filters, requestingUser) => {
   if (['COLLECTOR','SELLER_COLLECTOR'].includes(requestingUser.role))
@@ -62,21 +62,34 @@ const earlyPay = async (id, paymentMethod, transferReference, adminId) => {
   if (pendingAmount > 0)
     throw { status: 409, message: 'Hay pre-cargas pendientes de aprobación para esta cuota. Aprobá o rechazalas antes de aplicar un pago anticipado.' };
 
-  let settled = false;
-  await withTransaction(async (client) => {
-    const paidInst = await queries.earlyPay(client, id, adminId, paymentMethod, transferReference);
+  // Saldo real pendiente de la cuota.
+  const amountReceived = Math.round((parseFloat(inst.amount_due) - parseFloat(inst.amount_paid)) * 100) / 100;
 
-    // Verificar si el crédito quedó totalmente liquidado
-    const remaining = await paymentsQueries.countPendingInstallments(client, paidInst.credit_id);
-    if (remaining === 0) {
-      await paymentsQueries.settleCredit(client, paidInst.credit_id);
-      settled = true;
-    }
-  });
+  // Se delega en el cobro directo del admin, que imputa el ingreso a la caja
+  // activa de la jornada (cash_session_id + movimiento contable) y liquida el
+  // crédito si corresponde. Antes este flujo insertaba el pago SIN imputarlo a
+  // ninguna caja → el dinero quedaba invisible para la contabilidad. Esa
+  // divergencia se elimina reutilizando el flujo canónico.
+  await paymentsService.adminDirect(
+    {
+      installment_id:     id,
+      amount_received:    amountReceived,
+      payment_method:     paymentMethod,
+      transfer_reference: transferReference,
+      notes:              'Pago anticipado de cuota',
+    },
+    adminId,
+  );
+
+  const updated = await queries.findById(id);
+  const creditStatus = await pool.query(
+    `SELECT status FROM credits WHERE id = $1`,
+    [updated.credit_id],
+  );
 
   return {
-    ...(await queries.findById(id)),
-    credit_settled: settled,
+    ...updated,
+    credit_settled: creditStatus.rows[0]?.status === 'SETTLED',
   };
 };
 

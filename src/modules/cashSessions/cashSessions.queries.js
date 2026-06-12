@@ -509,13 +509,18 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
          AND status = 'APPROVED'`,
         [cashSessionId],
       ),
+      // Ingresos por adelantado de un crédito: enganche (DOWN_PAYMENT) y cuotas
+      // pagadas por adelantado al aprobar (PREPAID_INSTALLMENT). Ambos son dinero
+      // real recibido e imputado con cash_session_id, así que ambos deben sumar a
+      // la caja. Antes solo se contaba DOWN_PAYMENT, por lo que las cuotas
+      // pre-pagadas quedaban fuera del esperado y aparecían como sobrante.
       db.query(
         `SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS down_payments_cash,
          COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS down_payments_transfer
        FROM credit_down_payments
        WHERE cash_session_id = $1
-         AND payment_type = 'DOWN_PAYMENT'`,
+         AND payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')`,
         [cashSessionId],
       ),
       db.query(
