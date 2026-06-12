@@ -89,9 +89,12 @@ const seed = async () => {
 
         await client.query(
           `INSERT INTO payments
-             (installment_id, collector_id, amount_received, payment_method,
+             (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method,
               transfer_reference, status, notes, created_at)
-           VALUES ($1, $2, $3, $4, $5, 'PENDING', $6, NOW() - ($7::text || ' hours')::interval)`,
+           VALUES ($1, $2, $3,
+                   CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
+                   CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
+                   $4, $5, 'PENDING', $6, NOW() - ($7::text || ' hours')::interval)`,
           [inst.id, collectorId, inst.amount_due, paymentMethod, transferRef, notes, idx + 1]
         );
         insertedBase++;
@@ -118,10 +121,13 @@ const seed = async () => {
 
         await client.query(
           `INSERT INTO payments
-             (installment_id, collector_id, amount_received, payment_method,
+             (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method,
                transfer_reference, status, notes, rejection_reason,
                approved_by, approved_at, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+            VALUES ($1, $2, $3,
+                    CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
+                    CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
+                    $4, $5, $6, $7, $8,
                     $9, ${approvedAtExpr},
                     NOW() - ($10::text || ' hours')::interval)`,
           [

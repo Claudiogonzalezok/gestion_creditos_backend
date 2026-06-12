@@ -275,9 +275,9 @@ const seed = async () => {
         const payDate = addDays(dueDate, -2);
         await client.query(
           `INSERT INTO payments
-             (installment_id, collector_id, amount_received, payment_method,
+             (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method,
               status, approved_by, approved_at, created_at)
-           VALUES (CURRVAL(),$1,$2,'CASH','APPROVED',$3,$4,$4)`,
+           VALUES (CURRVAL(),$1,$2,$2,0,'CASH','APPROVED',$3,$4,$4)`,
           [collectorId, amt1, adminId, payDate]
         );
       }

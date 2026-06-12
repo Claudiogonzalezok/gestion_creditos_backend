@@ -50,6 +50,49 @@ const _validateCajaOpen = async (date) => {
   };
 };
 
+const _round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * Normaliza los montos de un cobro a un shape único, aceptando los dos formatos
+ * de entrada que valida validators.js:
+ *   · Mixto:  amount_cash / amount_transfer (efectivo + transferencia).
+ *   · Legacy: amount_received + payment_method (un solo medio).
+ *
+ * `amountReceived` es siempre el TOTAL (efectivo + transferencia) — la lógica
+ * financiera de distribución y saldos opera sobre ese valor sin enterarse del
+ * desglose. `paymentMethod` queda en 'MIXED' cuando ambos medios son > 0.
+ *
+ * @param {object} data - Body del request ya validado.
+ * @returns {{ amountReceived:number, amountCash:number, amountTransfer:number, paymentMethod:string }}
+ */
+const _normalizePaymentAmounts = (data) => {
+  const has = (v) => v !== undefined && v !== null && String(v).trim() !== "";
+  const mixedShape = has(data.amount_cash) || has(data.amount_transfer);
+
+  if (mixedShape) {
+    const amountCash = _round2(parseFloat(data.amount_cash) || 0);
+    const amountTransfer = _round2(parseFloat(data.amount_transfer) || 0);
+    const amountReceived = _round2(amountCash + amountTransfer);
+    const paymentMethod =
+      amountCash > 0 && amountTransfer > 0
+        ? "MIXED"
+        : amountTransfer > 0
+          ? "TRANSFER"
+          : "CASH";
+    return { amountReceived, amountCash, amountTransfer, paymentMethod };
+  }
+
+  // Legacy: un solo medio. Todo el monto va a la columna del medio elegido.
+  const amountReceived = _round2(parseFloat(data.amount_received));
+  const paymentMethod = data.payment_method;
+  return {
+    amountReceived,
+    amountCash: paymentMethod === "CASH" ? amountReceived : 0,
+    amountTransfer: paymentMethod === "TRANSFER" ? amountReceived : 0,
+    paymentMethod,
+  };
+};
+
 /**
  * Distribuye el monto recibido sobre la cuota principal y cuotas siguientes si sobra saldo.
  * Toda la lógica financiera de distribución está centralizada aquí para reutilización.
@@ -123,6 +166,20 @@ const _applyPaymentToInstallments = async (
   let remaining = round(amountToApply - (amountDue - amountPaid));
   let paidCount = 0;
 
+  // Proporción efectivo/total del cobro cabecera. Las cuotas adelantadas heredan
+  // esta mezcla para que su desglose por medio sea coherente con el cobro real.
+  // Si el objeto payment no trae el desglose, se cae al payment_method (1 efectivo
+  // / 0 transferencia) para mantener el comportamiento de un solo medio.
+  const headerCash = parseFloat(payment.amount_cash) || 0;
+  const headerTransfer = parseFloat(payment.amount_transfer) || 0;
+  const headerTotal = headerCash + headerTransfer;
+  const cashRatio =
+    headerTotal > 0
+      ? headerCash / headerTotal
+      : payment.payment_method === "CASH"
+        ? 1
+        : 0;
+
   // Si sobra saldo y la cuota principal quedó PAID, distribuir a cuotas siguientes
   if (remaining > 0 && newInstStatus === "PAID") {
     const nextInstallments = await queries.getPendingInstallmentsFrom(
@@ -146,6 +203,7 @@ const _applyPaymentToInstallments = async (
           payment.payment_method,
           payment.transfer_reference,
           paymentId,
+          cashRatio,
         );
         remaining = round(remaining - instBalance);
         paidCount++;
@@ -218,6 +276,49 @@ const _registerCashMovement = async (
     registerDate,
     createdBy: userId,
   });
+};
+
+/**
+ * Registra en caja el desglose de un cobro: un movimiento por cada medio con
+ * monto > 0. Un cobro de un solo medio genera un único movimiento; uno mixto
+ * genera dos (CASH y TRANSFER). cash_movements nunca recibe el pseudo-medio
+ * 'MIXED' — siempre se desagrega a CASH/TRANSFER reales.
+ *
+ * @param {object} client
+ * @param {object} params
+ * @param {string} params.paymentId
+ * @param {number} params.amountCash
+ * @param {number} params.amountTransfer
+ * @param {string} params.movementType - 'PAYMENT' | 'REVERSAL'.
+ * @param {string} params.registerDate - Fecha contable 'YYYY-MM-DD'.
+ * @param {string} params.userId
+ */
+const _registerSplitCashMovements = async (
+  client,
+  { paymentId, amountCash, amountTransfer, movementType, registerDate, userId },
+) => {
+  const cash = parseFloat(amountCash) || 0;
+  const transfer = parseFloat(amountTransfer) || 0;
+  if (cash > 0) {
+    await _registerCashMovement(client, {
+      paymentId,
+      amount: cash,
+      paymentMethod: "CASH",
+      movementType,
+      registerDate,
+      userId,
+    });
+  }
+  if (transfer > 0) {
+    await _registerCashMovement(client, {
+      paymentId,
+      amount: transfer,
+      paymentMethod: "TRANSFER",
+      movementType,
+      registerDate,
+      userId,
+    });
+  }
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -293,7 +394,8 @@ const create = async (data, requestingUser) => {
         "Esta cuota ya tiene pre-cargas pendientes que cubren el saldo total.",
     };
 
-  const amountReceived = parseFloat(data.amount_received);
+  const amounts = _normalizePaymentAmounts(data);
+  const amountReceived = amounts.amountReceived;
 
   // Si amount_received no cubre el saldo restante, la cuota quedará PARTIAL → next_visit_date obligatorio.
   // EDGE CASE documentado (ETAPA 2): si el monto cubre la cuota actual pero redistribuye a cuotas
@@ -326,8 +428,10 @@ const create = async (data, requestingUser) => {
   const payment = await queries.create({
     installment_id: data.installment_id,
     collector_id: requestingUser.id,
-    amount_received: data.amount_received,
-    payment_method: data.payment_method,
+    amount_received: amounts.amountReceived,
+    amount_cash: amounts.amountCash,
+    amount_transfer: amounts.amountTransfer,
+    payment_method: amounts.paymentMethod,
     transfer_reference: data.transfer_reference,
     notes: data.notes,
     next_visit_date: data.next_visit_date,
@@ -416,12 +520,13 @@ const approve = async (id, adminId) => {
       graceDays,
     );
 
-    // 3. Registrar movimiento contable en caja — se usa la fecha de la jornada activa,
-    //    no localDate(), para que los cobros post-medianoche queden en la jornada correcta.
-    await _registerCashMovement(client, {
+    // 3. Registrar movimiento(s) contable(s) en caja — uno por medio con monto > 0.
+    //    Se usa la fecha de la jornada activa, no localDate(), para que los cobros
+    //    post-medianoche queden en la jornada correcta.
+    await _registerSplitCashMovements(client, {
       paymentId: id,
-      amount: parseFloat(payment.amount_received),
-      paymentMethod: payment.payment_method,
+      amountCash: payment.amount_cash,
+      amountTransfer: payment.amount_transfer,
       movementType: "PAYMENT",
       registerDate: jornadaDate,
       userId: adminId,
@@ -544,7 +649,8 @@ const adminDirect = async (data, adminId) => {
       message: `No se pueden registrar cobros en un crédito en estado ${creditInfo.status}.`,
     };
 
-  const amountReceived = parseFloat(data.amount_received);
+  const amounts = _normalizePaymentAmounts(data);
+  const amountReceived = amounts.amountReceived;
   const totalPending = await queries.getTotalPendingBalance(inst.credit_id);
   if (amountReceived > totalPending)
     throw {
@@ -578,7 +684,9 @@ const adminDirect = async (data, adminId) => {
       installmentId: data.installment_id,
       adminId,
       amountReceived,
-      paymentMethod: data.payment_method,
+      amountCash: amounts.amountCash,
+      amountTransfer: amounts.amountTransfer,
+      paymentMethod: amounts.paymentMethod,
       transferReference: data.transfer_reference,
       notes: data.notes,
       cashSessionId: activeSession.id,
@@ -594,7 +702,9 @@ const adminDirect = async (data, adminId) => {
       credit_id: lockedInst.credit_id,
       payment_frequency: lockedInst.payment_frequency,
       due_date: lockedInst.due_date,
-      payment_method: data.payment_method,
+      payment_method: amounts.paymentMethod,
+      amount_cash: amounts.amountCash,
+      amount_transfer: amounts.amountTransfer,
       transfer_reference: data.transfer_reference || null,
     };
 
@@ -607,10 +717,11 @@ const adminDirect = async (data, adminId) => {
       graceDays,
     );
 
-    await _registerCashMovement(client, {
+    // Movimiento(s) de caja: uno por medio con monto > 0 (split mixto).
+    await _registerSplitCashMovements(client, {
       paymentId: newPaymentId,
-      amount: amountReceived,
-      paymentMethod: data.payment_method,
+      amountCash: amounts.amountCash,
+      amountTransfer: amounts.amountTransfer,
       movementType: "PAYMENT",
       registerDate: jornadaDate,
       userId: adminId,
@@ -697,40 +808,72 @@ const reverse = async (id, reason, adminId) => {
 
     await _validateCajaOpen(movement.register_date);
 
-    // Recolectar todos los pagos a revertir: el principal + sus sub-pagos
+    // Sub-pagos generados por distribución (cuotas adelantadas) del cobro padre.
     const children = await queries.findChildPayments(client, id);
-    const toReverse = [payment, ...children];
 
-    for (const p of toReverse) {
-      // Lock sobre la cuota afectada
-      await queries.lockAndGetInstallment(client, p.installment_id);
+    // ── Cabecera: ÚNICO pago que impacta caja ──────────────────────────────
+    // El dinero entró una sola vez como amount_received del cobro cabecera, así
+    // que la reversión saca exactamente ese total (dividido por medio). La
+    // reversión se imputa a la caja ACTIVA de la jornada (V4.3).
+    await queries.lockAndGetInstallment(client, payment.installment_id);
 
-      const reversal = await queries.createReversal(client, {
-        installmentId: p.installment_id,
+    const headerReversal = await queries.createReversal(client, {
+      installmentId: payment.installment_id,
+      adminId,
+      amountReceived: payment.amount_received,
+      amountCash: payment.amount_cash,
+      amountTransfer: payment.amount_transfer,
+      paymentMethod: payment.payment_method,
+      transferReference: payment.transfer_reference,
+      reason,
+      cashSessionId: activeSession.id,
+      originalPaymentId: payment.id,
+    });
+
+    await queries.restoreInstallmentFromReversal(
+      client,
+      payment.installment_id,
+      payment.amount_received,
+      graceDays,
+    );
+
+    await _registerSplitCashMovements(client, {
+      paymentId: headerReversal.id,
+      amountCash: payment.amount_cash,
+      amountTransfer: payment.amount_transfer,
+      movementType: "REVERSAL",
+      registerDate: movement.register_date,
+      userId: adminId,
+    });
+
+    // ── Hijos (cuotas adelantadas): restauran cuota, NO impactan caja ──────
+    // Nunca generaron ingreso en caja (su dinero ya está contado dentro del
+    // amount_received de la cabecera). Se crea el registro de reversión para
+    // auditoría con cash_session_id = NULL, espejo de su pago original. Esto
+    // corrige el descuadre histórico (#1) donde la reversión sacaba de caja más
+    // de lo que había entrado.
+    for (const child of children) {
+      await queries.lockAndGetInstallment(client, child.installment_id);
+
+      await queries.createReversal(client, {
+        installmentId: child.installment_id,
         adminId,
-        amountReceived: p.amount_received,
-        paymentMethod: p.payment_method,
-        transferReference: p.transfer_reference,
+        amountReceived: child.amount_received,
+        amountCash: child.amount_cash,
+        amountTransfer: child.amount_transfer,
+        paymentMethod: child.payment_method,
+        transferReference: child.transfer_reference,
         reason,
-        cashSessionId: activeSession.id,
-        originalPaymentId: p.id,
+        cashSessionId: null, // espejo: el pago adelantado original no tenía caja.
+        originalPaymentId: child.id,
       });
 
       await queries.restoreInstallmentFromReversal(
         client,
-        p.installment_id,
-        p.amount_received,
+        child.installment_id,
+        child.amount_received,
         graceDays,
       );
-
-      await _registerCashMovement(client, {
-        paymentId: reversal.id,
-        amount: p.amount_received,
-        paymentMethod: p.payment_method,
-        movementType: "REVERSAL",
-        registerDate: movement.register_date,
-        userId: adminId,
-      });
     }
 
     // Si el crédito estaba SETTLED, reabrirlo
@@ -770,4 +913,6 @@ module.exports = {
   _applyPaymentToInstallments,
   _checkAndSettleCredit,
   _registerCashMovement,
+  _registerSplitCashMovements,
+  _normalizePaymentAmounts,
 };

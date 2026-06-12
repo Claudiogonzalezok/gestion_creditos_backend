@@ -137,9 +137,12 @@ const earlyPay = async (client, id, adminId, paymentMethod, transferReference) =
   // 3. Registrar el payment APPROVED por el saldo real recibido
   await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
         status, approved_by, approved_at, notes)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), 'Pago anticipado de cuota')`,
+     VALUES ($1, $2, $3,
+             CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
+             CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
+             $4, $5, 'APPROVED', $2, NOW(), 'Pago anticipado de cuota')`,
     [inst.id, adminId, amountToReceive, paymentMethod, transferReference || null]
   );
 

@@ -496,12 +496,14 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
         [cashSessionId],
       ),
       // payments: aprobados directos suman; reversiones (is_reversal=TRUE) restan.
+      // Se agrega por amount_cash/amount_transfer (no por payment_method) para
+      // soportar cobros mixtos: un mismo payment puede aportar a CASH y a
+      // TRANSFER a la vez. Para cobros de un solo medio, la columna del otro
+      // medio es 0 y el resultado es idéntico al filtrado por payment_method.
       db.query(
         `SELECT
-         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
-                  FILTER (WHERE payment_method='CASH'),     0)::float8 AS payments_cash,
-         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
-                  FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS payments_transfer
+         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_cash     ELSE amount_cash     END), 0)::float8 AS payments_cash,
+         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_transfer ELSE amount_transfer END), 0)::float8 AS payments_transfer
        FROM payments
        WHERE cash_session_id = $1
          AND status = 'APPROVED'`,
