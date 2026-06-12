@@ -6,33 +6,50 @@ const {
   getInstallmentAmount,
   getTotalToReturn,
   getProductInstallmentContribution,
-} = require('./creditCalculator');
+} = require("./creditCalculator");
 
 const toKey = (date) => date.toISOString().slice(0, 10);
 
-describe('creditCalculator', () => {
-  it('avanza períodos correctamente según frecuencia', () => {
+describe("creditCalculator", () => {
+  it("avanza períodos correctamente según frecuencia", () => {
     const base = new Date(2026, 0, 10);
 
-    expect(toKey(addFrequencyPeriods(base, 'WEEKLY', 1))).toBe('2026-01-17');
-    expect(toKey(addFrequencyPeriods(base, 'BIWEEKLY', 1))).toBe('2026-01-24');
-    expect(toKey(addFrequencyPeriods(base, 'MONTHLY', 1))).toBe('2026-02-10');
+    expect(toKey(addFrequencyPeriods(base, "WEEKLY", 1))).toBe("2026-01-17");
+    expect(toKey(addFrequencyPeriods(base, "BIWEEKLY", 1))).toBe("2026-01-24");
+    expect(toKey(addFrequencyPeriods(base, "MONTHLY", 1))).toBe("2026-02-09");
   });
 
-  it('genera vencimientos desde aprobación moviendo la primera cuota un período después', () => {
-    const result = getDueDates(new Date(2026, 0, 10), 3, 'WEEKLY').map(toKey);
-    expect(result).toEqual(['2026-01-17', '2026-01-24', '2026-01-31']);
+  it("genera vencimientos desde aprobación moviendo la primera cuota un período después", () => {
+    const result = getDueDates(new Date(2026, 0, 10), 3, "WEEKLY").map(toKey);
+    expect(result).toEqual(["2026-01-17", "2026-01-24", "2026-01-31"]);
   });
 
-  it('usa la primera fecha explícita como ancla en getDueDatesFromFirstPayment', () => {
-    const result = getDueDatesFromFirstPayment('2026-03-15', 3, 'MONTHLY').map(toKey);
-    expect(result).toEqual(['2026-03-15', '2026-04-15', '2026-05-15']);
+  it("usa la primera fecha explícita como ancla en getDueDatesFromFirstPayment", () => {
+    const result = getDueDatesFromFirstPayment("2026-03-15", 3, "MONTHLY").map(
+      toKey,
+    );
+    expect(result).toEqual(["2026-03-15", "2026-04-14", "2026-05-14"]);
   });
 
-  it('aplica la regla de día hábil preservando el orden de vencimientos', () => {
+  it("genera vencimientos mensuales cada 30 días corridos — CR-25/CR-26", () => {
+    const result = getDueDatesFromFirstPayment("2026-01-01", 4, "MONTHLY").map(
+      toKey,
+    );
+
+    expect(result).toEqual([
+      "2026-01-01",
+      "2026-01-31",
+      "2026-03-02",
+      "2026-04-01",
+    ]);
+  });
+
+  it("aplica la regla de día hábil preservando el orden de vencimientos", () => {
     const moveFn = jest
       .fn()
-      .mockImplementation((date) => new Date(date.getTime() + 24 * 60 * 60 * 1000));
+      .mockImplementation(
+        (date) => new Date(date.getTime() + 24 * 60 * 60 * 1000),
+      );
 
     const result = adjustDueDatesWithBusinessDayRule(
       [new Date(2026, 0, 10), new Date(2026, 0, 17)],
@@ -40,10 +57,10 @@ describe('creditCalculator', () => {
     ).map(toKey);
 
     expect(moveFn).toHaveBeenCalledTimes(2);
-    expect(result).toEqual(['2026-01-11', '2026-01-18']);
+    expect(result).toEqual(["2026-01-11", "2026-01-18"]);
   });
 
-  it('mantiene consistencia entre monto por cuota, total y contribución por producto', () => {
+  it("mantiene consistencia entre monto por cuota, total y contribución por producto", () => {
     const installment = getInstallmentAmount(100000, 0.1, 5);
     expect(installment).toBe(22000);
     expect(getTotalToReturn(100000, 0.1, 5)).toBe(110000);

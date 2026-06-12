@@ -1,12 +1,12 @@
-const pool        = require('../../config/db');
-const queries     = require('./credits.queries');
-const irQueries   = require('../interestRates/interestRates.queries');
-const prQueries   = require('../productRates/productRates.queries');
-const puQueries   = require('../productUnits/productUnits.queries');
-const { getValue }= require('../systemConfig/systemConfig.queries');
-const { withTransaction } = require('../../utils/transaction');
-const { localDate } = require('../../utils/date');
-const businessDaysQueries = require('../businessDays/businessDays.queries');
+const pool = require("../../config/db");
+const queries = require("./credits.queries");
+const irQueries = require("../interestRates/interestRates.queries");
+const prQueries = require("../productRates/productRates.queries");
+const puQueries = require("../productUnits/productUnits.queries");
+const { getValue } = require("../systemConfig/systemConfig.queries");
+const { withTransaction } = require("../../utils/transaction");
+const { localDate } = require("../../utils/date");
+const businessDaysService = require("../businessDays/businessDays.service");
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -15,22 +15,13 @@ const {
   adjustDueDatesWithBusinessDayRule,
   getWeekBounds,
   getProductInstallmentContribution,
-} = require('../../utils/creditCalculator');
+} = require("../../utils/creditCalculator");
 const {
   moveToNextBusinessDay,
   getActiveHolidayKeysInRange,
-} = require('../../utils/businessDay');
+} = require("../../utils/businessDay");
 
-/**
- * IMP-1: consulta business_days (autoridad post-rediseño). Cae al día actual
- * si no hay jornada abierta.
- */
-const getActiveJornadaDate = async () => {
-  const branch = await businessDaysQueries.findDefaultBranch();
-  if (!branch) return localDate();
-  const jornadaDate = await businessDaysQueries.findActiveJornadaDate(branch.id);
-  return jornadaDate || localDate();
-};
+const { getActiveJornadaDate } = businessDaysService;
 
 /**
  * Calcula el capital realmente financiado de una venta a crédito.
@@ -41,7 +32,7 @@ const getActiveJornadaDate = async () => {
  */
 const getFinancedAmount = (totalAmount, downPayment = 0) => {
   const total = parseFloat(totalAmount || 0);
-  const down  = parseFloat(downPayment || 0);
+  const down = parseFloat(downPayment || 0);
   return Math.round((total - down) * 100) / 100;
 };
 
@@ -51,8 +42,11 @@ const getFinancedAmount = (totalAmount, downPayment = 0) => {
  * @returns {object|null} Crédito enriquecido para respuesta.
  */
 const decorateSaleCredit = (credit) => {
-  if (!credit || credit.type !== 'SALE') return credit;
-  credit.financed_amount = getFinancedAmount(credit.total_amount, credit.down_payment);
+  if (!credit || credit.type !== "SALE") return credit;
+  credit.financed_amount = getFinancedAmount(
+    credit.total_amount,
+    credit.down_payment,
+  );
   return credit;
 };
 
@@ -72,11 +66,13 @@ const applyBusinessDayRuleToDueDates = async (baseDueDates) => {
   if (!baseDueDates.length) return [];
   const holidayKeys = await getActiveHolidayKeysInRange(
     baseDueDates[0],
-    new Date(baseDueDates[baseDueDates.length - 1].getTime() + (10 * 24 * 60 * 60 * 1000)),
+    new Date(
+      baseDueDates[baseDueDates.length - 1].getTime() +
+        10 * 24 * 60 * 60 * 1000,
+    ),
   );
-  return adjustDueDatesWithBusinessDayRule(
-    baseDueDates,
-    (date) => moveToNextBusinessDay(date, holidayKeys),
+  return adjustDueDatesWithBusinessDayRule(baseDueDates, (date) =>
+    moveToNextBusinessDay(date, holidayKeys),
   );
 };
 
@@ -151,7 +147,10 @@ const buildSaleSimulationSchedule = async ({
     for (const group of groups) {
       if (index >= group.installments_count) continue;
       const groupCapital = group.financed_line_total / group.installments_count;
-      const groupInterest = Math.max(0, group.installment_contribution - groupCapital);
+      const groupInterest = Math.max(
+        0,
+        group.installment_contribution - groupCapital,
+      );
       amount += group.installment_contribution;
       capital += groupCapital;
       interest += groupInterest;
@@ -183,26 +182,26 @@ const buildSaleSimulationSchedule = async ({
  */
 const sanitizeCredit = (credit) => {
   if (!credit) return credit;
-  if (credit.type === 'LOAN') {
+  if (credit.type === "LOAN") {
     delete credit.down_payment;
     delete credit.down_payment_method;
     delete credit.down_payment_transfer_reference;
   }
-  if (credit.type === 'SALE') {
+  if (credit.type === "SALE") {
     delete credit.interest_rate;
   }
   return decorateSaleCredit(credit);
 };
 
 const getAll = async (filters, requestingUser) => {
-  if (['SELLER','SELLER_COLLECTOR'].includes(requestingUser.role))
+  if (["SELLER", "SELLER_COLLECTOR"].includes(requestingUser.role))
     filters = { ...filters, created_by: requestingUser.id };
   return queries.findAll(filters);
 };
 
 const getById = async (id) => {
   const credit = await queries.findById(id);
-  if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
   const chain = await queries.getRefinancingChain(id);
   credit.refinancing_chain = chain;
   return sanitizeCredit(credit);
@@ -217,25 +216,30 @@ const getById = async (id) => {
  */
 const create = async (data, requestingUser) => {
   const customerCheck = await pool.query(
-    `SELECT id, status FROM customers WHERE id = $1`, [data.customer_id]
+    `SELECT id, status FROM customers WHERE id = $1`,
+    [data.customer_id],
   );
-  if (!customerCheck.rows.length) throw { status: 404, message: 'Cliente no encontrado.' };
-  if (customerCheck.rows[0].status !== 'ACTIVE')
-    throw { status: 409, message: 'No se puede generar una operación para un cliente inactivo.' };
+  if (!customerCheck.rows.length)
+    throw { status: 404, message: "Cliente no encontrado." };
+  if (customerCheck.rows[0].status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: "No se puede generar una operación para un cliente inactivo.",
+    };
 
   // ── LOAN ─────────────────────────────────────────────────────
-  if (data.type === 'LOAN') {
+  if (data.type === "LOAN") {
     return withTransaction(async (client) => {
       const credit = await queries.create(client, {
-        customer_id:        data.customer_id,
-        created_by:         requestingUser.id,
-        type:               'LOAN',
-        total_amount:       data.total_amount,
-        down_payment:       0,
+        customer_id: data.customer_id,
+        created_by: requestingUser.id,
+        type: "LOAN",
+        total_amount: data.total_amount,
+        down_payment: 0,
         installments_count: data.installments_count,
-        payment_frequency:  data.payment_frequency,
+        payment_frequency: data.payment_frequency,
         first_payment_date: data.first_payment_date,
-        notes:              data.notes,
+        notes: data.notes,
       });
       delete credit.down_payment;
       delete credit.down_payment_method;
@@ -246,14 +250,21 @@ const create = async (data, requestingUser) => {
 
   // ── SALE: requiere unit_ids ───────────────────────────────────
   if (!data.unit_ids || data.unit_ids.length === 0)
-    throw { status: 400, message: 'Las ventas a crédito deben incluir al menos una unidad de producto.' };
+    throw {
+      status: 400,
+      message:
+        "Las ventas a crédito deben incluir al menos una unidad de producto.",
+    };
 
   // Dedupe defensivo: si el frontend manda el mismo unitId dos veces, evita
   // que ambos pasen el SELECT FOR UPDATE (el lock no se bloquea contra la
   // misma tx) y el segundo intente reservar algo ya reservado por el primero.
   const uniqueUnitIds = [...new Set(data.unit_ids)];
   if (uniqueUnitIds.length !== data.unit_ids.length)
-    throw { status: 400, message: 'No se pueden repetir unidades en una misma venta.' };
+    throw {
+      status: 400,
+      message: "No se pueden repetir unidades en una misma venta.",
+    };
 
   return withTransaction(async (client) => {
     let totalAmount = 0;
@@ -279,16 +290,22 @@ const create = async (data, requestingUser) => {
          JOIN products         p  ON p.id  = pv.product_id
          WHERE pu.id = $1
          FOR UPDATE OF pu`,
-        [unitId]
+        [unitId],
       );
       const unit = unitRes.rows[0];
       if (!unit)
         throw { status: 404, message: `Unidad ${unitId} no encontrada.` };
-      if (unit.product_status !== 'ACTIVE')
-        throw { status: 409, message: `El producto "${unit.title}" no está activo.` };
-      if (unit.variant_status !== 'ACTIVE')
-        throw { status: 409, message: `La variante del producto "${unit.title}" no está activa.` };
-      if (unit.status !== 'AVAILABLE')
+      if (unit.product_status !== "ACTIVE")
+        throw {
+          status: 409,
+          message: `El producto "${unit.title}" no está activo.`,
+        };
+      if (unit.variant_status !== "ACTIVE")
+        throw {
+          status: 409,
+          message: `La variante del producto "${unit.title}" no está activa.`,
+        };
+      if (unit.status !== "AVAILABLE")
         throw {
           status: 409,
           message: `La unidad "${unit.title}" (ID: ${unitId}) no está disponible (estado: ${unit.status}).`,
@@ -296,7 +313,10 @@ const create = async (data, requestingUser) => {
 
       // Verificar tasa para el producto padre de esta variante
       const rateRecord = await prQueries.findActiveRate(
-        unit.product_id, data.payment_frequency, data.installments_count, client
+        unit.product_id,
+        data.payment_frequency,
+        data.installments_count,
+        client,
       );
       if (!rateRecord)
         throw {
@@ -312,25 +332,35 @@ const create = async (data, requestingUser) => {
     const downPayment = parseFloat(data.down_payment || 0);
     const prepaidInstallments = parseInt(data.prepaid_installments || 0, 10);
     if (downPayment >= totalAmount)
-      throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
+      throw {
+        status: 400,
+        message:
+          "El enganche no puede ser igual o mayor al monto total del crédito.",
+      };
     if (prepaidInstallments >= data.installments_count)
-      throw { status: 400, message: 'Las cuotas adelantadas deben ser menores a la cantidad total de cuotas.' };
+      throw {
+        status: 400,
+        message:
+          "Las cuotas adelantadas deben ser menores a la cantidad total de cuotas.",
+      };
 
     const credit = await queries.create(client, {
-      customer_id:                              data.customer_id,
-      created_by:                               requestingUser.id,
-      type:                                     'SALE',
-      total_amount:                             totalAmount,
-      down_payment:                             downPayment,
-      down_payment_method:                      data.down_payment_method                      || null,
-      down_payment_transfer_reference:          data.down_payment_transfer_reference          || null,
-      prepaid_installments:                     prepaidInstallments,
-      prepaid_installments_method:              data.prepaid_installments_method             || null,
-      prepaid_installments_transfer_reference:  data.prepaid_installments_transfer_reference || null,
-      installments_count:                       data.installments_count,
-      payment_frequency:                        data.payment_frequency,
-      first_payment_date:                       data.first_payment_date,
-      notes:                                    data.notes,
+      customer_id: data.customer_id,
+      created_by: requestingUser.id,
+      type: "SALE",
+      total_amount: totalAmount,
+      down_payment: downPayment,
+      down_payment_method: data.down_payment_method || null,
+      down_payment_transfer_reference:
+        data.down_payment_transfer_reference || null,
+      prepaid_installments: prepaidInstallments,
+      prepaid_installments_method: data.prepaid_installments_method || null,
+      prepaid_installments_transfer_reference:
+        data.prepaid_installments_transfer_reference || null,
+      installments_count: data.installments_count,
+      payment_frequency: data.payment_frequency,
+      first_payment_date: data.first_payment_date,
+      notes: data.notes,
     });
 
     // Vincular unidades al crédito (precio congelado del SELECT bajo lock) y
@@ -338,8 +368,18 @@ const create = async (data, requestingUser) => {
     // razón la fila ya no está AVAILABLE, transitionStatus devuelve false y
     // abortamos con 409 (la transacción rollback libera todo lo previo).
     for (const unitId of uniqueUnitIds) {
-      await queries.createCreditUnit(client, credit.id, unitId, priceByUnit.get(unitId));
-      const reserved = await puQueries.transitionStatus(client, unitId, 'AVAILABLE', 'RESERVED');
+      await queries.createCreditUnit(
+        client,
+        credit.id,
+        unitId,
+        priceByUnit.get(unitId),
+      );
+      const reserved = await puQueries.transitionStatus(
+        client,
+        unitId,
+        "AVAILABLE",
+        "RESERVED",
+      );
       if (!reserved) {
         throw {
           status: 409,
@@ -369,28 +409,46 @@ const simulate = async ({
   first_payment_date,
 }) => {
   // ── LOAN ─────────────────────────────────────────────────────
-  if (type === 'LOAN') {
-    const amount     = parseFloat(total_amount);
-    const rateRecord = await irQueries.findActiveRate(payment_frequency, installments_count, amount);
+  if (type === "LOAN") {
+    const amount = parseFloat(total_amount);
+    const rateRecord = await irQueries.findActiveRate(
+      payment_frequency,
+      installments_count,
+      amount,
+    );
     if (!rateRecord)
-      throw { status: 404, message: 'No existe una tasa configurada para esta combinación y monto.' };
+      throw {
+        status: 404,
+        message:
+          "No existe una tasa configurada para esta combinación y monto.",
+      };
 
     const coef = parseFloat(rateRecord.rate);
-    const installmentAmount = getInstallmentAmount(amount, coef, installments_count);
+    const installmentAmount = getInstallmentAmount(
+      amount,
+      coef,
+      installments_count,
+    );
     const totalToReturn = getTotalToReturn(amount, coef, installments_count);
     return {
       type,
       payment_frequency,
       installments_count,
-      total_amount:       amount,
-      rate:               coef,
+      total_amount: amount,
+      rate: coef,
       installment_amount: installmentAmount,
-      total_to_return:    totalToReturn,
-      interest_amount:    Math.max(0, Math.round((totalToReturn - amount) * 100) / 100),
+      total_to_return: totalToReturn,
+      interest_amount: Math.max(
+        0,
+        Math.round((totalToReturn - amount) * 100) / 100,
+      ),
       summary: {
         financed_amount: amount,
         down_payment: 0,
-        interest_amount: Math.max(0, Math.round((totalToReturn - amount) * 100) / 100),
+        interest_amount: Math.max(
+          0,
+          Math.round((totalToReturn - amount) * 100) / 100,
+        ),
       },
       schedule: await buildSimulationSchedule({
         financedAmount: amount,
@@ -400,7 +458,7 @@ const simulate = async ({
         firstPaymentDate: first_payment_date,
         totalToReturn,
       }),
-      note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
+      note: "Los valores son orientativos. La operación queda sujeta a aprobación.",
     };
   }
 
@@ -416,17 +474,33 @@ const simulate = async ({
        FROM product_variants pv
        JOIN products p ON p.id = pv.product_id
        WHERE pv.id = $1`,
-      [item.variant_id]
+      [item.variant_id],
     );
     const v = varRes.rows[0];
-    if (!v) throw { status: 404, message: `Variante ${item.variant_id} no encontrada.` };
-    if (v.product_status !== 'ACTIVE')
-      throw { status: 409, message: `El producto "${v.title}" no está disponible.` };
-    if (v.variant_status !== 'ACTIVE')
-      throw { status: 409, message: `La variante de "${v.title}" no está activa.` };
+    if (!v)
+      throw {
+        status: 404,
+        message: `Variante ${item.variant_id} no encontrada.`,
+      };
+    if (v.product_status !== "ACTIVE")
+      throw {
+        status: 409,
+        message: `El producto "${v.title}" no está disponible.`,
+      };
+    if (v.variant_status !== "ACTIVE")
+      throw {
+        status: 409,
+        message: `La variante de "${v.title}" no está activa.`,
+      };
 
-    const lineInstallmentsCount = parseInt(item.installments_count || installments_count);
-    const rateRecord = await prQueries.findActiveRate(v.product_id, payment_frequency, lineInstallmentsCount);
+    const lineInstallmentsCount = parseInt(
+      item.installments_count || installments_count,
+    );
+    const rateRecord = await prQueries.findActiveRate(
+      v.product_id,
+      payment_frequency,
+      lineInstallmentsCount,
+    );
     if (!rateRecord)
       throw {
         status: 404,
@@ -436,33 +510,41 @@ const simulate = async ({
     const lineTotal = v.current_price * item.quantity;
     totalBase += lineTotal;
     groups.push({
-      variant_id:   v.id,
-      product_id:   v.product_id,
+      variant_id: v.id,
+      product_id: v.product_id,
       product_name: v.title,
-      color:        v.color,
-      size:         v.size,
-      capacity:     v.capacity,
-      quantity:     item.quantity,
+      color: v.color,
+      size: v.size,
+      capacity: v.capacity,
+      quantity: item.quantity,
       installments_count: lineInstallmentsCount,
-      unit_price:   v.current_price,
-      line_total:   lineTotal,
-      rate:         parseFloat(rateRecord.rate),
+      unit_price: v.current_price,
+      line_total: lineTotal,
+      rate: parseFloat(rateRecord.rate),
     });
   }
 
-  const downPayment    = parseFloat(down_payment || 0);
+  const downPayment = parseFloat(down_payment || 0);
   const financedAmount = getFinancedAmount(totalBase, downPayment);
 
   if (downPayment >= totalBase)
-    throw { status: 400, message: 'El enganche no puede ser igual o mayor al monto total del crédito.' };
+    throw {
+      status: 400,
+      message:
+        "El enganche no puede ser igual o mayor al monto total del crédito.",
+    };
 
-  const capitalRatio   = downPayment > 0 ? financedAmount / totalBase : 1;
+  const capitalRatio = downPayment > 0 ? financedAmount / totalBase : 1;
   let totalInstallment = 0;
 
   for (const g of groups) {
     const netLine = g.line_total * capitalRatio;
     g.financed_line_total = Math.round(netLine * 100) / 100;
-    g.installment_contribution = getProductInstallmentContribution(netLine, g.rate, g.installments_count);
+    g.installment_contribution = getProductInstallmentContribution(
+      netLine,
+      g.rate,
+      g.installments_count,
+    );
     totalInstallment += g.installment_contribution;
   }
 
@@ -477,20 +559,22 @@ const simulate = async ({
     paymentFrequency: payment_frequency,
     firstPaymentDate: first_payment_date,
   });
-  const scheduledTotal = Math.round(
-    schedule.reduce((acc, row) => acc + row.amount, 0) * 100,
-  ) / 100;
+  const scheduledTotal =
+    Math.round(schedule.reduce((acc, row) => acc + row.amount, 0) * 100) / 100;
   const totalToReturn = Math.round((scheduledTotal + downPayment) * 100) / 100;
-  const interestAmount = Math.max(0, Math.round((totalToReturn - totalBase) * 100) / 100);
+  const interestAmount = Math.max(
+    0,
+    Math.round((totalToReturn - totalBase) * 100) / 100,
+  );
 
   const result = {
     type,
     payment_frequency,
     installments_count: totalInstallmentsCount,
-    total_amount:       Math.round(totalBase * 100) / 100,
+    total_amount: Math.round(totalBase * 100) / 100,
     installment_amount: totalInstallment,
-    total_to_return:    totalToReturn,
-    interest_amount:    interestAmount,
+    total_to_return: totalToReturn,
+    interest_amount: interestAmount,
     summary: {
       financed_amount: financedAmountRounded,
       down_payment: downPayment,
@@ -498,11 +582,11 @@ const simulate = async ({
     },
     schedule,
     items: groups,
-    note: 'Los valores son orientativos. La operación queda sujeta a aprobación.',
+    note: "Los valores son orientativos. La operación queda sujeta a aprobación.",
   };
 
   if (downPayment > 0) {
-    result.down_payment    = downPayment;
+    result.down_payment = downPayment;
     result.financed_amount = Math.round(financedAmount * 100) / 100;
   }
 
@@ -511,8 +595,8 @@ const simulate = async ({
 
 /**
  * Aprueba un crédito pendiente y congela sus condiciones históricas.
-     * Para SALE toma product_rates por producto y registra enganches sin afectar la comisión.
-     * El adelanto de cuotas posterior se procesa exclusivamente desde el módulo de cobros.
+ * Para SALE toma product_rates por producto y registra enganches sin afectar la comisión.
+ * El adelanto de cuotas posterior se procesa exclusivamente desde el módulo de cobros.
  * @param {string} id - ID del crédito.
  * @param {string} adminId - Admin que aprueba la operación.
  * @param {number} [newInstallmentsCount] - Nueva cantidad de cuotas opcional.
@@ -520,21 +604,39 @@ const simulate = async ({
  */
 const approve = async (id, adminId, newInstallmentsCount) => {
   const credit = await queries.findById(id);
-  if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-  if (credit.status !== 'PENDING_APPROVAL')
-    throw { status: 409, message: 'Solo se pueden aprobar créditos en estado PENDIENTE DE APROBACIÓN.' };
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (credit.status !== "PENDING_APPROVAL")
+    throw {
+      status: 409,
+      message:
+        "Solo se pueden aprobar créditos en estado PENDIENTE DE APROBACIÓN.",
+    };
 
-  const installmentsCount  = newInstallmentsCount || credit.installments_count;
-  const commissionRate     = parseFloat(await getValue('commission_rate') || '0.08');
+  const installmentsCount = newInstallmentsCount || credit.installments_count;
+  const commissionRate = parseFloat(
+    (await getValue("commission_rate")) || "0.08",
+  );
   const { week_start, week_end } = getWeekBounds();
 
   // ── LOAN ─────────────────────────────────────────────────────
-  if (credit.type === 'LOAN') {
-    const rateRecord = await irQueries.findActiveRate(credit.payment_frequency, installmentsCount, credit.total_amount);
+  if (credit.type === "LOAN") {
+    const rateRecord = await irQueries.findActiveRate(
+      credit.payment_frequency,
+      installmentsCount,
+      credit.total_amount,
+    );
     if (!rateRecord)
-      throw { status: 409, message: 'No existe tasa de interés activa para esta combinación y monto.' };
+      throw {
+        status: 409,
+        message:
+          "No existe tasa de interés activa para esta combinación y monto.",
+      };
 
-    const installmentAmount = getInstallmentAmount(credit.total_amount, rateRecord.rate, installmentsCount);
+    const installmentAmount = getInstallmentAmount(
+      credit.total_amount,
+      rateRecord.rate,
+      installmentsCount,
+    );
     // Ancla del cronograma: si el credito tiene first_payment_date persistido
     // (elegido en el wizard), arrancamos desde ahi. Sino fallback a "hoy +
     // frecuencia" (comportamiento legacy para creditos pre-migracion 028).
@@ -546,8 +648,20 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
     await withTransaction(async (client) => {
-      await queries.approve(client, id, adminId, rateRecord.rate, installmentsCount);
-      await queries.generateInstallments(client, id, installmentAmount, dueDates, credit.payment_frequency);
+      await queries.approve(
+        client,
+        id,
+        adminId,
+        rateRecord.rate,
+        installmentsCount,
+      );
+      await queries.generateInstallments(
+        client,
+        id,
+        installmentAmount,
+        dueDates,
+        credit.payment_frequency,
+      );
     });
 
     return sanitizeCredit(await queries.findById(id));
@@ -556,15 +670,15 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   // ── SALE ─────────────────────────────────────────────────────
   const creditUnits = await queries.findCreditUnits(id);
   if (!creditUnits.length)
-    throw { status: 409, message: 'El crédito no tiene unidades asociadas.' };
+    throw { status: 409, message: "El crédito no tiene unidades asociadas." };
 
-  const downPayment    = parseFloat(credit.down_payment || 0);
-  const totalBase      = parseFloat(credit.total_amount);
+  const downPayment = parseFloat(credit.down_payment || 0);
+  const totalBase = parseFloat(credit.total_amount);
   const financedAmount = getFinancedAmount(totalBase, downPayment);
-  const capitalRatio   = downPayment > 0 ? financedAmount / totalBase : 1;
+  const capitalRatio = downPayment > 0 ? financedAmount / totalBase : 1;
 
   for (const u of creditUnits) {
-    if (u.unit_status !== 'RESERVED')
+    if (u.unit_status !== "RESERVED")
       throw {
         status: 409,
         message: `La unidad del producto "${u.title}" ya no está disponible (estado: ${u.unit_status}).`,
@@ -575,16 +689,20 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   const productGroups = new Map();
   for (const u of creditUnits) {
     if (!productGroups.has(u.product_id)) {
-      const rateRecord = await prQueries.findActiveRate(u.product_id, credit.payment_frequency, installmentsCount);
+      const rateRecord = await prQueries.findActiveRate(
+        u.product_id,
+        credit.payment_frequency,
+        installmentsCount,
+      );
       if (!rateRecord)
         throw {
           status: 409,
           message: `No existe tasa configurada para "${u.title}" con ${installmentsCount} cuotas ${credit.payment_frequency}.`,
         };
       productGroups.set(u.product_id, {
-        rate:             parseFloat(rateRecord.rate),
-        description:      u.title,
-        lineTotal:        0,
+        rate: parseFloat(rateRecord.rate),
+        description: u.title,
+        lineTotal: 0,
         creditProductIds: [],
       });
     }
@@ -596,7 +714,11 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   let totalInstallment = 0;
   for (const g of productGroups.values()) {
     const netLine = g.lineTotal * capitalRatio;
-    totalInstallment += getProductInstallmentContribution(netLine, g.rate, installmentsCount);
+    totalInstallment += getProductInstallmentContribution(
+      netLine,
+      g.rate,
+      installmentsCount,
+    );
   }
 
   // Ancla del cronograma: si el credito tiene first_payment_date persistido
@@ -617,13 +739,15 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   await withTransaction(async (client) => {
     let activeCashSessionId = null;
     if (needsActiveSession) {
-      const cashSessionsQueries = require('../cashSessions/cashSessions.queries');
-      const activeSession = await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+      const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+      const activeSession =
+        await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
       if (!activeSession)
         throw {
           status: 409,
-          message: 'No hay caja operativa abierta. Abrí una caja para aprobar un crédito con enganche o cuotas adelantadas.',
-          code: 'NO_ACTIVE_SESSION',
+          message:
+            "No hay caja operativa abierta. Abrí una caja para aprobar un crédito con enganche o cuotas adelantadas.",
+          code: "NO_ACTIVE_SESSION",
         };
       activeCashSessionId = activeSession.id;
     }
@@ -636,20 +760,27 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       }
     }
 
-    await queries.generateInstallments(client, id, totalInstallment, dueDates, credit.payment_frequency);
+    await queries.generateInstallments(
+      client,
+      id,
+      totalInstallment,
+      dueDates,
+      credit.payment_frequency,
+    );
 
     if (credit.prepaid_installments > 0) {
       const n = credit.prepaid_installments;
       const prepaidTotal = await queries.markPrepaidInstallments(client, id, n);
       await queries.createDownPayment(client, {
-        creditId:          id,
-        amount:            prepaidTotal,
-        paymentMethod:     credit.prepaid_installments_method,
-        transferReference: credit.prepaid_installments_transfer_reference || null,
-        approvedBy:        adminId,
-        paymentType:       'PREPAID_INSTALLMENT',
+        creditId: id,
+        amount: prepaidTotal,
+        paymentMethod: credit.prepaid_installments_method,
+        transferReference:
+          credit.prepaid_installments_transfer_reference || null,
+        approvedBy: adminId,
+        paymentType: "PREPAID_INSTALLMENT",
         registerDate,
-        cashSessionId:     activeCashSessionId,
+        cashSessionId: activeCashSessionId,
       });
       // Correr las fechas de las cuotas pendientes: la primera no-pagada toma
       // el lugar de la cuota 1 (first_payment_date), la siguiente la fecha de
@@ -658,30 +789,40 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       // hay adelanto, las cuotas restantes ocupan los huecos liberados.
       // GREATEST(baseDueDate, CURRENT_DATE) del helper protege si el approve
       // ocurre despues de first_payment_date (fecha en el pasado).
-      const paymentsQueries = require('../payments/payments.queries');
+      const paymentsQueries = require("../payments/payments.queries");
       await paymentsQueries.shiftInstallmentDates(
-        client, id, credit.payment_frequency, credit.first_payment_date,
+        client,
+        id,
+        credit.payment_frequency,
+        credit.first_payment_date,
       );
     }
 
     const unitIds = creditUnits.map((u) => u.unit_id);
-    await puQueries.updateStatusBulk(client, unitIds, 'SOLD');
+    await puQueries.updateStatusBulk(client, unitIds, "SOLD");
 
     if (downPayment > 0) {
       await queries.createDownPayment(client, {
-        creditId:          id,
-        amount:            downPayment,
-        paymentMethod:     credit.down_payment_method || 'CASH',
+        creditId: id,
+        amount: downPayment,
+        paymentMethod: credit.down_payment_method || "CASH",
         transferReference: credit.down_payment_transfer_reference || null,
-        approvedBy:        adminId,
+        approvedBy: adminId,
         registerDate,
-        cashSessionId:     activeCashSessionId,
+        cashSessionId: activeCashSessionId,
       });
     }
 
     if (credit.created_by) {
       const commissionAmount = totalBase * commissionRate;
-      await queries.createCommission(client, credit.created_by, id, commissionAmount, week_start, week_end);
+      await queries.createCommission(
+        client,
+        credit.created_by,
+        id,
+        commissionAmount,
+        week_start,
+        week_end,
+      );
     }
   });
 
@@ -690,26 +831,31 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
 const reject = async (id, rejectionReason, adminId) => {
   const credit = await queries.findById(id);
-  if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-  if (credit.status !== 'PENDING_APPROVAL')
-    throw { status: 409, message: 'Solo se pueden rechazar créditos en estado PENDIENTE DE APROBACIÓN.' };
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (credit.status !== "PENDING_APPROVAL")
+    throw {
+      status: 409,
+      message:
+        "Solo se pueden rechazar créditos en estado PENDIENTE DE APROBACIÓN.",
+    };
 
   await withTransaction(async (client) => {
-    if (credit.type === 'SALE') {
+    if (credit.type === "SALE") {
       const unitIds = await queries.findCreditUnitIds(id);
-      if (unitIds.length) await puQueries.updateStatusBulk(client, unitIds, 'AVAILABLE');
+      if (unitIds.length)
+        await puQueries.updateStatusBulk(client, unitIds, "AVAILABLE");
     }
     await client.query(
       `UPDATE credits
        SET status = 'REJECTED', rejection_reason = $1, approved_by = $2,
            approved_at = NOW(), updated_at = NOW()
        WHERE id = $3`,
-      [rejectionReason, adminId, id]
+      [rejectionReason, adminId, id],
     );
     // Si es una refinanciación rechazada, revertir el crédito original a ACTIVE
     // y restaurar sus cuotas al estado correcto según vencimiento y pagos parciales.
     if (credit.refinanced_from_credit_id) {
-      const rejectedNote = `Refinanciación rechazada (${new Date().toLocaleDateString('es-AR')}): ${rejectionReason}`;
+      const rejectedNote = `Refinanciación rechazada (${new Date().toLocaleDateString("es-AR")}): ${rejectionReason}`;
       await client.query(
         `UPDATE credits
          SET status            = 'ACTIVE',
@@ -722,9 +868,9 @@ const reject = async (id, rejectionReason, adminId) => {
              END,
              updated_at = NOW()
          WHERE id = $1 AND status = 'REFINANCED'`,
-        [credit.refinanced_from_credit_id, rejectedNote]
+        [credit.refinanced_from_credit_id, rejectedNote],
       );
-      const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
+      const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
       await client.query(
         `UPDATE installments
          SET status = CASE
@@ -735,52 +881,72 @@ const reject = async (id, rejectionReason, adminId) => {
              updated_at = NOW()
          WHERE credit_id = $2
            AND status = 'REFINANCED'`,
-        [graceDays, credit.refinanced_from_credit_id]
+        [graceDays, credit.refinanced_from_credit_id],
       );
     }
   });
 };
 
-const earlySettlement = async (id, paymentMethod, transferReference, adminId) => {
+const earlySettlement = async (
+  id,
+  paymentMethod,
+  transferReference,
+  adminId,
+) => {
   const credit = await queries.findById(id);
-  if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-  if (credit.status !== 'ACTIVE')
-    throw { status: 409, message: 'Solo se puede cancelar anticipadamente un crédito ACTIVO.' };
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (credit.status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: "Solo se puede cancelar anticipadamente un crédito ACTIVO.",
+    };
 
   const pendingInstallments = await queries.getPendingInstallments(id);
   if (!pendingInstallments.length)
-    throw { status: 409, message: 'Este crédito no tiene cuotas pendientes.' };
+    throw { status: 409, message: "Este crédito no tiene cuotas pendientes." };
 
   // Validar que no haya pagos pendientes de aprobación
   const pendingPaymentsResult = await pool.query(
     `SELECT COUNT(*)::int AS count FROM payments p
      JOIN installments i ON i.id = p.installment_id
      WHERE i.credit_id = $1 AND p.status = 'PENDING'`,
-    [id]
+    [id],
   );
   if (pendingPaymentsResult.rows[0].count > 0)
     throw {
       status: 409,
-      message: 'El crédito tiene pagos pendientes de aprobación. Apruébalos o rechazalos antes de cancelar anticipadamente.',
+      message:
+        "El crédito tiene pagos pendientes de aprobación. Apruébalos o rechazalos antes de cancelar anticipadamente.",
     };
 
-  const settlementAmount = Math.round(
-    pendingInstallments.reduce((sum, inst) => sum + inst.amount_due - inst.amount_paid, 0) * 100
-  ) / 100;
+  const settlementAmount =
+    Math.round(
+      pendingInstallments.reduce(
+        (sum, inst) => sum + inst.amount_due - inst.amount_paid,
+        0,
+      ) * 100,
+    ) / 100;
 
   return withTransaction(async (client) => {
     // Un payment por cuota para mantener trazabilidad completa en reportes y auditoría
     // Se crean en PENDING status para requerir aprobación explícita (doble aprobación)
     const paymentIds = [];
     for (const inst of pendingInstallments) {
-      const instAmount = Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
+      const instAmount =
+        Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
       const paymentResult = await client.query(
         `INSERT INTO payments
            (installment_id, collector_id, amount_received, payment_method, transfer_reference,
             status, notes)
          VALUES ($1, $2, $3, $4, $5, 'PENDING', 'Cancelación anticipada')
          RETURNING id`,
-        [inst.id, adminId, instAmount, paymentMethod, transferReference || null]
+        [
+          inst.id,
+          adminId,
+          instAmount,
+          paymentMethod,
+          transferReference || null,
+        ],
       );
       paymentIds.push(paymentResult.rows[0].id);
     }
@@ -792,7 +958,7 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
        SET settlement_amount = $1, settlement_type = 'EARLY_CANCELLATION',
            updated_at = NOW()
        WHERE id = $2`,
-      [settlementAmount, id]
+      [settlementAmount, id],
     );
 
     return {
@@ -800,7 +966,8 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
       settlement_amount: settlementAmount,
       payment_method: paymentMethod,
       payment_ids: paymentIds,
-      message: 'Cancelación anticipada creada. Los pagos están pendientes de aprobación.'
+      message:
+        "Cancelación anticipada creada. Los pagos están pendientes de aprobación.",
     };
   });
 };
@@ -815,13 +982,20 @@ const earlySettlement = async (id, paymentMethod, transferReference, adminId) =>
  * @returns {Promise<object[]>} Array con los resultados de todas las simulaciones válidas.
  */
 const simulateAll = async ({ type, total_amount, products }) => {
-  if (type === 'LOAN') {
+  if (type === "LOAN") {
     const options = await irQueries.findActiveInstallmentOptions();
     const results = [];
-    for (const [payment_frequency, installments_counts] of Object.entries(options)) {
+    for (const [payment_frequency, installments_counts] of Object.entries(
+      options,
+    )) {
       for (const installments_count of installments_counts) {
         try {
-          const result = await simulate({ type, total_amount, installments_count, payment_frequency });
+          const result = await simulate({
+            type,
+            total_amount,
+            installments_count,
+            payment_frequency,
+          });
           results.push(result);
         } catch {
           // Sin tasa para esta combinación y monto — se omite
@@ -838,21 +1012,36 @@ const simulateAll = async ({ type, total_amount, products }) => {
      FROM product_variants pv
      JOIN products p ON p.id = pv.product_id
      WHERE pv.id = $1`,
-    [variantId]
+    [variantId],
   );
-  if (!varRes.rows[0]) throw { status: 404, message: 'Variante no encontrada.' };
-  if (varRes.rows[0].variant_status !== 'ACTIVE')
-    throw { status: 409, message: 'La variante seleccionada no está disponible.' };
-  if (varRes.rows[0].product_status !== 'ACTIVE')
-    throw { status: 409, message: 'El producto seleccionado no está disponible.' };
+  if (!varRes.rows[0])
+    throw { status: 404, message: "Variante no encontrada." };
+  if (varRes.rows[0].variant_status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: "La variante seleccionada no está disponible.",
+    };
+  if (varRes.rows[0].product_status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: "El producto seleccionado no está disponible.",
+    };
   const productId = varRes.rows[0].product_id;
 
-  const options = await prQueries.findActiveInstallmentOptionsForProduct(productId);
+  const options =
+    await prQueries.findActiveInstallmentOptionsForProduct(productId);
   const results = [];
-  for (const [payment_frequency, installments_counts] of Object.entries(options)) {
+  for (const [payment_frequency, installments_counts] of Object.entries(
+    options,
+  )) {
     for (const installments_count of installments_counts) {
       try {
-        const result = await simulate({ type, products, installments_count, payment_frequency });
+        const result = await simulate({
+          type,
+          products,
+          installments_count,
+          payment_frequency,
+        });
         results.push(result);
       } catch {
         // Sin tasa para esta combinación — se omite
@@ -889,45 +1078,62 @@ const refinance = async (creditId, data, adminId) => {
   return withTransaction(async (client) => {
     // ── 1. Lock exclusivo: impide doble refinanciación y race conditions ─────
     const credit = await queries.lockCredit(client, creditId);
-    if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
-    if (credit.status !== 'ACTIVE')
-      throw { status: 409, message: 'Solo se pueden refinanciar créditos en estado ACTIVO.' };
+    if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+    if (credit.status !== "ACTIVE")
+      throw {
+        status: 409,
+        message: "Solo se pueden refinanciar créditos en estado ACTIVO.",
+      };
 
     // ── 2. Lock de cuotas + validación de saldo ──────────────────────────────
     const installments = await queries.lockInstallments(client, creditId);
 
-    const pendingInstallments = installments.filter(
-      (i) => ['PENDING', 'PARTIAL', 'OVERDUE'].includes(i.status),
+    const pendingInstallments = installments.filter((i) =>
+      ["PENDING", "PARTIAL", "OVERDUE"].includes(i.status),
     );
     if (!pendingInstallments.length)
-      throw { status: 409, message: 'El crédito no tiene saldo pendiente para refinanciar.' };
+      throw {
+        status: 409,
+        message: "El crédito no tiene saldo pendiente para refinanciar.",
+      };
 
-    const pendingBalance = Math.round(
-      pendingInstallments.reduce((sum, i) => sum + (i.amount_due - i.amount_paid), 0) * 100,
-    ) / 100;
+    const pendingBalance =
+      Math.round(
+        pendingInstallments.reduce(
+          (sum, i) => sum + (i.amount_due - i.amount_paid),
+          0,
+        ) * 100,
+      ) / 100;
 
     // ── 3. Validación de pagos PENDING (cobros sin confirmar) ────────────────
     const hasPending = await queries.hasPendingPayments(client, creditId);
     if (hasPending)
       throw {
         status: 409,
-        message: 'El crédito tiene cobros pendientes de aprobación. Resolvalos antes de refinanciar.',
+        message:
+          "El crédito tiene cobros pendientes de aprobación. Resolvalos antes de refinanciar.",
       };
 
     // ── 4. Calcular monto total trasladado ───────────────────────────────────
-    const extraCharges = Math.round(parseFloat(data.extra_charges || 0) * 100) / 100;
-    if (extraCharges < 0) throw { status: 400, message: 'Los cargos adicionales no pueden ser negativos.' };
-    const totalTransferred = Math.round((pendingBalance + extraCharges) * 100) / 100;
+    const extraCharges =
+      Math.round(parseFloat(data.extra_charges || 0) * 100) / 100;
+    if (extraCharges < 0)
+      throw {
+        status: 400,
+        message: "Los cargos adicionales no pueden ser negativos.",
+      };
+    const totalTransferred =
+      Math.round((pendingBalance + extraCharges) * 100) / 100;
 
     // ── 5. Crear nuevo crédito LOAN en PENDING_APPROVAL ──────────────────────
     const newCredit = await queries.createRefinancing(client, {
-      customer_id:              credit.customer_id,
-      created_by:               adminId,
-      total_amount:             totalTransferred,
-      installments_count:       data.installments_count,
-      payment_frequency:        data.payment_frequency,
+      customer_id: credit.customer_id,
+      created_by: adminId,
+      total_amount: totalTransferred,
+      installments_count: data.installments_count,
+      payment_frequency: data.payment_frequency,
       refinanced_from_credit_id: creditId,
-      notes:                    data.notes || null,
+      notes: data.notes || null,
     });
 
     // ── 6. Marcar crédito original como REFINANCED ───────────────────────────
@@ -936,25 +1142,36 @@ const refinance = async (creditId, data, adminId) => {
     // ── 7. Registrar trazabilidad en credit_refinancings ────────────────────
     await queries.createRefinancingRecord(client, {
       original_credit_id: creditId,
-      new_credit_id:      newCredit.id,
-      pending_balance:    pendingBalance,
-      extra_charges:      extraCharges,
-      total_transferred:  totalTransferred,
-      refinancing_type:   'STANDARD',
-      reason:             data.reason,
-      notes:              data.notes || null,
-      executed_by:        adminId,
+      new_credit_id: newCredit.id,
+      pending_balance: pendingBalance,
+      extra_charges: extraCharges,
+      total_transferred: totalTransferred,
+      refinancing_type: "STANDARD",
+      reason: data.reason,
+      notes: data.notes || null,
+      executed_by: adminId,
     });
 
     return {
       original_credit_id: creditId,
-      new_credit:         newCredit,
-      pending_balance:    pendingBalance,
-      extra_charges:      extraCharges,
-      total_transferred:  totalTransferred,
-      message:            'Refinanciación creada. El nuevo crédito está pendiente de aprobación.',
+      new_credit: newCredit,
+      pending_balance: pendingBalance,
+      extra_charges: extraCharges,
+      total_transferred: totalTransferred,
+      message:
+        "Refinanciación creada. El nuevo crédito está pendiente de aprobación.",
     };
   });
 };
 
-module.exports = { getAll, getById, create, simulate, simulateAll, approve, reject, earlySettlement, refinance };
+module.exports = {
+  getAll,
+  getById,
+  create,
+  simulate,
+  simulateAll,
+  approve,
+  reject,
+  earlySettlement,
+  refinance,
+};

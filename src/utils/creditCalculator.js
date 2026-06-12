@@ -1,4 +1,4 @@
-const { localDate } = require('./date');
+const { localDate } = require("./date");
 
 /**
  * Convierte un input de fecha YYYY-MM-DD a Date local sin sesgo UTC.
@@ -8,8 +8,8 @@ const { localDate } = require('./date');
 const parseLocalDateInput = (value) => {
   if (!value) return null;
   if (value instanceof Date) return new Date(value);
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const [year, month, day] = value.split('-').map(Number);
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
     return new Date(year, month - 1, day);
   }
   return new Date(value);
@@ -24,15 +24,15 @@ const parseLocalDateInput = (value) => {
  */
 const addFrequencyPeriods = (baseDate, frequency, periods) => {
   const due = new Date(baseDate);
-  if (frequency === 'WEEKLY') {
+  if (frequency === "WEEKLY") {
     due.setDate(baseDate.getDate() + 7 * periods);
     return due;
   }
-  if (frequency === 'BIWEEKLY') {
+  if (frequency === "BIWEEKLY") {
     due.setDate(baseDate.getDate() + 14 * periods);
     return due;
   }
-  due.setMonth(baseDate.getMonth() + periods);
+  due.setDate(baseDate.getDate() + 30 * periods);
   return due;
 };
 
@@ -56,8 +56,8 @@ const adjustDueDatesWithBusinessDayRule = (dueDates, moveToNextBusinessDayFn) =>
  */
 const getInstallmentAmount = (totalAmount, coefficient, installmentsCount) => {
   const amount = parseFloat(totalAmount);
-  const coef   = parseFloat(coefficient);
-  const count  = parseInt(installmentsCount);
+  const coef = parseFloat(coefficient);
+  const count = parseInt(installmentsCount);
   const totalWithInterest = amount * (1 + coef);
   const rawInstallment = Math.round((totalWithInterest / count) * 100) / 100;
   return Math.ceil(rawInstallment / 1000) * 1000;
@@ -69,7 +69,7 @@ const getInstallmentAmount = (totalAmount, coefficient, installmentsCount) => {
  */
 const getTotalWithInterest = (totalAmount, coefficient) => {
   const amount = parseFloat(totalAmount);
-  const coef   = parseFloat(coefficient);
+  const coef = parseFloat(coefficient);
   return Math.round(amount * (1 + coef) * 100) / 100;
 };
 
@@ -88,7 +88,7 @@ const getTotalToReturn = (totalAmount, coefficient, installmentsCount) => {
  */
 const getDueDates = (startDate, installmentsCount, frequency) => {
   const dates = [];
-  const base  = new Date(startDate);
+  const base = new Date(startDate);
   base.setHours(12, 0, 0, 0);
 
   for (let i = 1; i <= installmentsCount; i++) {
@@ -105,7 +105,11 @@ const getDueDates = (startDate, installmentsCount, frequency) => {
  * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
  * @returns {Date[]} Fechas de vencimiento calculadas.
  */
-const getDueDatesFromFirstPayment = (firstPaymentDate, installmentsCount, frequency) => {
+const getDueDatesFromFirstPayment = (
+  firstPaymentDate,
+  installmentsCount,
+  frequency,
+) => {
   if (!firstPaymentDate) {
     return getDueDates(new Date(), installmentsCount, frequency);
   }
@@ -125,7 +129,7 @@ const getDueDatesFromFirstPayment = (firstPaymentDate, installmentsCount, freque
  * Retorna strings 'YYYY-MM-DD' para uso directo en SQL.
  */
 const getWeekBounds = (date = new Date()) => {
-  const d   = new Date(date);
+  const d = new Date(date);
   const day = d.getDay(); // 0=Dom
   const diffToMonday = day === 0 ? -6 : 1 - day;
 
@@ -139,7 +143,7 @@ const getWeekBounds = (date = new Date()) => {
 
   return {
     week_start: localDate(monday),
-    week_end:   localDate(saturday),
+    week_end: localDate(saturday),
   };
 };
 
@@ -148,8 +152,11 @@ const getWeekBounds = (date = new Date()) => {
  * lineTotal = historical_price × quantity
  * El redondeo al millar se aplica por producto, igual que en getInstallmentAmount.
  */
-const getProductInstallmentContribution = (lineTotal, rate, installmentsCount) =>
-  getInstallmentAmount(lineTotal, rate, installmentsCount);
+const getProductInstallmentContribution = (
+  lineTotal,
+  rate,
+  installmentsCount,
+) => getInstallmentAmount(lineTotal, rate, installmentsCount);
 
 module.exports = {
   getInstallmentAmount,

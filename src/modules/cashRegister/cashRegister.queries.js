@@ -20,7 +20,7 @@
 //   "Bloque D — IMP-1 + IMP-8") y reporte final tras este commit.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 // ── Dashboard del día — única query con CTEs ──────────────────
 /**
@@ -51,7 +51,7 @@ const getDashboard = async (date) => {
        WHERE (status = 'APPROVED' AND approved_at::date = $1::date)
           OR  (status = 'PENDING'  AND created_at::date = $1::date)
      ),
-     down_payments_data AS (
+      down_payments_data AS (
         SELECT
           COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
           COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
@@ -60,8 +60,17 @@ const getDashboard = async (date) => {
         FROM credit_down_payments
         WHERE register_date = $1::date
           AND payment_type = 'DOWN_PAYMENT'
+       ),
+       manual_incomes_data AS (
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+          COALESCE(SUM(amount), 0)                                             AS total,
+          COUNT(*)                                                              AS count
+        FROM cash_session_manual_incomes
+        WHERE created_at::date = $1::date
       ),
-      expenses_data AS (
+       expenses_data AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
@@ -78,11 +87,11 @@ const getDashboard = async (date) => {
         WHERE register_date = $1::date
       )
       SELECT
-        (p.cash_amount     + dp.cash_amount + cv.cash_delta)::float8         AS cash_amount,
-        (p.transfer_amount + dp.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount,
-        (p.total_collected + dp.total)::float8               AS total_collected,
-       ex.total::float8                                     AS total_outflows,
-       (p.total_collected + dp.total - ex.total)::float8    AS net_balance,
+        (p.cash_amount     + dp.cash_amount     + mi.cash_amount     + cv.cash_delta)::float8 AS cash_amount,
+        (p.transfer_amount + dp.transfer_amount + mi.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount,
+        (p.total_collected + dp.total + mi.total)::float8    AS total_collected,
+        ex.total::float8                                     AS total_outflows,
+        (p.total_collected + dp.total + mi.total - ex.total)::float8 AS net_balance,
        p.approved_count::int                                AS approved_count,
        p.pending_count::int                                 AS pending_count,
        p.pending_amount::float8                             AS pending_amount,
@@ -90,8 +99,8 @@ const getDashboard = async (date) => {
        dp.count::int                                        AS down_payments_count,
        ex.total::float8                                     AS expenses_total,
        ex.count::int                                        AS expenses_count
-      FROM payments_data p, down_payments_data dp, expenses_data ex, conversions_data cv`,
-    [date]
+      FROM payments_data p, down_payments_data dp, manual_incomes_data mi, expenses_data ex, conversions_data cv`,
+    [date],
   );
   return r.rows[0];
 };
@@ -121,15 +130,23 @@ const getDailyTotals = async (date) => {
        FROM payments
        WHERE status = 'APPROVED' AND approved_at::date = $1::date
      ),
-     down_payment_totals AS (
+      down_payment_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM credit_down_payments
        WHERE register_date = $1::date
-         AND payment_type = 'DOWN_PAYMENT'
-     ),
-     expenses_totals AS (
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
+      manual_incomes_totals AS (
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+          COALESCE(SUM(amount), 0)                                             AS total
+        FROM cash_session_manual_incomes
+        WHERE created_at::date = $1::date
+      ),
+      expenses_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
@@ -146,8 +163,8 @@ const getDailyTotals = async (date) => {
      )
      SELECT
        -- Ingresos brutos por método
-       (p.cash_amount     + dp.cash_amount)::float8                                         AS gross_cash,
-       (p.transfer_amount + dp.transfer_amount)::float8                                     AS gross_transfer,
+        (p.cash_amount     + dp.cash_amount     + mi.cash_amount)::float8                    AS gross_cash,
+        (p.transfer_amount + dp.transfer_amount + mi.transfer_amount)::float8                AS gross_transfer,
        -- Egresos desglosados por método
        ex.cash_amount::float8                                                               AS expenses_cash,
        ex.transfer_amount::float8                                                           AS expenses_transfer,
@@ -156,10 +173,10 @@ const getDailyTotals = async (date) => {
        0::float8                                                                            AS commissions_transfer,
        ex.total::float8                                                                     AS total_outflows,
        -- Saldos netos por método (ingresos - egresos del mismo método)
-        (p.cash_amount     + dp.cash_amount     - ex.cash_amount     + cv.cash_delta)::float8     AS cash_amount,
-        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount
-      FROM payments_totals p, down_payment_totals dp, expenses_totals ex, conversions_totals cv`,
-    [date]
+         (p.cash_amount     + dp.cash_amount     + mi.cash_amount     - ex.cash_amount     + cv.cash_delta)::float8 AS cash_amount,
+         (p.transfer_amount + dp.transfer_amount + mi.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount
+      FROM payments_totals p, down_payment_totals dp, manual_incomes_totals mi, expenses_totals ex, conversions_totals cv`,
+    [date],
   );
   return r.rows[0];
 };
@@ -173,7 +190,7 @@ const getPendingPaymentsToday = async (date) => {
      FROM payments
      WHERE status = 'PENDING'
        AND created_at::date = $1::date`,
-    [date]
+    [date],
   );
   return r.rows[0];
 };
@@ -199,15 +216,22 @@ const getPreClose = async (date) => {
        FROM payments
        WHERE status = 'APPROVED' AND approved_at::date = $1::date
      ),
-     down_payment_totals AS (
+      down_payment_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM credit_down_payments
        WHERE register_date = $1::date
-         AND payment_type = 'DOWN_PAYMENT'
-     ),
-     expenses_totals AS (
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
+      manual_incomes_totals AS (
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+        FROM cash_session_manual_incomes
+        WHERE created_at::date = $1::date
+      ),
+      expenses_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
@@ -234,19 +258,19 @@ const getPreClose = async (date) => {
        p.transfer_amount::float8                                                                 AS cobros_transferencia,
        dp.cash_amount::float8                                                                    AS enganches_efectivo,
        dp.transfer_amount::float8                                                                AS enganches_transferencia,
-       (p.cash_amount + p.transfer_amount + dp.cash_amount + dp.transfer_amount)::float8         AS total_bruto,
+        (p.cash_amount + p.transfer_amount + dp.cash_amount + dp.transfer_amount + mi.cash_amount + mi.transfer_amount)::float8 AS total_bruto,
        ex.cash_amount::float8                                                                    AS gastos_efectivo,
        ex.transfer_amount::float8                                                                AS gastos_transferencia,
        -- DEPRECATED Fase 3: commissions ya no se imputan al día.
        0::float8                                                                                 AS comisiones_efectivo,
        0::float8                                                                                 AS comisiones_transferencia,
        (ex.cash_amount + ex.transfer_amount)::float8                                             AS total_egresos,
-        (p.cash_amount + dp.cash_amount - ex.cash_amount + cv.cash_delta)::float8                 AS efectivo_esperado,
-        (p.transfer_amount + dp.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transferencia_esperada,
+         (p.cash_amount + dp.cash_amount + mi.cash_amount - ex.cash_amount + cv.cash_delta)::float8 AS efectivo_esperado,
+         (p.transfer_amount + dp.transfer_amount + mi.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transferencia_esperada,
         pt.count                                                                                  AS pendientes_count,
         pt.amount                                                                                 AS pendientes_amount
-      FROM payments_totals p, down_payment_totals dp, expenses_totals ex, pending_totals pt, conversions_totals cv`,
-    [date]
+      FROM payments_totals p, down_payment_totals dp, manual_incomes_totals mi, expenses_totals ex, pending_totals pt, conversions_totals cv`,
+    [date],
   );
   return r.rows[0];
 };
@@ -282,7 +306,7 @@ const findUnclosedJornadaDate = async (today) => {
        FROM cash_registers
        WHERE register_date >= ($1::date - INTERVAL '14 days')
      )`,
-    [today]
+    [today],
   );
   return r.rows[0]?.jornada_date || null;
 };
@@ -291,7 +315,7 @@ const findUnclosedJornadaDate = async (today) => {
 const findByDate = async (date) => {
   const r = await pool.query(
     `SELECT id FROM cash_registers WHERE register_date = $1::date`,
-    [date]
+    [date],
   );
   return r.rows[0] || null;
 };
@@ -309,9 +333,18 @@ const findAll = async ({ dateFrom, dateTo, differenceStatus } = {}) => {
     JOIN users u ON u.id = cr.closed_by
     WHERE 1=1`;
   const params = [];
-  if (dateFrom)         { params.push(dateFrom);         q += ` AND cr.register_date >= $${params.length}`; }
-  if (dateTo)           { params.push(dateTo);           q += ` AND cr.register_date <= $${params.length}`; }
-  if (differenceStatus) { params.push(differenceStatus); q += ` AND cr.difference_status = $${params.length}`; }
+  if (dateFrom) {
+    params.push(dateFrom);
+    q += ` AND cr.register_date >= $${params.length}`;
+  }
+  if (dateTo) {
+    params.push(dateTo);
+    q += ` AND cr.register_date <= $${params.length}`;
+  }
+  if (differenceStatus) {
+    params.push(differenceStatus);
+    q += ` AND cr.difference_status = $${params.length}`;
+  }
   q += ` ORDER BY cr.register_date DESC`;
   return (await pool.query(q, params)).rows;
 };
@@ -328,13 +361,18 @@ const findById = async (id) => {
      FROM cash_registers cr
      JOIN users u ON u.id = cr.closed_by
      WHERE cr.id = $1`,
-    [id]
+    [id],
   );
 
   const register = registerResult.rows[0];
   if (!register) return null;
 
-  const [paymentsResult, downPaymentsResult, liquidationsResult, expensesResult] = await Promise.all([
+  const [
+    paymentsResult,
+    downPaymentsResult,
+    liquidationsResult,
+    expensesResult,
+  ] = await Promise.all([
     pool.query(
       `SELECT p.id, p.amount_received::float8, p.payment_method,
               p.transfer_reference, p.approved_at,
@@ -349,7 +387,7 @@ const findById = async (id) => {
        WHERE p.status = 'APPROVED'
          AND p.approved_at::date = $1::date
        ORDER BY p.approved_at`,
-      [register.register_date]
+      [register.register_date],
     ),
     pool.query(
       `SELECT cdp.id, cdp.amount::float8, cdp.payment_method,
@@ -363,7 +401,7 @@ const findById = async (id) => {
         WHERE cdp.register_date = $1::date
           AND cdp.payment_type = 'DOWN_PAYMENT'
         ORDER BY cdp.created_at`,
-      [register.register_date]
+      [register.register_date],
     ),
     pool.query(
       `SELECT cl.id, cl.total_paid::float8, cl.commissions_total::float8,
@@ -374,7 +412,7 @@ const findById = async (id) => {
        JOIN users u ON u.id = cl.user_id
        WHERE cl.cash_register_id = $1
        ORDER BY cl.paid_at`,
-      [id]
+      [id],
     ),
     pool.query(
       `SELECT e.id, e.amount::float8, e.description, e.payment_method,
@@ -384,26 +422,37 @@ const findById = async (id) => {
        JOIN users u ON u.id = e.created_by
        WHERE e.register_date = $1::date
        ORDER BY e.created_at`,
-      [register.register_date]
+      [register.register_date],
     ),
   ]);
 
   return {
     ...register,
     breakdown: {
-      payments:      paymentsResult.rows,
+      payments: paymentsResult.rows,
       down_payments: downPaymentsResult.rows,
-      liquidations:  liquidationsResult.rows,
-      expenses:      expensesResult.rows,
+      liquidations: liquidationsResult.rows,
+      expenses: expensesResult.rows,
     },
   };
 };
 
 // ── Crear cierre ──────────────────────────────────────────────
-const create = async (client, {
-  registerDate, cashAmount, transferAmount, totalCollected,
-  totalOutflows, declaredCash, difference, differenceStatus, observations, closedBy,
-}) => {
+const create = async (
+  client,
+  {
+    registerDate,
+    cashAmount,
+    transferAmount,
+    totalCollected,
+    totalOutflows,
+    declaredCash,
+    difference,
+    differenceStatus,
+    observations,
+    closedBy,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO cash_registers
        (register_date, cash_amount, transfer_amount, total_collected,
@@ -415,9 +464,17 @@ const create = async (client, {
                declared_cash::float8, difference::float8,
                difference_status, observations, created_at`,
     [
-      registerDate, cashAmount, transferAmount, totalCollected,
-      totalOutflows, declaredCash, difference, differenceStatus, observations || null, closedBy,
-    ]
+      registerDate,
+      cashAmount,
+      transferAmount,
+      totalCollected,
+      totalOutflows,
+      declaredCash,
+      difference,
+      differenceStatus,
+      observations || null,
+      closedBy,
+    ],
   );
   return r.rows[0];
 };
@@ -441,9 +498,19 @@ const linkLiquidations = async (/* client, cashRegisterId, date */) => {
  * @param {object} params - Datos de la conversión.
  * @returns {Promise<object>} Conversión creada.
  */
-const createConversion = async (client, {
-  registerDate, criteria, sourceMethod, targetMethod, amount, notes, createdBy, cashSessionId,
-}) => {
+const createConversion = async (
+  client,
+  {
+    registerDate,
+    criteria,
+    sourceMethod,
+    targetMethod,
+    amount,
+    notes,
+    createdBy,
+    cashSessionId,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO cash_conversions
        (register_date, criteria, source_method, target_method, amount, notes, created_by, cash_session_id)
@@ -458,9 +525,133 @@ const createConversion = async (client, {
                created_by,
                cash_session_id,
                created_at`,
-    [registerDate, criteria, sourceMethod, targetMethod, amount, notes || null, createdBy, cashSessionId || null],
+    [
+      registerDate,
+      criteria,
+      sourceMethod,
+      targetMethod,
+      amount,
+      notes || null,
+      createdBy,
+      cashSessionId || null,
+    ],
   );
   return r.rows[0];
+};
+
+/**
+ * Lista los movimientos imputados a una caja operativa en una sola consulta.
+ * @param {string} cashSessionId - Caja operativa a consultar.
+ * @returns {Promise<object[]>} Movimientos normalizados para la vista de jornada.
+ */
+const findMovementsBySessionId = async (cashSessionId) => {
+  const r = await pool.query(
+    `SELECT id, concepto, fecha_hora, responsable, tipo, monto, metodo_pago
+     FROM (
+       SELECT
+         p.id,
+         CASE WHEN COALESCE(p.is_reversal, FALSE)
+           THEN 'Reversión de cobro'
+           ELSE 'Cobro de cuota'
+         END AS concepto,
+         p.approved_at AS fecha_hora,
+         COALESCE(approver.full_name, collector.full_name, 'Sistema') AS responsable,
+         CASE WHEN COALESCE(p.is_reversal, FALSE) THEN 'EGRESO' ELSE 'INGRESO' END AS tipo,
+         p.amount_received::float8 AS monto,
+         CASE p.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE p.payment_method
+         END AS metodo_pago
+       FROM payments p
+       LEFT JOIN users approver ON approver.id = p.approved_by
+       LEFT JOIN users collector ON collector.id = p.collector_id
+       WHERE p.cash_session_id = $1
+         AND p.status = 'APPROVED'
+
+       UNION ALL
+
+       SELECT
+         e.id,
+         e.description AS concepto,
+         e.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'EGRESO' AS tipo,
+         e.amount::float8 AS monto,
+         CASE e.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE e.payment_method
+         END AS metodo_pago
+       FROM expenses e
+       LEFT JOIN users u ON u.id = e.created_by
+       WHERE e.cash_session_id = $1
+
+       UNION ALL
+
+       SELECT
+         mi.id,
+         mi.description AS concepto,
+         mi.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'INGRESO' AS tipo,
+         mi.amount::float8 AS monto,
+         CASE mi.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE mi.payment_method
+         END AS metodo_pago
+       FROM cash_session_manual_incomes mi
+       LEFT JOIN users u ON u.id = mi.created_by
+       WHERE mi.cash_session_id = $1
+
+       UNION ALL
+
+       SELECT
+         cdp.id,
+         CASE cdp.payment_type
+           WHEN 'PREPAID_INSTALLMENT' THEN 'Anticipo de cuotas'
+           ELSE 'Anticipo / venta'
+         END AS concepto,
+         cdp.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'INGRESO' AS tipo,
+         cdp.amount::float8 AS monto,
+         CASE cdp.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE cdp.payment_method
+         END AS metodo_pago
+       FROM credit_down_payments cdp
+       LEFT JOIN users u ON u.id = cdp.approved_by
+       WHERE cdp.cash_session_id = $1
+
+       UNION ALL
+
+       SELECT
+         cc.id,
+         CONCAT('Conversión ',
+           CASE cc.source_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END,
+           ' a ',
+           CASE cc.target_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END
+         ) AS concepto,
+         cc.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'CONVERSION' AS tipo,
+         cc.amount::float8 AS monto,
+         CONCAT(
+           CASE cc.source_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END,
+           ' → ',
+           CASE cc.target_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END
+         ) AS metodo_pago
+       FROM cash_conversions cc
+       LEFT JOIN users u ON u.id = cc.created_by
+       WHERE cc.cash_session_id = $1
+     ) movements
+     ORDER BY fecha_hora DESC`,
+    [cashSessionId],
+  );
+  return r.rows;
 };
 
 module.exports = {
@@ -475,4 +666,5 @@ module.exports = {
   create,
   linkLiquidations,
   createConversion,
+  findMovementsBySessionId,
 };

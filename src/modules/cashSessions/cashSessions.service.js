@@ -1,9 +1,9 @@
-const queries        = require('./cashSessions.queries');
-const bdQueries      = require('../businessDays/businessDays.queries');
-const cashAccountsQueries = require('../cashAccounts/cashAccounts.queries');
-const cashAccountsService = require('../cashAccounts/cashAccounts.service');
-const { withTransaction } = require('../../utils/transaction');
-const { localDate }       = require('../../utils/date');
+const queries = require("./cashSessions.queries");
+const bdQueries = require("../businessDays/businessDays.queries");
+const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
+const cashAccountsService = require("../cashAccounts/cashAccounts.service");
+const { withTransaction } = require("../../utils/transaction");
+const { localDate } = require("../../utils/date");
 
 const SNAPSHOT_VERSION = 1;
 
@@ -13,44 +13,75 @@ const SNAPSHOT_VERSION = 1;
  * evolucionar el formato sin romper snapshots viejos.
  */
 const buildClosureSnapshot = ({
-  session, totals, drops, declared, capturedBy,
+  session,
+  totals,
+  drops,
+  declared,
+  capturedBy,
 }) => {
   const opening = { cash: session.opening_amount, transfer: 0 };
   const collections = {
-    payments:      { cash: totals.collections_payments_cash,        transfer: totals.collections_payments_transfer },
-    down_payments: { cash: totals.collections_down_payments_cash,   transfer: totals.collections_down_payments_transfer },
+    payments: {
+      cash: totals.collections_payments_cash,
+      transfer: totals.collections_payments_transfer,
+    },
+    down_payments: {
+      cash: totals.collections_down_payments_cash,
+      transfer: totals.collections_down_payments_transfer,
+    },
+    manual_incomes: {
+      cash: totals.collections_manual_incomes_cash,
+      transfer: totals.collections_manual_incomes_transfer,
+    },
   };
   const outflows = {
-    expenses:    { cash: totals.outflows_expenses_cash,    transfer: totals.outflows_expenses_transfer },
-    commissions: { cash: totals.outflows_commissions_cash, transfer: totals.outflows_commissions_transfer },
+    expenses: {
+      cash: totals.outflows_expenses_cash,
+      transfer: totals.outflows_expenses_transfer,
+    },
+    commissions: {
+      cash: totals.outflows_commissions_cash,
+      transfer: totals.outflows_commissions_transfer,
+    },
   };
   const conversions = {
-    cash_delta:     totals.conversions_cash_delta,
+    cash_delta: totals.conversions_cash_delta,
     transfer_delta: totals.conversions_transfer_delta,
   };
   const dropsBlock = {
-    cash:     totals.drops_cash,
+    cash: totals.drops_cash,
     transfer: totals.drops_transfer,
     items: drops
-      .filter((d) => d.status === 'ACTIVE')
-      .map((d) => ({ id: d.id, amount: d.amount, payment_method: d.payment_method, destination: d.destination })),
+      .filter((d) => d.status === "ACTIVE")
+      .map((d) => ({
+        id: d.id,
+        amount: d.amount,
+        payment_method: d.payment_method,
+        destination: d.destination,
+      })),
   };
 
   const expectedCash =
-    opening.cash
-    + collections.payments.cash + collections.down_payments.cash
-    - outflows.expenses.cash    - outflows.commissions.cash
-    + conversions.cash_delta
-    - dropsBlock.cash;
+    opening.cash +
+    collections.payments.cash +
+    collections.down_payments.cash +
+    collections.manual_incomes.cash -
+    outflows.expenses.cash -
+    outflows.commissions.cash +
+    conversions.cash_delta -
+    dropsBlock.cash;
   const expectedTransfer =
-    opening.transfer
-    + collections.payments.transfer + collections.down_payments.transfer
-    - outflows.expenses.transfer    - outflows.commissions.transfer
-    + conversions.transfer_delta
-    - dropsBlock.transfer;
+    opening.transfer +
+    collections.payments.transfer +
+    collections.down_payments.transfer +
+    collections.manual_incomes.transfer -
+    outflows.expenses.transfer -
+    outflows.commissions.transfer +
+    conversions.transfer_delta -
+    dropsBlock.transfer;
 
   return {
-    version:     SNAPSHOT_VERSION,
+    version: SNAPSHOT_VERSION,
     captured_at: new Date().toISOString(),
     captured_by: capturedBy,
     opening,
@@ -61,16 +92,16 @@ const buildClosureSnapshot = ({
     expected: { cash: expectedCash, transfer: expectedTransfer },
     declared: { cash: declared.cash, transfer: declared.transfer },
     difference: {
-      cash:     declared.cash     - expectedCash,
+      cash: declared.cash - expectedCash,
       transfer: declared.transfer - expectedTransfer,
     },
   };
 };
 
 const differenceStatusOf = (n) => {
-  if (n > 0) return 'SURPLUS';
-  if (n < 0) return 'SHORTAGE';
-  return 'EXACT';
+  if (n > 0) return "SURPLUS";
+  if (n < 0) return "SHORTAGE";
+  return "EXACT";
 };
 
 /**
@@ -80,14 +111,22 @@ const differenceStatusOf = (n) => {
  */
 const resolveOrCreateBusinessDay = async (client, branchId) => {
   const businessDate = localDate();
-  const existing = await bdQueries.findByDateAndBranch(businessDate, branchId, client);
+  const existing = await bdQueries.findByDateAndBranch(
+    businessDate,
+    branchId,
+    client,
+  );
   if (existing) return existing;
   try {
     return await bdQueries.create(client, { businessDate, branchId });
   } catch (err) {
     // Race con otra request que creó la jornada en simultáneo → la leo.
-    if (err.code === '23505') {
-      const again = await bdQueries.findByDateAndBranch(businessDate, branchId, client);
+    if (err.code === "23505") {
+      const again = await bdQueries.findByDateAndBranch(
+        businessDate,
+        branchId,
+        client,
+      );
       if (again) return again;
     }
     throw err;
@@ -127,23 +166,25 @@ const open = async (data, requestingUser) => {
   const ownerUserId = data.owner_user_id || requestingUser.id;
   const openingAmount = parseFloat(data.opening_amount);
   if (!Number.isFinite(openingAmount) || openingAmount < 0)
-    throw { status: 422, message: 'opening_amount debe ser un número >= 0.' };
+    throw { status: 422, message: "opening_amount debe ser un número >= 0." };
 
   return withTransaction(async (client) => {
     // Resuelve sucursal (default HQ).
     let branchId = data.branch_id;
     if (branchId) {
       const branch = await bdQueries.findActiveBranchById(branchId, client);
-      if (!branch) throw { status: 404, message: 'Sucursal no encontrada o inactiva.' };
+      if (!branch)
+        throw { status: 404, message: "Sucursal no encontrada o inactiva." };
     } else {
       const def = await bdQueries.findDefaultBranch(client);
-      if (!def) throw { status: 500, message: 'No hay sucursales configuradas.' };
+      if (!def)
+        throw { status: 500, message: "No hay sucursales configuradas." };
       branchId = def.id;
     }
 
     // Resolver o crear la jornada del día.
     const businessDay = await resolveOrCreateBusinessDay(client, branchId);
-    if (['CLOSED', 'AUDITED'].includes(businessDay.status))
+    if (["CLOSED", "AUDITED"].includes(businessDay.status))
       throw {
         status: 409,
         message: `La jornada del ${businessDay.business_date} ya está ${businessDay.status}. No se pueden abrir nuevas cajas.`,
@@ -153,40 +194,42 @@ const open = async (data, requestingUser) => {
     // por business_day. Si la jornada está en READY_TO_CLOSE, la revertimos
     // a OPEN porque va a tener una caja activa nueva.
     const existingActive = await queries.findActiveSessionByBusinessDay(
-      businessDay.id, client,
+      businessDay.id,
+      client,
     );
     if (existingActive) {
       throw {
         status: 409,
         message: `Ya hay una caja operativa abierta en la jornada (id ${existingActive.id}). Cerrala antes de abrir otra.`,
-        code: 'ACTIVE_SESSION_IN_BUSINESS_DAY',
+        code: "ACTIVE_SESSION_IN_BUSINESS_DAY",
         existing_session_id: existingActive.id,
       };
     }
 
-    if (businessDay.status === 'READY_TO_CLOSE') {
+    if (businessDay.status === "READY_TO_CLOSE") {
       const reverted = await bdQueries.revertToOpen(client, businessDay.id);
-      if (reverted) businessDay.status = 'OPEN';
+      if (reverted) businessDay.status = "OPEN";
     }
 
     try {
       const session = await queries.create(client, {
         businessDayId: businessDay.id,
         ownerUserId,
-        openedBy:      requestingUser.id,
+        openedBy: requestingUser.id,
         openingAmount,
-        observations:  data.observations,
+        observations: data.observations,
       });
       return { ...session, business_day: businessDay };
     } catch (err) {
-      if (err.code === '23505') {
+      if (err.code === "23505") {
         // V4.5 (migración 027) reemplaza one_open_session_per_owner_idx por
         // one_open_session_per_business_day_idx → este error pasa a indicar
         // que otra request abrió la caja primero.
         throw {
           status: 409,
-          message: 'Otra caja operativa fue abierta en la jornada en simultáneo. Reintentá.',
-          code: 'ACTIVE_SESSION_IN_BUSINESS_DAY',
+          message:
+            "Otra caja operativa fue abierta en la jornada en simultáneo. Reintentá.",
+          code: "ACTIVE_SESSION_IN_BUSINESS_DAY",
         };
       }
       throw err;
@@ -198,46 +241,73 @@ const open = async (data, requestingUser) => {
 
 const snapshot = async (id) => {
   const session = await queries.findByIdWithDetails(id);
-  if (!session) throw { status: 404, message: 'Caja no encontrada.' };
+  if (!session) throw { status: 404, message: "Caja no encontrada." };
 
   const totals = await queries.computeSessionTotals(id);
   const opening = { cash: session.opening_amount, transfer: 0 };
   const dropsBlock = {
-    cash:     totals.drops_cash,
+    cash: totals.drops_cash,
     transfer: totals.drops_transfer,
     items: session.drops
-      .filter((d) => d.status === 'ACTIVE')
-      .map((d) => ({ id: d.id, amount: d.amount, payment_method: d.payment_method, destination: d.destination })),
+      .filter((d) => d.status === "ACTIVE")
+      .map((d) => ({
+        id: d.id,
+        amount: d.amount,
+        payment_method: d.payment_method,
+        destination: d.destination,
+      })),
   };
   const expectedCash =
-    opening.cash
-    + totals.collections_payments_cash + totals.collections_down_payments_cash
-    - totals.outflows_expenses_cash    - totals.outflows_commissions_cash
-    + totals.conversions_cash_delta
-    - dropsBlock.cash;
+    opening.cash +
+    totals.collections_payments_cash +
+    totals.collections_down_payments_cash +
+    totals.collections_manual_incomes_cash -
+    totals.outflows_expenses_cash -
+    totals.outflows_commissions_cash +
+    totals.conversions_cash_delta -
+    dropsBlock.cash;
   const expectedTransfer =
-    opening.transfer
-    + totals.collections_payments_transfer + totals.collections_down_payments_transfer
-    - totals.outflows_expenses_transfer    - totals.outflows_commissions_transfer
-    + totals.conversions_transfer_delta
-    - dropsBlock.transfer;
+    opening.transfer +
+    totals.collections_payments_transfer +
+    totals.collections_down_payments_transfer +
+    totals.collections_manual_incomes_transfer -
+    totals.outflows_expenses_transfer -
+    totals.outflows_commissions_transfer +
+    totals.conversions_transfer_delta -
+    dropsBlock.transfer;
 
   return {
     session_id: session.id,
-    status:     session.status,
+    status: session.status,
     owner_user_id: session.owner_user_id,
-    opened_at:  session.opened_at,
+    opened_at: session.opened_at,
     opening,
     collections: {
-      payments:      { cash: totals.collections_payments_cash,        transfer: totals.collections_payments_transfer },
-      down_payments: { cash: totals.collections_down_payments_cash,   transfer: totals.collections_down_payments_transfer },
+      payments: {
+        cash: totals.collections_payments_cash,
+        transfer: totals.collections_payments_transfer,
+      },
+      down_payments: {
+        cash: totals.collections_down_payments_cash,
+        transfer: totals.collections_down_payments_transfer,
+      },
+      manual_incomes: {
+        cash: totals.collections_manual_incomes_cash,
+        transfer: totals.collections_manual_incomes_transfer,
+      },
     },
     outflows: {
-      expenses:    { cash: totals.outflows_expenses_cash,    transfer: totals.outflows_expenses_transfer },
-      commissions: { cash: totals.outflows_commissions_cash, transfer: totals.outflows_commissions_transfer },
+      expenses: {
+        cash: totals.outflows_expenses_cash,
+        transfer: totals.outflows_expenses_transfer,
+      },
+      commissions: {
+        cash: totals.outflows_commissions_cash,
+        transfer: totals.outflows_commissions_transfer,
+      },
     },
     conversions: {
-      cash_delta:     totals.conversions_cash_delta,
+      cash_delta: totals.conversions_cash_delta,
       transfer_delta: totals.conversions_transfer_delta,
     },
     drops: dropsBlock,
@@ -258,63 +328,83 @@ const snapshot = async (id) => {
  */
 const close = async (id, data, requestingUser) => {
   if (!Array.isArray(data.declared) || data.declared.length === 0)
-    throw { status: 422, message: 'declared debe ser un array con al menos un método de pago.' };
+    throw {
+      status: 422,
+      message: "declared debe ser un array con al menos un método de pago.",
+    };
 
   await withTransaction(async (client) => {
     const session = await queries.lockAndGetById(client, id);
-    if (!session) throw { status: 404, message: 'Caja no encontrada.' };
-    if (session.status !== 'OPEN')
-      throw { status: 409, message: `La caja no está OPEN (estado actual: ${session.status}).` };
+    if (!session) throw { status: 404, message: "Caja no encontrada." };
+    if (session.status !== "OPEN")
+      throw {
+        status: 409,
+        message: `La caja no está OPEN (estado actual: ${session.status}).`,
+      };
 
     const totals = await queries.computeSessionTotals(id, client);
-    const drops  = await queries.findDropsBySession(id);
+    const drops = await queries.findDropsBySession(id);
 
     // Mapeo de declared por método (default 0).
     const declaredByMethod = new Map(
-      data.declared.map((d) => [d.payment_method, parseFloat(d.declared_amount)]),
+      data.declared.map((d) => [
+        d.payment_method,
+        parseFloat(d.declared_amount),
+      ]),
     );
-    const cashDeclared     = declaredByMethod.get('CASH')     || 0;
-    const transferDeclared = declaredByMethod.get('TRANSFER') || 0;
+    const cashDeclared = declaredByMethod.get("CASH") || 0;
+    const transferDeclared = declaredByMethod.get("TRANSFER") || 0;
 
     const snapshot = buildClosureSnapshot({
       session: { ...session },
       totals,
       drops,
-      declared:   { cash: cashDeclared, transfer: transferDeclared },
+      declared: { cash: cashDeclared, transfer: transferDeclared },
       capturedBy: requestingUser.id,
     });
 
-    const totalDifference = snapshot.difference.cash + snapshot.difference.transfer;
+    const totalDifference =
+      snapshot.difference.cash + snapshot.difference.transfer;
     const totalDiffStatus = differenceStatusOf(totalDifference);
 
     // Persistir cierre + detalles por método.
     const details = data.declared.map((d) => {
-      const expected = (d.payment_method === 'CASH')
-        ? snapshot.expected.cash
-        : (d.payment_method === 'TRANSFER') ? snapshot.expected.transfer : 0;
+      const expected =
+        d.payment_method === "CASH"
+          ? snapshot.expected.cash
+          : d.payment_method === "TRANSFER"
+            ? snapshot.expected.transfer
+            : 0;
       const declared = parseFloat(d.declared_amount);
-      const diff     = declared - expected;
+      const diff = declared - expected;
       return {
-        payment_method:    d.payment_method,
-        expected_amount:   expected,
-        declared_amount:   declared,
-        difference:        diff,
+        payment_method: d.payment_method,
+        expected_amount: expected,
+        declared_amount: declared,
+        difference: diff,
         difference_status: differenceStatusOf(diff),
       };
     });
 
     const closed = await queries.close(client, id, {
-      closedBy:        requestingUser.id,
+      closedBy: requestingUser.id,
       snapshot,
       totalDifference,
-      diffStatus:      totalDiffStatus,
+      diffStatus: totalDiffStatus,
     });
-    if (!closed) throw { status: 409, message: 'La caja cambió de estado durante el cierre. Reintentá.' };
+    if (!closed)
+      throw {
+        status: 409,
+        message: "La caja cambió de estado durante el cierre. Reintentá.",
+      };
 
     await queries.insertClosureDetails(client, id, details);
 
     // Si todas las cajas de la jornada terminales → READY_TO_CLOSE automático.
-    await bdQueries.maybeTransitionToReadyToClose(client, session.business_day_id);
+    await bdQueries.maybeTransitionToReadyToClose(
+      client,
+      session.business_day_id,
+    );
   });
   return queries.findByIdWithDetails(id);
 };
@@ -322,63 +412,84 @@ const close = async (id, data, requestingUser) => {
 // ── PENDING_RECONCILIATION ─────────────────────────────────────────────────
 
 const markPending = async (id, data, requestingUser) => {
-  const reason = (data.reason || '').trim();
-  if (!reason) throw { status: 422, message: 'Tenés que indicar el motivo para marcar la caja PENDING.' };
+  const reason = (data.reason || "").trim();
+  if (!reason)
+    throw {
+      status: 422,
+      message: "Tenés que indicar el motivo para marcar la caja PENDING.",
+    };
 
   await withTransaction(async (client) => {
     const session = await queries.lockAndGetById(client, id);
-    if (!session) throw { status: 404, message: 'Caja no encontrada.' };
-    if (session.status !== 'OPEN')
-      throw { status: 409, message: `Solo se pueden marcar PENDING cajas OPEN (estado actual: ${session.status}).` };
+    if (!session) throw { status: 404, message: "Caja no encontrada." };
+    if (session.status !== "OPEN")
+      throw {
+        status: 409,
+        message: `Solo se pueden marcar PENDING cajas OPEN (estado actual: ${session.status}).`,
+      };
 
     const updated = await queries.markPending(client, id, { reason });
-    if (!updated) throw { status: 409, message: 'La caja cambió de estado. Reintentá.' };
+    if (!updated)
+      throw { status: 409, message: "La caja cambió de estado. Reintentá." };
   });
   return queries.findByIdWithDetails(id);
 };
 
 const reconcile = async (id, data, requestingUser) => {
   if (!Array.isArray(data.declared) || data.declared.length === 0)
-    throw { status: 422, message: 'declared debe ser un array con al menos un método de pago.' };
+    throw {
+      status: 422,
+      message: "declared debe ser un array con al menos un método de pago.",
+    };
 
   await withTransaction(async (client) => {
     const session = await queries.lockAndGetById(client, id);
-    if (!session) throw { status: 404, message: 'Caja no encontrada.' };
-    if (session.status !== 'PENDING_RECONCILIATION')
-      throw { status: 409, message: `Solo se reconcilian cajas PENDING_RECONCILIATION (estado actual: ${session.status}).` };
+    if (!session) throw { status: 404, message: "Caja no encontrada." };
+    if (session.status !== "PENDING_RECONCILIATION")
+      throw {
+        status: 409,
+        message: `Solo se reconcilian cajas PENDING_RECONCILIATION (estado actual: ${session.status}).`,
+      };
 
     const totals = await queries.computeSessionTotals(id, client);
-    const drops  = await queries.findDropsBySession(id);
+    const drops = await queries.findDropsBySession(id);
 
     const declaredByMethod = new Map(
-      data.declared.map((d) => [d.payment_method, parseFloat(d.declared_amount)]),
+      data.declared.map((d) => [
+        d.payment_method,
+        parseFloat(d.declared_amount),
+      ]),
     );
-    const cashDeclared     = declaredByMethod.get('CASH')     || 0;
-    const transferDeclared = declaredByMethod.get('TRANSFER') || 0;
+    const cashDeclared = declaredByMethod.get("CASH") || 0;
+    const transferDeclared = declaredByMethod.get("TRANSFER") || 0;
 
     const snapshot = buildClosureSnapshot({
       session: { ...session },
       totals,
       drops,
-      declared:   { cash: cashDeclared, transfer: transferDeclared },
+      declared: { cash: cashDeclared, transfer: transferDeclared },
       capturedBy: requestingUser.id,
     });
     snapshot.late_reconciliation = true;
 
-    const totalDifference = snapshot.difference.cash + snapshot.difference.transfer;
+    const totalDifference =
+      snapshot.difference.cash + snapshot.difference.transfer;
     const totalDiffStatus = differenceStatusOf(totalDifference);
 
     const details = data.declared.map((d) => {
-      const expected = (d.payment_method === 'CASH')
-        ? snapshot.expected.cash
-        : (d.payment_method === 'TRANSFER') ? snapshot.expected.transfer : 0;
+      const expected =
+        d.payment_method === "CASH"
+          ? snapshot.expected.cash
+          : d.payment_method === "TRANSFER"
+            ? snapshot.expected.transfer
+            : 0;
       const declared = parseFloat(d.declared_amount);
-      const diff     = declared - expected;
+      const diff = declared - expected;
       return {
-        payment_method:    d.payment_method,
-        expected_amount:   expected,
-        declared_amount:   declared,
-        difference:        diff,
+        payment_method: d.payment_method,
+        expected_amount: expected,
+        declared_amount: declared,
+        difference: diff,
         difference_status: differenceStatusOf(diff),
       };
     });
@@ -387,12 +498,16 @@ const reconcile = async (id, data, requestingUser) => {
       reconciledBy: requestingUser.id,
       snapshot,
       totalDifference,
-      diffStatus:   totalDiffStatus,
+      diffStatus: totalDiffStatus,
     });
-    if (!ok) throw { status: 409, message: 'La caja cambió de estado. Reintentá.' };
+    if (!ok)
+      throw { status: 409, message: "La caja cambió de estado. Reintentá." };
     await queries.insertClosureDetails(client, id, details);
 
-    await bdQueries.maybeTransitionToReadyToClose(client, session.business_day_id);
+    await bdQueries.maybeTransitionToReadyToClose(
+      client,
+      session.business_day_id,
+    );
   });
   return queries.findByIdWithDetails(id);
 };
@@ -406,117 +521,176 @@ const reconcile = async (id, data, requestingUser) => {
  */
 const resolveDropDestinationAccount = async (client, destinationAccountId) => {
   if (destinationAccountId) {
-    const acc = await cashAccountsQueries.findById(destinationAccountId, client);
+    const acc = await cashAccountsQueries.findById(
+      destinationAccountId,
+      client,
+    );
     if (!acc || !acc.is_active)
-      throw { status: 404, message: 'Cuenta destino no encontrada o inactiva.' };
+      throw {
+        status: 404,
+        message: "Cuenta destino no encontrada o inactiva.",
+      };
     return acc;
   }
   const def = await cashAccountsQueries.findGeneralCashAccount(client);
-  if (!def) throw { status: 500, message: 'No hay Caja General configurada.' };
+  if (!def) throw { status: 500, message: "No hay Caja General configurada." };
   return def;
 };
 
 const addDrop = async (id, data, requestingUser) => {
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
-    throw { status: 422, message: 'amount debe ser un número > 0.' };
-  if (!['CASH', 'TRANSFER'].includes(data.payment_method))
-    throw { status: 422, message: 'payment_method debe ser CASH o TRANSFER.' };
+    throw { status: 422, message: "amount debe ser un número > 0." };
+  if (!["CASH", "TRANSFER"].includes(data.payment_method))
+    throw { status: 422, message: "payment_method debe ser CASH o TRANSFER." };
   // destination (texto libre) es opcional desde Fase 3: si no viene, se deja
   // null. La cuenta destino real va por destination_account_id.
-  const destination = (data.destination || '').trim() || null;
+  const destination = (data.destination || "").trim() || null;
 
   return withTransaction(async (client) => {
     const session = await queries.lockAndGetById(client, id);
-    if (!session) throw { status: 404, message: 'Caja no encontrada.' };
-    if (session.status !== 'OPEN')
-      throw { status: 409, message: `Solo se agregan drops a cajas OPEN (estado actual: ${session.status}).` };
+    if (!session) throw { status: 404, message: "Caja no encontrada." };
+    if (session.status !== "OPEN")
+      throw {
+        status: 409,
+        message: `Solo se agregan drops a cajas OPEN (estado actual: ${session.status}).`,
+      };
 
     const destinationAccount = await resolveDropDestinationAccount(
-      client, data.destination_account_id,
+      client,
+      data.destination_account_id,
     );
 
     const drop = await queries.createDrop(client, id, {
       amount,
-      paymentMethod:        data.payment_method,
+      paymentMethod: data.payment_method,
       destination,
       destinationAccountId: destinationAccount.id,
-      reason:               data.reason,
-      receiptReference:     data.receipt_reference,
-      performedBy:          requestingUser.id,
+      reason: data.reason,
+      receiptReference: data.receipt_reference,
+      performedBy: requestingUser.id,
     });
 
     // Generar el DROP_IN automático en la cuenta destino, misma transacción.
     // beneficiary_name = owner de la sesión (para trazabilidad por beneficiario).
     const owner = await client.query(
-      `SELECT full_name FROM users WHERE id = $1`, [session.owner_user_id],
+      `SELECT full_name FROM users WHERE id = $1`,
+      [session.owner_user_id],
     );
     const ownerName = owner.rows[0]?.full_name || null;
 
     await cashAccountsService.insertMovementWithBalance(client, {
       cashAccountId: destinationAccount.id,
-      movementType:  'DROP_IN',
-      direction:     'IN',
+      movementType: "DROP_IN",
+      direction: "IN",
       amount,
-      description:   `Drop ${data.payment_method} de caja ${id}`,
+      description: `Drop ${data.payment_method} de caja ${id}`,
       beneficiaryName: ownerName,
-      referenceType: 'CASH_SESSION_DROP',
-      referenceId:   drop.id,
-      createdBy:     requestingUser.id,
+      referenceType: "CASH_SESSION_DROP",
+      referenceId: drop.id,
+      createdBy: requestingUser.id,
     });
 
     return drop;
   });
 };
 
+/**
+ * Registra una entrada manual de dinero en una caja operativa OPEN.
+ * No crea créditos ni operaciones comerciales: solo movimiento de caja.
+ */
+const addManualIncome = async (id, data, requestingUser) => {
+  const amount = parseFloat(data.amount);
+  if (!Number.isFinite(amount) || amount <= 0)
+    throw { status: 422, message: "amount debe ser un número > 0." };
+  if (!["CASH", "TRANSFER"].includes(data.payment_method))
+    throw { status: 422, message: "payment_method debe ser CASH o TRANSFER." };
+  const description = (data.description || "").trim();
+  if (!description)
+    throw { status: 422, message: "description es obligatoria." };
+
+  return withTransaction(async (client) => {
+    const session = await queries.lockAndGetById(client, id);
+    if (!session) throw { status: 404, message: "Caja no encontrada." };
+    if (session.status !== "OPEN")
+      throw {
+        status: 409,
+        message: `Solo se registran ingresos en cajas OPEN (estado actual: ${session.status}).`,
+      };
+
+    return queries.createManualIncome(client, id, {
+      amount,
+      paymentMethod: data.payment_method,
+      description,
+      receiptReference: data.receipt_reference,
+      createdBy: requestingUser.id,
+    });
+  });
+};
+
 const reverseDrop = async (sessionId, dropId, data, requestingUser) => {
-  const reason = (data.reason || '').trim();
-  if (!reason) throw { status: 422, message: 'reason es obligatorio para revertir un drop.' };
+  const reason = (data.reason || "").trim();
+  if (!reason)
+    throw {
+      status: 422,
+      message: "reason es obligatorio para revertir un drop.",
+    };
 
   return withTransaction(async (client) => {
     const session = await queries.lockAndGetById(client, sessionId);
-    if (!session) throw { status: 404, message: 'Caja no encontrada.' };
-    if (session.status !== 'OPEN')
-      throw { status: 409, message: 'Solo se revierten drops de cajas OPEN.' };
+    if (!session) throw { status: 404, message: "Caja no encontrada." };
+    if (session.status !== "OPEN")
+      throw { status: 409, message: "Solo se revierten drops de cajas OPEN." };
 
     const drop = await queries.findDropById(dropId, client);
     if (!drop || drop.cash_session_id !== sessionId)
-      throw { status: 404, message: 'Drop no encontrado en esta caja.' };
-    if (drop.status !== 'ACTIVE')
-      throw { status: 409, message: `Solo se revierten drops ACTIVE (estado actual: ${drop.status}).` };
+      throw { status: 404, message: "Drop no encontrado en esta caja." };
+    if (drop.status !== "ACTIVE")
+      throw {
+        status: 409,
+        message: `Solo se revierten drops ACTIVE (estado actual: ${drop.status}).`,
+      };
 
     // 1) Marcar el drop como REVERSED.
     const reversed = await queries.reverseDrop(client, dropId, {
       reversedBy: requestingUser.id,
       reason,
     });
-    if (!reversed) throw { status: 409, message: 'El drop cambió de estado. Reintentá.' };
+    if (!reversed)
+      throw { status: 409, message: "El drop cambió de estado. Reintentá." };
 
     // 2) Compensar en la cuenta destino con un ADJUSTMENT OUT por el mismo monto.
     //    Apunta polimórficamente al DROP_IN original. Puede fallar 409
     //    INSUFFICIENT_BALANCE — en ese caso toda la tx (incluido el step 1)
     //    revierte y el drop queda intacto.
-    const originalDropIn = await cashAccountsQueries.findMovementByReference({
-      referenceType: 'CASH_SESSION_DROP',
-      referenceId:   dropId,
-      movementType:  'DROP_IN',
-    }, client);
+    const originalDropIn = await cashAccountsQueries.findMovementByReference(
+      {
+        referenceType: "CASH_SESSION_DROP",
+        referenceId: dropId,
+        movementType: "DROP_IN",
+      },
+      client,
+    );
     if (!originalDropIn) {
       // Caso de drop legacy backfilleado sin DROP_IN: no se puede compensar.
       // Lanzamos 500 con mensaje claro — debería investigarse manualmente.
-      throw { status: 500, message: 'No se encontró el DROP_IN asociado al drop. Investigar manualmente.' };
+      throw {
+        status: 500,
+        message:
+          "No se encontró el DROP_IN asociado al drop. Investigar manualmente.",
+      };
     }
 
     await cashAccountsService.insertMovementWithBalance(client, {
       cashAccountId: originalDropIn.cash_account_id,
-      movementType:  'ADJUSTMENT',
-      direction:     'OUT',
-      amount:        drop.amount,
-      description:   `Reverso de drop ${dropId} — ${reason}`,
+      movementType: "ADJUSTMENT",
+      direction: "OUT",
+      amount: drop.amount,
+      description: `Reverso de drop ${dropId} — ${reason}`,
       beneficiaryName: originalDropIn.beneficiary_name,
-      referenceType: 'CASH_ACCOUNT_MOVEMENT',
-      referenceId:   originalDropIn.id,
-      createdBy:     requestingUser.id,
+      referenceType: "CASH_ACCOUNT_MOVEMENT",
+      referenceId: originalDropIn.id,
+      createdBy: requestingUser.id,
     });
 
     return queries.findDropById(dropId, client);
@@ -543,15 +717,23 @@ const getActive = async (/* _ownerUserId */) => {
   return queries.findActiveSessionByBusinessDay(businessDay.id);
 };
 
-const getById   = async (id) => {
+const getById = async (id) => {
   const s = await queries.findByIdWithDetails(id);
-  if (!s) throw { status: 404, message: 'Caja no encontrada.' };
+  if (!s) throw { status: 404, message: "Caja no encontrada." };
   return s;
 };
 const getAll = async (filters) => queries.findAll(filters);
 
 module.exports = {
-  open, close, snapshot, markPending, reconcile,
-  addDrop, reverseDrop,
-  getActive, getById, getAll,
+  open,
+  close,
+  snapshot,
+  markPending,
+  reconcile,
+  addDrop,
+  reverseDrop,
+  addManualIncome,
+  getActive,
+  getById,
+  getAll,
 };

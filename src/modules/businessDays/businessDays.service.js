@@ -1,16 +1,32 @@
-const queries        = require('./businessDays.queries');
-const csQueries      = require('../cashSessions/cashSessions.queries');
-const { withTransaction } = require('../../utils/transaction');
+const queries = require("./businessDays.queries");
+const csQueries = require("../cashSessions/cashSessions.queries");
+const { withTransaction } = require("../../utils/transaction");
+const { localDate } = require("../../utils/date");
 
 const getById = async (id) => {
   const day = await queries.findById(id);
-  if (!day) throw { status: 404, message: 'Jornada no encontrada.' };
+  if (!day) throw { status: 404, message: "Jornada no encontrada." };
   const counts = await queries.countSessionsByStatus(id);
   const sessions = await csQueries.findAll({ businessDayId: id });
   return { ...day, session_counts: counts, sessions };
 };
 
 const getAll = async (filters) => queries.findAll(filters);
+
+/**
+ * Devuelve la fecha (YYYY-MM-DD) de la jornada activa de la sucursal default.
+ * Fuente única de verdad para reemplazar el uso de fechas calendario
+ * (CURRENT_DATE / localDate) en reportes y servicios financieros.
+ *
+ * @returns {Promise<string>} fecha de la jornada activa, o la fecha local si
+ * no hay sucursal default o no hay jornada activa.
+ */
+const getActiveJornadaDate = async () => {
+  const branch = await queries.findDefaultBranch();
+  if (!branch) return localDate();
+  const jornadaDate = await queries.findActiveJornadaDate(branch.id);
+  return jornadaDate || localDate();
+};
 
 /**
  * V4: devuelve la jornada activa (status OPEN o READY_TO_CLOSE) más reciente de
@@ -44,17 +60,21 @@ const getActive = async (branchId) => {
 const close = async (id, data, requestingUser) => {
   await withTransaction(async (client) => {
     const day = await queries.lockAndGetById(client, id);
-    if (!day) throw { status: 404, message: 'Jornada no encontrada.' };
-    if (day.status !== 'READY_TO_CLOSE')
+    if (!day) throw { status: 404, message: "Jornada no encontrada." };
+    if (day.status !== "READY_TO_CLOSE")
       throw {
         status: 409,
         message: `La jornada está en ${day.status}; solo se cierran las que están READY_TO_CLOSE.`,
       };
     const closed = await queries.close(client, id, {
-      closedBy:     requestingUser.id,
+      closedBy: requestingUser.id,
       observations: data?.observations,
     });
-    if (!closed) throw { status: 409, message: 'La jornada cambió de estado durante el cierre.' };
+    if (!closed)
+      throw {
+        status: 409,
+        message: "La jornada cambió de estado durante el cierre.",
+      };
   });
   return queries.findById(id);
 };
@@ -68,31 +88,47 @@ const close = async (id, data, requestingUser) => {
  * El motivo se concatena en observations con un prefijo identificable.
  */
 const forceClose = async (id, data, requestingUser) => {
-  const reason = (data?.reason || '').trim();
+  const reason = (data?.reason || "").trim();
   if (!reason)
-    throw { status: 422, message: 'reason es obligatorio para forzar el cierre de una jornada.' };
+    throw {
+      status: 422,
+      message: "reason es obligatorio para forzar el cierre de una jornada.",
+    };
 
   await withTransaction(async (client) => {
     const day = await queries.lockAndGetById(client, id);
-    if (!day) throw { status: 404, message: 'Jornada no encontrada.' };
-    if (!['OPEN','READY_TO_CLOSE'].includes(day.status))
-      throw { status: 409, message: `La jornada está en ${day.status}; solo se fuerzan cierres desde OPEN o READY_TO_CLOSE.` };
+    if (!day) throw { status: 404, message: "Jornada no encontrada." };
+    if (!["OPEN", "READY_TO_CLOSE"].includes(day.status))
+      throw {
+        status: 409,
+        message: `La jornada está en ${day.status}; solo se fuerzan cierres desde OPEN o READY_TO_CLOSE.`,
+      };
 
     const counts = await queries.countSessionsByStatus(id, client);
     // Si NO hay cajas PENDING, este endpoint no es necesario — el supervisor
     // debe usar el cierre normal (close). Bloqueamos para no normalizar el
     // uso de force-close cuando hay un camino limpio.
     if (counts.pending_count === 0 && counts.open_count === 0)
-      throw { status: 409, message: 'No hay cajas OPEN ni PENDING. Usá el cierre normal (POST /:id/close).' };
+      throw {
+        status: 409,
+        message:
+          "No hay cajas OPEN ni PENDING. Usá el cierre normal (POST /:id/close).",
+      };
 
     const obsLine = `[FORCE-CLOSE] ${reason} (${counts.open_count} OPEN, ${counts.pending_count} PENDING)`;
-    const merged  = day.observations ? `${day.observations}\n${obsLine}` : obsLine;
+    const merged = day.observations
+      ? `${day.observations}\n${obsLine}`
+      : obsLine;
 
     const closed = await queries.forceClose(client, id, {
-      closedBy:     requestingUser.id,
+      closedBy: requestingUser.id,
       observations: merged,
     });
-    if (!closed) throw { status: 409, message: 'La jornada cambió de estado durante el force-close.' };
+    if (!closed)
+      throw {
+        status: 409,
+        message: "La jornada cambió de estado durante el force-close.",
+      };
   });
   return queries.findById(id);
 };
@@ -100,19 +136,31 @@ const forceClose = async (id, data, requestingUser) => {
 const audit = async (id, data, requestingUser) => {
   await withTransaction(async (client) => {
     const day = await queries.lockAndGetById(client, id);
-    if (!day) throw { status: 404, message: 'Jornada no encontrada.' };
-    if (day.status !== 'CLOSED')
+    if (!day) throw { status: 404, message: "Jornada no encontrada." };
+    if (day.status !== "CLOSED")
       throw {
         status: 409,
         message: `La jornada está en ${day.status}; solo se auditan las CLOSED.`,
       };
     const ok = await queries.audit(client, id, {
-      auditedBy:    requestingUser.id,
+      auditedBy: requestingUser.id,
       observations: data?.observations,
     });
-    if (!ok) throw { status: 409, message: 'La jornada cambió de estado durante la auditoría.' };
+    if (!ok)
+      throw {
+        status: 409,
+        message: "La jornada cambió de estado durante la auditoría.",
+      };
   });
   return queries.findById(id);
 };
 
-module.exports = { getById, getAll, getActive, close, forceClose, audit };
+module.exports = {
+  getById,
+  getAll,
+  getActive,
+  getActiveJornadaDate,
+  close,
+  forceClose,
+  audit,
+};

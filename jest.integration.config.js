@@ -2,8 +2,9 @@
 // Cubre tests/integration/**/*.test.js.
 //
 // Requiere:
-//   · `npm run test:db:up` previo (levanta docker-compose.test.yml).
-//   · .env.test con las credenciales del Postgres de test.
+//   · Postgres de test disponible. Puede ser Docker (`npm run test:db:up`) o
+//     una DB local descartable (`npm run test:integration:local`).
+//   · .env.test o variables DB_* con las credenciales del Postgres de test.
 //
 // Características:
 //   · globalSetup corre todas las migraciones reales contra la DB de test.
@@ -15,14 +16,14 @@
 //   · testTimeout amplio: las operaciones reales de DB son más lentas que mocks.
 
 module.exports = {
-  testEnvironment: 'node',
-  roots:           ['<rootDir>/tests/integration'],
-  testMatch:       ['**/*.test.js'],
-  globalSetup:     '<rootDir>/tests/integration/globalSetup.js',
-  globalTeardown:  '<rootDir>/tests/integration/globalTeardown.js',
-  testTimeout:     20000,
-  maxWorkers:      1,
-  verbose:         true,
+  testEnvironment: "node",
+  roots: ["<rootDir>/tests/integration"],
+  testMatch: ["**/*.test.js"],
+  globalSetup: "<rootDir>/tests/integration/globalSetup.js",
+  globalTeardown: "<rootDir>/tests/integration/globalTeardown.js",
+  testTimeout: 20000,
+  maxWorkers: 1,
+  verbose: true,
   // No usamos forceExit: .env.test setea DB_IDLE_TIMEOUT_MS=200, así el pool
   // libera conexiones rápido y jest puede salir limpiamente.
 };
