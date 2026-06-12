@@ -7,34 +7,34 @@
 // No crea fixtures de negocio (customers, credits, etc.) — eso queda a cargo
 // de los helpers de fixtures, llamados explícitamente desde cada test.
 
-const path = require('path');
-const fs   = require('fs');
-const { Pool } = require('pg');
+const path = require("path");
+const fs = require("fs");
+const { Pool } = require("pg");
 
-require('dotenv').config({ path: path.join(__dirname, '../../.env.test') });
+require("dotenv").config({ path: path.join(__dirname, "../../.env.test") });
 
-const MIGRATIONS_DIR = path.join(__dirname, '../../src/config/migrations');
+const MIGRATIONS_DIR = path.join(__dirname, "../../src/config/migrations");
 
 module.exports = async () => {
-  console.log('\n[integration:setup] Configurando DB de test...');
+  console.log("\n[integration:setup] Configurando DB de test...");
 
   const pool = new Pool({
-    host:     process.env.DB_HOST,
-    port:     parseInt(process.env.DB_PORT),
+    host: process.env.DB_HOST,
+    port: parseInt(process.env.DB_PORT),
     database: process.env.DB_NAME,
-    user:     process.env.DB_USER,
+    user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
   });
 
   try {
-    // 1. Ping rápido para verificar que el contenedor esté arriba
-    await pool.query('SELECT 1');
+    // 1. Ping rápido para verificar que la DB de integración esté disponible.
+    await pool.query("SELECT 1");
   } catch (err) {
     await pool.end().catch(() => {});
     throw new Error(
       `No se pudo conectar a la DB de test (${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}).\n` +
-      `¿Está corriendo el contenedor? Ejecutá: npm run test:db:up\n` +
-      `Detalle: ${err.message}`
+        `Si usás Docker: npm run test:db:up. Si usás Postgres local: creá una DB descartable y corré npm run test:integration:local.\n` +
+        `Detalle: ${err.message}`,
     );
   }
 
@@ -46,45 +46,56 @@ module.exports = async () => {
     )
   `);
   const applied = new Set(
-    (await pool.query('SELECT filename FROM _migrations')).rows.map((r) => r.filename)
+    (await pool.query("SELECT filename FROM _migrations")).rows.map(
+      (r) => r.filename,
+    ),
   );
 
-  const files = fs.readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith('.sql'))
+  const files = fs
+    .readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith(".sql"))
     .sort();
 
   let ran = 0;
   for (const file of files) {
     if (applied.has(file)) continue;
-    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), 'utf8');
+    const sql = fs.readFileSync(path.join(MIGRATIONS_DIR, file), "utf8");
     const client = await pool.connect();
     try {
-      await client.query('BEGIN');
+      await client.query("BEGIN");
       await client.query(sql);
-      await client.query(`INSERT INTO _migrations (filename) VALUES ($1)`, [file]);
-      await client.query('COMMIT');
+      await client.query(`INSERT INTO _migrations (filename) VALUES ($1)`, [
+        file,
+      ]);
+      await client.query("COMMIT");
       ran++;
     } catch (err) {
-      await client.query('ROLLBACK');
+      await client.query("ROLLBACK");
       throw new Error(`Falló migración ${file}: ${err.message}`);
     } finally {
       client.release();
     }
   }
-  console.log(`[integration:setup] Migraciones aplicadas: ${ran} nuevas (total ${files.length}).`);
+  console.log(
+    `[integration:setup] Migraciones aplicadas: ${ran} nuevas (total ${files.length}).`,
+  );
 
   // 3. Seed mínimo de system_config con los defaults del módulo de configuración
-  const { DEFAULT_VALUES } = require('../../src/modules/systemConfig/systemConfig.queries');
+  const {
+    DEFAULT_VALUES,
+  } = require("../../src/modules/systemConfig/systemConfig.queries");
   for (const [key, def] of Object.entries(DEFAULT_VALUES)) {
     await pool.query(
       `INSERT INTO system_config (key, value, description)
        VALUES ($1, $2, $3)
        ON CONFLICT (key) DO NOTHING`,
-      [key, def.value, def.description]
+      [key, def.value, def.description],
     );
   }
-  console.log(`[integration:setup] Seed system_config: ${Object.keys(DEFAULT_VALUES).length} claves.`);
+  console.log(
+    `[integration:setup] Seed system_config: ${Object.keys(DEFAULT_VALUES).length} claves.`,
+  );
 
   await pool.end();
-  console.log('[integration:setup] OK.\n');
+  console.log("[integration:setup] OK.\n");
 };
