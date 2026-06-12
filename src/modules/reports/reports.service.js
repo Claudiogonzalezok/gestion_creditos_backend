@@ -1,5 +1,8 @@
-const queries = require('./reports.queries');
-const { getValue } = require('../systemConfig/systemConfig.queries');
+const queries = require("./reports.queries");
+const { getValue } = require("../systemConfig/systemConfig.queries");
+const {
+  getActiveJornadaDate,
+} = require("../businessDays/businessDays.service");
 
 /**
  * Devuelve los días de gracia para considerar una cuota vencida en queries
@@ -7,7 +10,7 @@ const { getValue } = require('../systemConfig/systemConfig.queries');
  * @returns {Promise<number>}
  */
 const getGraceDays = async () =>
-  parseInt(await getValue('penalty_grace_days') || '3');
+  parseInt((await getValue("penalty_grace_days")) || "3");
 
 const getCollectionReport = async (dateFrom, dateTo) =>
   queries.getCollectionReport(dateFrom, dateTo);
@@ -27,11 +30,10 @@ const getSellersReport = async (dateFrom, dateTo) =>
 const getProductsReport = (stockThreshold) =>
   queries.getProductsReport(stockThreshold);
 
-const getUpcomingReport = (days) =>
-  queries.getUpcomingReport(days);
+const getUpcomingReport = (days) => queries.getUpcomingReport(days);
 
 const getSummaryReport = async () =>
-  queries.getSummaryReport(await getGraceDays());
+  queries.getSummaryReport(await getGraceDays(), await getActiveJornadaDate());
 
 const getPaymentsOverdue48h = () => queries.getPaymentsOverdue48h();
 

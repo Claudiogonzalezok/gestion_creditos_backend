@@ -14,7 +14,7 @@ const getCollectionReport = async (dateFrom, dateTo) => {
   const result = await pool.query(
     `WITH collection_data AS (
        SELECT
-         p.approved_at::date                                                            AS day,
+         COALESCE(bd.business_date, p.approved_at::date)                               AS day,
          COALESCE(SUM(p.amount_received), 0)                                           AS total,
          COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
          COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
@@ -22,14 +22,16 @@ const getCollectionReport = async (dateFrom, dateTo) => {
          0::numeric                                                                     AS down_payments_total,
          0::int                                                                         AS down_payments_count
        FROM payments p
+       LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
+       LEFT JOIN business_days bd ON bd.id = cs.business_day_id
        WHERE p.status = 'APPROVED'
-         AND p.approved_at::date BETWEEN $1 AND $2
-       GROUP BY p.approved_at::date
+         AND COALESCE(bd.business_date, p.approved_at::date) BETWEEN $1 AND $2
+       GROUP BY COALESCE(bd.business_date, p.approved_at::date)
 
        UNION ALL
 
        SELECT
-         cdp.created_at::date                                                           AS day,
+         cdp.register_date                                                             AS day,
          COALESCE(SUM(cdp.amount), 0)                                                  AS total,
          COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0)   AS total_cash,
          COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0)   AS total_transfer,
@@ -37,9 +39,9 @@ const getCollectionReport = async (dateFrom, dateTo) => {
          COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
          COUNT(*)::int                                                                  AS down_payments_count
        FROM credit_down_payments cdp
-       WHERE cdp.created_at::date BETWEEN $1 AND $2
+       WHERE cdp.register_date BETWEEN $1 AND $2
          AND cdp.payment_type = 'DOWN_PAYMENT'
-       GROUP BY cdp.created_at::date
+       GROUP BY cdp.register_date
      ),
      daily_aggregated AS (
        SELECT
@@ -78,8 +80,10 @@ const getCollectionReport = async (dateFrom, dateTo) => {
   );
 
   const rows = result.rows;
-  const daily = rows.filter(r => r.result_type === 'daily').map(r => r.data);
-  const summary = rows.find(r => r.result_type === 'summary')?.data || {};
+  const daily = rows
+    .filter((r) => r.result_type === "daily")
+    .map((r) => r.data);
+  const summary = rows.find((r) => r.result_type === "summary")?.data || {};
 
   return { summary, daily };
 };
@@ -113,7 +117,7 @@ const getPortfolioReport = async (graceDays) => {
        u.full_name                                                        AS assigned_collector,
        COUNT(DISTINCT c.id)::int                                          AS active_credits,
        COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8            AS pending_balance,
-       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED('i', '$1')})::int   AS overdue_installments
+       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED("i", "$1")})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
      JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED')
@@ -153,7 +157,7 @@ const getOverdueReport = async (graceDays) => {
        COALESCE(SUM(i.amount_due - i.amount_paid)
                       FILTER (WHERE (CURRENT_DATE - i.due_date) > 90), 0)::float8      AS bucket_90plus_amount
      FROM installments i
-     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}`,
+     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}`,
     [graceDays],
   );
 
@@ -177,7 +181,7 @@ const getOverdueReport = async (graceDays) => {
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
      LEFT JOIN users u ON u.id  = cu.assigned_collector_id
-     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
+     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY total_overdue DESC`,
     [graceDays],
@@ -190,7 +194,15 @@ const getOverdueReport = async (graceDays) => {
 
 const getCollectorsReport = async (dateFrom, dateTo) => {
   const r = await pool.query(
-    `SELECT
+    `WITH collector_payments AS (
+       SELECT
+         p.*,
+         COALESCE(bd.business_date, p.approved_at::date) AS jornada_date
+       FROM payments p
+       LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
+       LEFT JOIN business_days bd ON bd.id = cs.business_day_id
+     )
+     SELECT
        u.id                                                                      AS collector_id,
        u.full_name                                                               AS collector_name,
        u.role,
@@ -207,10 +219,10 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
          FILTER (WHERE p.status = 'APPROVED')::numeric, 2
        ), 0)::float8                                                             AS avg_approval_hours
      FROM users u
-     LEFT JOIN payments p
+     LEFT JOIN collector_payments p
        ON p.collector_id = u.id
-       AND p.approved_at::date BETWEEN $1 AND $2
        AND p.status = 'APPROVED'
+       AND p.jornada_date BETWEEN $1 AND $2
      WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
      ORDER BY total_collected DESC`,
@@ -317,9 +329,11 @@ const getUpcomingReport = async (days = 30) => {
 /**
  * Devuelve un resumen ejecutivo del día para el panel administrativo.
  * Suma los enganches reales del día junto con la cobranza aprobada.
+ * @param {number} graceDays - Días de gracia para considerar una cuota en mora.
+ * @param {string} jornadaDate - Fecha de la jornada comercial activa (YYYY-MM-DD).
  * @returns {Promise<object>} Métricas diarias clave del negocio.
  */
-const getSummaryReport = async (graceDays) => {
+const getSummaryReport = async (graceDays, jornadaDate) => {
   const r = await pool.query(
     `WITH
      today_payments AS (
@@ -329,7 +343,10 @@ const getSummaryReport = async (graceDays) => {
          COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0)::float8 AS transfer,
          COUNT(*)::int                                                                    AS count
        FROM payments p
-       WHERE p.status = 'APPROVED' AND p.approved_at::date = CURRENT_DATE
+       LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
+       LEFT JOIN business_days bd ON bd.id = cs.business_day_id
+       WHERE p.status = 'APPROVED'
+         AND COALESCE(bd.business_date, p.approved_at::date) = $2
      ),
       today_down_payments AS (
         SELECT
@@ -338,7 +355,7 @@ const getSummaryReport = async (graceDays) => {
           COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0)::float8 AS transfer,
           COUNT(*)::int                    AS count
         FROM credit_down_payments
-        WHERE created_at::date = CURRENT_DATE
+        WHERE register_date = $2
           AND payment_type = 'DOWN_PAYMENT'
       ),
      pending_payments AS (
@@ -358,7 +375,7 @@ const getSummaryReport = async (graceDays) => {
          COUNT(*)::int                                         AS count,
          COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS amount
        FROM installments i
-       WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
+       WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
      ),
      upcoming AS (
        SELECT
@@ -385,7 +402,7 @@ const getSummaryReport = async (graceDays) => {
          AND created_at <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
      )
      SELECT
-       CURRENT_DATE                          AS report_date,
+       $2::date                              AS report_date,
        tp.collected                          AS today_collected,
        (tp.cash + tdp.cash)                  AS today_cash,
        (tp.transfer + tdp.transfer)          AS today_transfer,
@@ -412,7 +429,7 @@ const getSummaryReport = async (graceDays) => {
           overdue ov,
           upcoming up,
           refinanced_month rm`,
-    [graceDays],
+    [graceDays, jornadaDate],
   );
   return r.rows[0];
 };
