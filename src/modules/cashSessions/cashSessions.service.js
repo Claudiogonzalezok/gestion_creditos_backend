@@ -2,6 +2,7 @@ const queries = require("./cashSessions.queries");
 const bdQueries = require("../businessDays/businessDays.queries");
 const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 const cashAccountsService = require("../cashAccounts/cashAccounts.service");
+const paymentsService = require("../payments/payments.service");
 const { withTransaction } = require("../../utils/transaction");
 const { localDate } = require("../../utils/date");
 
@@ -584,6 +585,8 @@ const addDrop = async (id, data, requestingUser) => {
       movementType: "DROP_IN",
       direction: "IN",
       amount,
+      amountCash: data.payment_method === "CASH" ? amount : 0,
+      amountTransfer: data.payment_method === "TRANSFER" ? amount : 0,
       description: `Drop ${data.payment_method} de caja ${id}`,
       beneficiaryName: ownerName,
       referenceType: "CASH_SESSION_DROP",
@@ -600,11 +603,22 @@ const addDrop = async (id, data, requestingUser) => {
  * No crea créditos ni operaciones comerciales: solo movimiento de caja.
  */
 const addManualIncome = async (id, data, requestingUser) => {
-  const amount = parseFloat(data.amount);
-  if (!Number.isFinite(amount) || amount <= 0)
-    throw { status: 422, message: "amount debe ser un número > 0." };
-  if (!["CASH", "TRANSFER"].includes(data.payment_method))
-    throw { status: 422, message: "payment_method debe ser CASH o TRANSFER." };
+  const hasSplit =
+    data.amount_cash !== undefined || data.amount_transfer !== undefined;
+  const normalizedPayment = paymentsService._normalizePaymentAmounts({
+    amount_cash: data.amount_cash,
+    amount_transfer: data.amount_transfer,
+    amount_received: hasSplit ? undefined : data.amount,
+    payment_method: data.payment_method,
+  });
+  if (
+    !Number.isFinite(normalizedPayment.amountReceived) ||
+    normalizedPayment.amountReceived <= 0
+  )
+    throw {
+      status: 422,
+      message: "El monto del ingreso debe ser un número > 0.",
+    };
   const description = (data.description || "").trim();
   if (!description)
     throw { status: 422, message: "description es obligatoria." };
@@ -619,8 +633,10 @@ const addManualIncome = async (id, data, requestingUser) => {
       };
 
     return queries.createManualIncome(client, id, {
-      amount,
-      paymentMethod: data.payment_method,
+      amount: normalizedPayment.amountReceived,
+      amountCash: normalizedPayment.amountCash,
+      amountTransfer: normalizedPayment.amountTransfer,
+      paymentMethod: normalizedPayment.paymentMethod,
       description,
       receiptReference: data.receipt_reference,
       createdBy: requestingUser.id,

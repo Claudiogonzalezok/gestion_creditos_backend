@@ -438,17 +438,29 @@ const findDropsBySession = async (cashSessionId) => {
 const createManualIncome = async (
   client,
   cashSessionId,
-  { amount, paymentMethod, description, receiptReference, createdBy },
+  {
+    amount,
+    amountCash,
+    amountTransfer,
+    paymentMethod,
+    description,
+    receiptReference,
+    createdBy,
+  },
 ) => {
   const r = await client.query(
     `INSERT INTO cash_session_manual_incomes
-       (cash_session_id, amount, payment_method, description, receipt_reference, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, cash_session_id, amount::float8 AS amount, payment_method,
+       (cash_session_id, amount, amount_cash, amount_transfer, payment_method, description, receipt_reference, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id, cash_session_id, amount::float8 AS amount,
+               amount_cash::float8 AS amount_cash, amount_transfer::float8 AS amount_transfer,
+               payment_method,
                description, receipt_reference, created_by, created_at`,
     [
       cashSessionId,
       amount,
+      amountCash || 0,
+      amountTransfer || 0,
       paymentMethod,
       description,
       receiptReference || null,
@@ -516,8 +528,8 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
       // pre-pagadas quedaban fuera del esperado y aparecían como sobrante.
       db.query(
         `SELECT
-         COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS down_payments_cash,
-         COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS down_payments_transfer
+         COALESCE(SUM(amount_cash),     0)::float8 AS down_payments_cash,
+         COALESCE(SUM(amount_transfer), 0)::float8 AS down_payments_transfer
        FROM credit_down_payments
        WHERE cash_session_id = $1
          AND payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')`,
@@ -525,8 +537,8 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
       ),
       db.query(
         `SELECT
-         COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS manual_incomes_cash,
-         COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS manual_incomes_transfer
+         COALESCE(SUM(amount_cash),     0)::float8 AS manual_incomes_cash,
+         COALESCE(SUM(amount_transfer), 0)::float8 AS manual_incomes_transfer
        FROM cash_session_manual_incomes
        WHERE cash_session_id = $1`,
         [cashSessionId],

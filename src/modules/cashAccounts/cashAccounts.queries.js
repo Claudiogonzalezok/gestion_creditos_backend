@@ -9,7 +9,7 @@
 //     (lock FOR UPDATE + check de saldo + insert + update del cache) en la
 //     misma transacción. Nunca actualizar current_balance "a mano".
 
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 // ── Cuentas ────────────────────────────────────────────────────────────────
 
@@ -63,26 +63,44 @@ const lockAndGetBalance = async (client, accountId) => {
 
 const MOVEMENT_FIELDS = `
   id, cash_account_id, movement_type, direction,
-  amount::float8 AS amount, description, beneficiary_name,
+  amount::float8 AS amount,
+  amount_cash::float8 AS amount_cash,
+  amount_transfer::float8 AS amount_transfer,
+  description, beneficiary_name,
   reference_type, reference_id, created_by, created_at
 `;
 
-const findMovements = async ({
-  accountId, movementType, direction, from, to, limit, offset,
-}, db = pool) => {
-  const conds = ['cash_account_id = $1'];
+const findMovements = async (
+  { accountId, movementType, direction, from, to, limit, offset },
+  db = pool,
+) => {
+  const conds = ["cash_account_id = $1"];
   const params = [accountId];
-  if (movementType) { conds.push(`movement_type = $${params.length + 1}`); params.push(movementType); }
-  if (direction)    { conds.push(`direction = $${params.length + 1}`);     params.push(direction); }
-  if (from)         { conds.push(`created_at >= $${params.length + 1}`);   params.push(from); }
-  if (to)           { conds.push(`created_at <  $${params.length + 1}`);   params.push(to); }
-  const limitParam  = params.length + 1; params.push(limit);
-  const offsetParam = params.length + 1; params.push(offset);
+  if (movementType) {
+    conds.push(`movement_type = $${params.length + 1}`);
+    params.push(movementType);
+  }
+  if (direction) {
+    conds.push(`direction = $${params.length + 1}`);
+    params.push(direction);
+  }
+  if (from) {
+    conds.push(`created_at >= $${params.length + 1}`);
+    params.push(from);
+  }
+  if (to) {
+    conds.push(`created_at <  $${params.length + 1}`);
+    params.push(to);
+  }
+  const limitParam = params.length + 1;
+  params.push(limit);
+  const offsetParam = params.length + 1;
+  params.push(offset);
 
   const r = await db.query(
     `SELECT ${MOVEMENT_FIELDS}
      FROM cash_account_movements
-     WHERE ${conds.join(' AND ')}
+     WHERE ${conds.join(" AND ")}
      ORDER BY created_at DESC, id DESC
      LIMIT $${limitParam} OFFSET $${offsetParam}`,
     params,
@@ -90,19 +108,32 @@ const findMovements = async ({
   return r.rows;
 };
 
-const countMovements = async ({
-  accountId, movementType, direction, from, to,
-}, db = pool) => {
-  const conds = ['cash_account_id = $1'];
+const countMovements = async (
+  { accountId, movementType, direction, from, to },
+  db = pool,
+) => {
+  const conds = ["cash_account_id = $1"];
   const params = [accountId];
-  if (movementType) { conds.push(`movement_type = $${params.length + 1}`); params.push(movementType); }
-  if (direction)    { conds.push(`direction = $${params.length + 1}`);     params.push(direction); }
-  if (from)         { conds.push(`created_at >= $${params.length + 1}`);   params.push(from); }
-  if (to)           { conds.push(`created_at <  $${params.length + 1}`);   params.push(to); }
+  if (movementType) {
+    conds.push(`movement_type = $${params.length + 1}`);
+    params.push(movementType);
+  }
+  if (direction) {
+    conds.push(`direction = $${params.length + 1}`);
+    params.push(direction);
+  }
+  if (from) {
+    conds.push(`created_at >= $${params.length + 1}`);
+    params.push(from);
+  }
+  if (to) {
+    conds.push(`created_at <  $${params.length + 1}`);
+    params.push(to);
+  }
   const r = await db.query(
     `SELECT COUNT(*)::int AS total
      FROM cash_account_movements
-     WHERE ${conds.join(' AND ')}`,
+     WHERE ${conds.join(" AND ")}`,
     params,
   );
   return r.rows[0].total;
@@ -119,10 +150,11 @@ const findMovementById = async (id, db = pool) => {
 
 // Busca un movimiento por (reference_type, reference_id, movement_type).
 // movementType es opcional para acotar a un tipo específico (ej: DROP_IN).
-const findMovementByReference = async ({
-  referenceType, referenceId, movementType,
-}, db = pool) => {
-  const conds = ['reference_type = $1', 'reference_id = $2'];
+const findMovementByReference = async (
+  { referenceType, referenceId, movementType },
+  db = pool,
+) => {
+  const conds = ["reference_type = $1", "reference_id = $2"];
   const params = [referenceType, referenceId];
   if (movementType) {
     conds.push(`movement_type = $${params.length + 1}`);
@@ -131,7 +163,7 @@ const findMovementByReference = async ({
   const r = await db.query(
     `SELECT ${MOVEMENT_FIELDS}
      FROM cash_account_movements
-     WHERE ${conds.join(' AND ')}
+     WHERE ${conds.join(" AND ")}
      ORDER BY created_at
      LIMIT 1`,
     params,
@@ -141,20 +173,40 @@ const findMovementByReference = async ({
 
 // Inserta el movimiento sin tocar current_balance. Pensado para uso interno
 // del service (que ya hizo FOR UPDATE + validó saldo y va a UPDATE el cache).
-const insertMovement = async (client, {
-  cashAccountId, movementType, direction, amount,
-  description, beneficiaryName, referenceType, referenceId, createdBy,
-}) => {
+const insertMovement = async (
+  client,
+  {
+    cashAccountId,
+    movementType,
+    direction,
+    amount,
+    amountCash,
+    amountTransfer,
+    description,
+    beneficiaryName,
+    referenceType,
+    referenceId,
+    createdBy,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO cash_account_movements
-       (cash_account_id, movement_type, direction, amount, description,
-        beneficiary_name, reference_type, reference_id, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       (cash_account_id, movement_type, direction, amount, amount_cash, amount_transfer,
+        description, beneficiary_name, reference_type, reference_id, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING ${MOVEMENT_FIELDS}`,
     [
-      cashAccountId, movementType, direction, amount,
-      description || null, beneficiaryName || null,
-      referenceType || null, referenceId || null, createdBy,
+      cashAccountId,
+      movementType,
+      direction,
+      amount,
+      amountCash || 0,
+      amountTransfer || 0,
+      description || null,
+      beneficiaryName || null,
+      referenceType || null,
+      referenceId || null,
+      createdBy,
     ],
   );
   return r.rows[0];
