@@ -9,6 +9,7 @@ jest.mock("./credits.queries", () => ({
   setSurvivingInstallment: jest.fn(),
   cancelInstallmentsForPlanChange: jest.fn(),
   settleCreditByPlanChange: jest.fn(),
+  updateCreditPlanColumns: jest.fn(),
   createPlanChangeRecord: jest.fn(),
   hasPlanChange: jest.fn(),
 }));
@@ -239,6 +240,13 @@ describe("changePlan — ejecución (Etapa 2)", () => {
         new_balance: 70000,
         executed_by: "admin-1",
       }),
+    );
+    // El plan vigente del crédito se actualiza al nuevo (3 cuotas, tasa 0.10).
+    expect(queries.updateCreditPlanColumns).toHaveBeenCalledWith(
+      client,
+      "credit-1",
+      3,
+      0.1,
     );
     expect(r).toMatchObject({ newBalance: 70000, plan_change_id: "pc-1" });
   });

@@ -95,9 +95,14 @@ describe("changePlan — ejecución contra DB", () => {
     );
     expect(paid.rows.every((x) => x.status === "PAID" && x.amount_paid === 20000)).toBe(true);
 
-    // Crédito sigue ACTIVE y hay registro de auditoría.
-    const c = await pool.query(`SELECT status FROM credits WHERE id = $1`, [credit.id]);
+    // Crédito sigue ACTIVE y su plan vigente refleja el nuevo (3 cuotas, 10%).
+    const c = await pool.query(
+      `SELECT status, installments_count, interest_rate::float8 FROM credits WHERE id = $1`,
+      [credit.id],
+    );
     expect(c.rows[0].status).toBe("ACTIVE");
+    expect(c.rows[0].installments_count).toBe(3);
+    expect(c.rows[0].interest_rate).toBe(0.1);
     const audit = await pool.query(
       `SELECT new_balance::float8, credit_cancelled FROM credit_plan_changes WHERE credit_id = $1`,
       [credit.id],

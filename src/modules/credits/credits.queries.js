@@ -701,6 +701,31 @@ const settleCreditByPlanChange = async (client, creditId) => {
 };
 
 /**
+ * Actualiza el plan vigente del crédito tras un cambio de plan: cantidad de
+ * cuotas y tasa pasan a reflejar el nuevo plan. El plan/tasa originales quedan
+ * preservados en credit_plan_changes (no se pierde la historia). Esto mantiene
+ * coherente todo lo que lee credits.installments_count / interest_rate
+ * (detalle del crédito, label "Cuota X de N" en la planilla, reportes).
+ * @param {object} client
+ * @param {string} creditId
+ * @param {number} installmentsCount - Nueva cantidad de cuotas (= pagadas + 1).
+ * @param {number} interestRate - Nueva tasa (coeficiente del plan destino).
+ */
+const updateCreditPlanColumns = async (
+  client,
+  creditId,
+  installmentsCount,
+  interestRate,
+) => {
+  await client.query(
+    `UPDATE credits
+       SET installments_count = $2, interest_rate = $3, updated_at = NOW()
+     WHERE id = $1`,
+    [creditId, installmentsCount, interestRate],
+  );
+};
+
+/**
  * Inserta el registro de trazabilidad de un cambio de plan (snapshot antes/después).
  * @param {object} client
  * @param {object} data
@@ -798,6 +823,7 @@ module.exports = {
   setSurvivingInstallment,
   cancelInstallmentsForPlanChange,
   settleCreditByPlanChange,
+  updateCreditPlanColumns,
   createPlanChangeRecord,
   hasPlanChange,
 };

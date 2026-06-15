@@ -1374,6 +1374,16 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
       await queries.cancelInstallmentsForPlanChange(client, plan.cancelledForExecuteIds);
     }
 
+    // El plan vigente del crédito pasa a ser el nuevo (cuotas + tasa), para que
+    // todo lo que lee credits (detalle, label "Cuota X de N" de la planilla,
+    // reportes) refleje el cambio. El plan original queda en credit_plan_changes.
+    await queries.updateCreditPlanColumns(
+      client,
+      creditId,
+      plan.snapshot.new_installments_count,
+      plan.snapshot.new_rate,
+    );
+
     const record = await queries.createPlanChangeRecord(client, {
       credit_id: creditId,
       ...plan.snapshot,
