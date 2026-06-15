@@ -77,6 +77,8 @@ const create = async (
     installment_id,
     collector_id,
     amount_received,
+    amount_cash,
+    amount_transfer,
     payment_method,
     transfer_reference,
     notes,
@@ -86,13 +88,15 @@ const create = async (
   db = pool,
 ) => {
   const r = await db.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,
+    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,
     [
       installment_id,
       collector_id,
       amount_received,
+      amount_cash || 0,
+      amount_transfer || 0,
       payment_method,
       transfer_reference || null,
       notes || null,
@@ -116,6 +120,7 @@ const create = async (
 const lockAndGetPayment = async (client, id) => {
   const r = await client.query(
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.notes,
             p.is_reversal, p.admin_direct, p.reversed_by_payment_id,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
@@ -372,6 +377,11 @@ const shiftInstallmentDates = async (
  */
 /**
  * @param {string|null} parentPaymentId - ID del cobro principal que generó este sub-pago por distribución.
+ * @param {number} cashRatio - Proporción del saldo a imputar a efectivo (0..1).
+ *   Hereda la mezcla del cobro cabecera: 1 si fue todo efectivo, 0 si fue todo
+ *   transferencia, o el ratio cash/total si fue mixto. El desglose se calcula en
+ *   SQL sobre el saldo real de la cuota para que amount_cash + amount_transfer
+ *   = amount_received exactamente (sin drift de redondeo JS/SQL).
  */
 const markInstallmentAsPrepaid = async (
   client,
@@ -381,12 +391,18 @@ const markInstallmentAsPrepaid = async (
   paymentMethod,
   transferReference = null,
   parentPaymentId = null,
+  cashRatio = null,
 ) => {
   await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+        payment_method, transfer_reference,
         status, approved_by, approved_at, notes, parent_payment_id)
-     SELECT id, $1, amount_due - amount_paid, $2, $3, 'APPROVED', $1, NOW(), $4, $6
+     SELECT id, $1,
+            (amount_due - amount_paid),
+            ROUND((amount_due - amount_paid) * $7, 2),
+            (amount_due - amount_paid) - ROUND((amount_due - amount_paid) * $7, 2),
+            $2, $3, 'APPROVED', $1, NOW(), $4, $6
       FROM installments WHERE id = $5`,
     [
       adminId,
@@ -395,6 +411,8 @@ const markInstallmentAsPrepaid = async (
       note,
       installmentId,
       parentPaymentId || null,
+      // Fallback por método si no se pasó ratio (llamadas legacy de un solo medio).
+      cashRatio != null ? cashRatio : paymentMethod === "CASH" ? 1 : 0,
     ],
   );
   await client.query(
@@ -415,6 +433,8 @@ const createApproved = async (
     installmentId,
     adminId,
     amountReceived,
+    amountCash,
+    amountTransfer,
     paymentMethod,
     transferReference,
     notes,
@@ -423,14 +443,16 @@ const createApproved = async (
 ) => {
   const r = await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
         status, approved_by, approved_at, notes, admin_direct, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), $6, TRUE, $7)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, cash_session_id, created_at`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), $8, TRUE, $9)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, cash_session_id, created_at`,
     [
       installmentId,
       adminId,
       amountReceived,
+      amountCash || 0,
+      amountTransfer || 0,
       paymentMethod,
       transferReference || null,
       notes || null,
@@ -451,6 +473,8 @@ const createReversal = async (
     installmentId,
     adminId,
     amountReceived,
+    amountCash,
+    amountTransfer,
     paymentMethod,
     transferReference,
     reason,
@@ -460,14 +484,16 @@ const createReversal = async (
 ) => {
   const r = await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
         status, approved_by, approved_at, notes, is_reversal, reversal_reason, reversed_by_payment_id, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), NULL, TRUE, $6, $7, $8)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, cash_session_id`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), NULL, TRUE, $8, $9, $10)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, cash_session_id`,
     [
       installmentId,
       adminId,
       amountReceived,
+      amountCash || 0,
+      amountTransfer || 0,
       paymentMethod,
       transferReference || null,
       reason,
@@ -483,8 +509,9 @@ const createReversal = async (
  */
 const findChildPayments = async (client, parentPaymentId) => {
   const r = await client.query(
-    `SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
-            p.transfer_reference, p.status,
+    `SELECT p.id, p.installment_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8,
+            p.payment_method, p.transfer_reference, p.status,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8, i.due_date
      FROM payments p
      JOIN installments i ON i.id = p.installment_id

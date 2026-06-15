@@ -359,13 +359,64 @@ const credits = {
 };
 
 // ── PAYMENTS (pre-cargas de cobro) ────────────────────────────
+
+// Validación de los montos de un cobro. Acepta dos formatos mutuamente
+// excluyentes (el servicio los normaliza a { amount_received, amount_cash,
+// amount_transfer }):
+//   · Mixto:  amount_cash y/o amount_transfer (efectivo + transferencia).
+//   · Legacy: amount_received + payment_method (un solo medio).
+const MONTO_MAX = 99999999;
+const isMoneyField = (val, label) => {
+  const n = parseFloat(val);
+  if (isNaN(n) || n < 0 || n > MONTO_MAX)
+    throw new Error(`${label} debe ser un número entre 0 y ${MONTO_MAX}.`);
+  return true;
+};
+const paymentAmountFields = [
+  body('amount_cash').optional({ nullable: true })
+    .custom(val => isMoneyField(val, 'El monto en efectivo')),
+  body('amount_transfer').optional({ nullable: true })
+    .custom(val => isMoneyField(val, 'El monto en transferencia')),
+  body('amount_received').optional({ nullable: true })
+    .custom(val => isMoneyField(val, 'El monto recibido')),
+  body('payment_method').optional()
+    .isIn(['CASH','TRANSFER'])
+    .withMessage('El método de pago debe ser CASH o TRANSFER.'),
+  body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
+    .isLength({ max: 100 }).withMessage('La referencia de transferencia no puede superar los 100 caracteres.'),
+  // Coherencia entre los campos de monto: exactamente un formato, total > 0,
+  // y referencia obligatoria si hay transferencia.
+  body().custom((b) => {
+    const has = (v) => v !== undefined && v !== null && String(v).trim() !== '';
+    const mixedShape  = has(b.amount_cash) || has(b.amount_transfer);
+    const legacyShape = has(b.amount_received);
+
+    if (mixedShape && legacyShape)
+      throw new Error('Enviá los montos por medio (amount_cash/amount_transfer) o el formato simple (amount_received + payment_method), no ambos.');
+    if (!mixedShape && !legacyShape)
+      throw new Error('Debe indicar el monto del cobro.');
+
+    if (mixedShape) {
+      const transfer = parseFloat(b.amount_transfer) || 0;
+      const total    = (parseFloat(b.amount_cash) || 0) + transfer;
+      if (!(total > 0))
+        throw new Error('La suma de efectivo y transferencia debe ser mayor a 0.');
+      if (transfer > 0 && !has(b.transfer_reference))
+        throw new Error('La referencia de transferencia es obligatoria cuando hay monto en transferencia.');
+    } else {
+      if (!has(b.payment_method))
+        throw new Error('El método de pago es obligatorio.');
+      if (!(parseFloat(b.amount_received) > 0))
+        throw new Error('El monto recibido debe ser mayor a 0.');
+    }
+    return true;
+  }),
+];
+
 const payments = {
   create: [
     isUUID('installment_id', 'La cuota'),
-    isPositiveNumber('amount_received', 'El monto recibido', { min: 0.01, max: 99999999 }),
-    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
-    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 100 }).withMessage('La referencia de transferencia no puede superar los 100 caracteres.'),
+    ...paymentAmountFields,
     body('notes').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
     isDate('next_visit_date', 'La fecha de próxima visita', false),
@@ -378,10 +429,7 @@ const payments = {
   ],
   adminDirect: [
     isUUID('installment_id', 'La cuota'),
-    isPositiveNumber('amount_received', 'El monto recibido', { min: 0.01, max: 99999999 }),
-    isEnum('payment_method', 'El método de pago', ['CASH','TRANSFER']),
-    body('transfer_reference').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 100 }).withMessage('La referencia de transferencia no puede superar los 100 caracteres.'),
+    ...paymentAmountFields,
     body('notes').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
   ],

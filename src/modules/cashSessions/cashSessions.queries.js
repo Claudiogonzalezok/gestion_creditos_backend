@@ -496,24 +496,31 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
         [cashSessionId],
       ),
       // payments: aprobados directos suman; reversiones (is_reversal=TRUE) restan.
+      // Se agrega por amount_cash/amount_transfer (no por payment_method) para
+      // soportar cobros mixtos: un mismo payment puede aportar a CASH y a
+      // TRANSFER a la vez. Para cobros de un solo medio, la columna del otro
+      // medio es 0 y el resultado es idéntico al filtrado por payment_method.
       db.query(
         `SELECT
-         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
-                  FILTER (WHERE payment_method='CASH'),     0)::float8 AS payments_cash,
-         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_received ELSE amount_received END)
-                  FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS payments_transfer
+         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_cash     ELSE amount_cash     END), 0)::float8 AS payments_cash,
+         COALESCE(SUM(CASE WHEN is_reversal THEN -amount_transfer ELSE amount_transfer END), 0)::float8 AS payments_transfer
        FROM payments
        WHERE cash_session_id = $1
          AND status = 'APPROVED'`,
         [cashSessionId],
       ),
+      // Ingresos por adelantado de un crédito: enganche (DOWN_PAYMENT) y cuotas
+      // pagadas por adelantado al aprobar (PREPAID_INSTALLMENT). Ambos son dinero
+      // real recibido e imputado con cash_session_id, así que ambos deben sumar a
+      // la caja. Antes solo se contaba DOWN_PAYMENT, por lo que las cuotas
+      // pre-pagadas quedaban fuera del esperado y aparecían como sobrante.
       db.query(
         `SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method='CASH'),     0)::float8 AS down_payments_cash,
          COALESCE(SUM(amount) FILTER (WHERE payment_method='TRANSFER'), 0)::float8 AS down_payments_transfer
        FROM credit_down_payments
        WHERE cash_session_id = $1
-         AND payment_type = 'DOWN_PAYMENT'`,
+         AND payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')`,
         [cashSessionId],
       ),
       db.query(

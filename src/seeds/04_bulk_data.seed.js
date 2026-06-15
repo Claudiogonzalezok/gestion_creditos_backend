@@ -680,9 +680,12 @@ async function _insertInstallmentsAndPayments(
 
       await client.query(
         `INSERT INTO payments
-           (installment_id, collector_id, amount_received, payment_method,
+           (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method,
             status, approved_by, approved_at, created_at)
-         VALUES ($1,$2,$3,$4,'APPROVED',$5,$6,$6)`,
+         VALUES ($1,$2,$3,
+                 CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
+                 CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
+                 $4,'APPROVED',$5,$6,$6)`,
         [installmentId, collectorId, amt, method, adminId, payDate]
       );
     }
