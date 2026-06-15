@@ -111,12 +111,16 @@ const seed = async () => {
       );
       const customerId = customerRes.rows[0].id;
 
+      // installments_count = 1: este seed inserta UNA sola cuota por crédito
+      // (la fila que se ve en la planilla por cada estado). Debe coincidir con
+      // la cantidad real de cuotas insertadas para no dejar créditos
+      // inconsistentes (antes decía 4 cuotas pero solo se cargaba 1).
       const creditRes = await client.query(
         `INSERT INTO credits
            (customer_id, created_by, type, total_amount, down_payment,
             installments_count, payment_frequency, interest_rate,
             status, approved_by, approved_at)
-         VALUES ($1,$2,'LOAN',$3,0,4,'MONTHLY',0.15,'ACTIVE',$2,NOW())
+         VALUES ($1,$2,'LOAN',$3,0,1,'MONTHLY',0.15,'ACTIVE',$2,NOW())
          RETURNING id`,
         [customerId, adminId, 180000 + idx * 10000]
       );
