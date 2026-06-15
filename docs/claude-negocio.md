@@ -46,6 +46,47 @@ Para SALE con múltiples productos: se calcula por producto de forma proporciona
 - Corre las fechas restantes con `shiftInstallmentDates`.
 - `original_due_date` guarda la fecha original para auditoría.
 
+## Cobranzas: TODO va a pre-carga + aprobación del Admin (regla de negocio)
+
+**Regla del dueño:** toda cobranza de cuotas se registra como *pre-carga* en estado
+`PENDING` y recién impacta la caja cuando un **Admin la aprueba**
+(`PATCH /payments/:id/approve`). No hay excepción por rol ni por tipo de cobro.
+
+Aplica a **todas** las formas de cobrar una cuota:
+- **Cobrador** cobra en la calle → crea pre-carga (`POST /payments`).
+- **Admin** cobra una cuota → también crea pre-carga (`POST /payments`); **no** cobra directo.
+- **Cancelación anticipada de crédito** (`PATCH /credits/:id/early-settlement`) → genera
+  pre-carga(s) `PENDING` por el saldo a cancelar; el Admin las aprueba.
+
+Consecuencias del diseño:
+- Crear una pre-carga **no** mueve la caja y **no** requiere caja abierta (el cobrador es
+  un actor de campo).
+- El dinero entra a la caja **solo al aprobar**: ahí se exige caja operativa abierta y se
+  imputa con desglose por medio (efectivo / transferencia).
+
+> **Excepción — enganche y cuotas prepagas al firmar:** es la única "cobranza" que no pasa
+> por pre-carga, porque se cobra *dentro de la aprobación del crédito por el Admin* (esa
+> aprobación ya es el control). Va a `credit_down_payments`, no a `payments`. Ver secciones
+> "Enganche" y "Cuotas adelantadas al firmar".
+
+> **Pendiente (a definir con el equipo):** hoy la cancelación anticipada con N cuotas crea
+> N pre-cargas (N aprobaciones). Está en evaluación unificarla en **una sola pre-carga** que,
+> al aprobarse, salde todas las cuotas en una operación atómica (reutilizando la distribución
+> de `_applyPaymentToInstallments`).
+
+### Pago directo (existe pero NO se usa)
+
+El backend tiene un camino de **cobro directo** que inserta el pago ya `APPROVED`,
+**salteando** la pre-carga y la aprobación:
+- `POST /payments/admin-direct` → `adminDirect` → `createApproved` (`admin_direct = TRUE`).
+- `PATCH /installments/:id/early-pay` → delega en `adminDirect`.
+
+**Estado actual: NO se usan.** El frontend cobra siempre por pre-carga + aprobación, en línea
+con la regla de negocio. Se conservan a propósito como mecanismo disponible **por si en el
+futuro se decide que el Admin —y solo el Admin— pueda cobrar de forma directa** (sin la doble
+aprobación). Si esa decisión no se toma, lo recomendable es deprecar ambos endpoints para que
+la regla quede impuesta por diseño y nadie pueda cobrar sin aprobación ni siquiera por API.
+
 ## Flujo de cobro con adelanto automático
 
 Al aprobar un pago (`PATCH /payments/:id/approve`):
