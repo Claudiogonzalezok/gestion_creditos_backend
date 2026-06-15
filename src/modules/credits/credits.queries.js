@@ -755,6 +755,20 @@ const createPlanChangeRecord = async (
   return r.rows[0];
 };
 
+/**
+ * Indica si un crédito ya tuvo un cambio de plan (solo se permite uno).
+ * @param {object} db - pool o client (usar client bajo lock en la ejecución).
+ * @param {string} creditId
+ * @returns {Promise<boolean>}
+ */
+const hasPlanChange = async (db, creditId) => {
+  const r = await db.query(
+    `SELECT 1 FROM credit_plan_changes WHERE credit_id = $1 LIMIT 1`,
+    [creditId],
+  );
+  return r.rowCount > 0;
+};
+
 module.exports = {
   findAll,
   findById,
@@ -785,4 +799,5 @@ module.exports = {
   cancelInstallmentsForPlanChange,
   settleCreditByPlanChange,
   createPlanChangeRecord,
+  hasPlanChange,
 };

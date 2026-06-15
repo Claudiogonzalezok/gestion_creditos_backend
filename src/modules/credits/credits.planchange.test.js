@@ -10,6 +10,7 @@ jest.mock("./credits.queries", () => ({
   cancelInstallmentsForPlanChange: jest.fn(),
   settleCreditByPlanChange: jest.fn(),
   createPlanChangeRecord: jest.fn(),
+  hasPlanChange: jest.fn(),
 }));
 jest.mock("../interestRates/interestRates.queries", () => ({
   findActiveRate: jest.fn(),
@@ -285,5 +286,35 @@ describe("changePlan — ejecución (Etapa 2)", () => {
     await expect(
       service.changePlan("x", {}, "admin-1"),
     ).rejects.toMatchObject({ status: 404 });
+  });
+});
+
+describe("cambio de plan — solo se permite una vez", () => {
+  const client = { query: jest.fn() };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    withTransaction.mockImplementation(async (cb) => cb(client));
+  });
+
+  it("simular rechaza si el crédito ya tuvo un cambio de plan (409)", async () => {
+    queries.findById.mockResolvedValue(credit());
+    queries.hasPlanChange.mockResolvedValue(true);
+
+    await expect(
+      service.simulatePlanChange("credit-1"),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("ejecutar rechaza un segundo cambio de plan y no muta nada (409)", async () => {
+    queries.lockCredit.mockResolvedValue(credit());
+    queries.hasPlanChange.mockResolvedValue(true);
+
+    await expect(
+      service.changePlan("credit-1", {}, "admin-1"),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(queries.lockInstallments).not.toHaveBeenCalled();
+    expect(queries.setSurvivingInstallment).not.toHaveBeenCalled();
+    expect(queries.createPlanChangeRecord).not.toHaveBeenCalled();
   });
 });

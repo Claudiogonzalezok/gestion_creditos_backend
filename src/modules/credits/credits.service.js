@@ -1311,6 +1311,11 @@ const _resolvePlanChange = async (credit, rawInstallments) => {
 const simulatePlanChange = async (creditId) => {
   const credit = await queries.findById(creditId);
   if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (await queries.hasPlanChange(pool, creditId))
+    throw {
+      status: 409,
+      message: "Este crédito ya tuvo un cambio de plan; solo se permite uno.",
+    };
   const { result } = await _resolvePlanChange(credit, credit.installments);
   return result;
 };
@@ -1333,6 +1338,14 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
   return withTransaction(async (client) => {
     const credit = await queries.lockCredit(client, creditId);
     if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+
+    // Solo se permite UN cambio de plan por crédito. Se verifica bajo el lock
+    // del crédito para serializar intentos concurrentes.
+    if (await queries.hasPlanChange(client, creditId))
+      throw {
+        status: 409,
+        message: "Este crédito ya tuvo un cambio de plan; solo se permite uno.",
+      };
 
     // Un cobro sin aprobar invalidaría el cálculo del saldo → bloquear.
     const hasPending = await queries.hasPendingPayments(client, creditId);
