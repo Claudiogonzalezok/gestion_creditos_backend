@@ -1,11 +1,19 @@
 const pool = require('../../config/db');
 
-const findAll = async ({ role, status, search } = {}) => {
+const findAll = async ({ role, roles, status, search } = {}) => {
   let q = `SELECT id, full_name, dni, email, address, role, status, is_temp_password,
                   failed_attempts, locked_at, last_login_at, created_at
            FROM users WHERE 1=1`;
   const params = [];
-  if (role)   { params.push(role);   q += ` AND role = $${params.length}`; }
+  // `role` = match exacto (compat). `roles` = conjunto (ej: cobradores =
+  // COLLECTOR + SELLER_COLLECTOR, vendedores = SELLER + SELLER_COLLECTOR).
+  if (role) {
+    params.push(role);
+    q += ` AND role = $${params.length}`;
+  } else if (Array.isArray(roles) && roles.length) {
+    params.push(roles);
+    q += ` AND role = ANY($${params.length}::text[])`;
+  }
   if (status) { params.push(status); q += ` AND status = $${params.length}`; }
   if (search) {
     params.push(`%${search}%`);
