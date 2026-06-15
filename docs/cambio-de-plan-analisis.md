@@ -356,8 +356,10 @@ estado PENDING. Flujo: **SIMULAR → CONFIRMAR (admin) → EJECUTAR → AUDITOR�
   reports.queries ×3, payments.queries ×4). Tests: unit (`credits.planchange.test.js`, 12) +
   integración (`tests/integration/cambio-de-plan.test.js`, 2) — incluye verificación de que el
   saldo pendiente excluye las cuotas anuladas.
-- **Etapa 3 — Frontend:** `plan-change-dialog` + botón en credit-detail + service, con
-  simulación previa obligatoria.
+- **Etapa 3 — Frontend:** ✅ **IMPLEMENTADA** (repo `D:\gestion-creditos-f`, rama
+  `feat/cambio-de-plan`). `plan-change-dialog` (espejo de refinance-dialog) con simulación
+  automática al abrir + confirmación; botón "Cambiar plan" en credit-detail (ADMIN, LOAN ACTIVE);
+  `credits.service.simulatePlanChange` / `changePlan`; tipos en `credit.model`. `ng build` OK.
 - **Etapa 4 — Reportes/visualización:** mostrar historial de cambios de plan en el detalle;
   (opcional) columnas `current_*` y/o reversibilidad.
 
