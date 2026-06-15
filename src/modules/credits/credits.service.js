@@ -7,6 +7,7 @@ const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
 const { localDate } = require("../../utils/date");
 const businessDaysService = require("../businessDays/businessDays.service");
+const paymentsService = require("../payments/payments.service");
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -22,6 +23,82 @@ const {
 } = require("../../utils/businessDay");
 
 const { getActiveJornadaDate } = businessDaysService;
+
+const round2 = (n) => Math.round(n * 100) / 100;
+const hasValue = (v) =>
+  v !== undefined && v !== null && String(v).trim() !== "";
+
+/**
+ * Normaliza un ingreso inicial persistido en credits aceptando formato legacy o split.
+ */
+const normalizeCreditIntake = ({ total, cash, transfer, method }) => {
+  const hasSplit = hasValue(cash) || hasValue(transfer);
+  if (hasSplit) {
+    const amountCash = round2(parseFloat(cash) || 0);
+    const amountTransfer = round2(parseFloat(transfer) || 0);
+    const amount = round2(amountCash + amountTransfer);
+    const paymentMethod =
+      amountCash > 0 && amountTransfer > 0
+        ? "MIXED"
+        : amountTransfer > 0
+          ? "TRANSFER"
+          : amount > 0
+            ? "CASH"
+            : null;
+    return { amount, amountCash, amountTransfer, paymentMethod };
+  }
+
+  const amount = round2(parseFloat(total || 0));
+  const paymentMethod = amount > 0 ? method || "CASH" : null;
+  return {
+    amount,
+    amountCash: paymentMethod === "CASH" ? amount : 0,
+    amountTransfer: paymentMethod === "TRANSFER" ? amount : 0,
+    paymentMethod,
+  };
+};
+
+/**
+ * Ajusta un desglose declarado al monto final calculado o bloquea inconsistencias.
+ */
+const resolveStoredSplitForFinalAmount = ({
+  amount,
+  cash,
+  transfer,
+  method,
+}) => {
+  const finalAmount = round2(parseFloat(amount || 0));
+  const hasSplit = parseFloat(cash || 0) > 0 || parseFloat(transfer || 0) > 0;
+  if (!hasSplit) {
+    const paymentMethod = method || "CASH";
+    return {
+      amountCash: paymentMethod === "CASH" ? finalAmount : 0,
+      amountTransfer: paymentMethod === "TRANSFER" ? finalAmount : 0,
+      paymentMethod,
+    };
+  }
+
+  const amountCash = round2(parseFloat(cash || 0));
+  const amountTransfer = round2(parseFloat(transfer || 0));
+  const declaredTotal = round2(amountCash + amountTransfer);
+  if (declaredTotal !== finalAmount) {
+    throw {
+      status: 409,
+      message:
+        "El desglose de cuotas adelantadas no coincide con el total calculado al aprobar. Revisá las condiciones o la pre-operación.",
+    };
+  }
+  return {
+    amountCash,
+    amountTransfer,
+    paymentMethod:
+      amountCash > 0 && amountTransfer > 0
+        ? "MIXED"
+        : amountTransfer > 0
+          ? "TRANSFER"
+          : "CASH",
+  };
+};
 
 /**
  * Calcula el capital realmente financiado de una venta a crédito.
@@ -185,7 +262,14 @@ const sanitizeCredit = (credit) => {
   if (credit.type === "LOAN") {
     delete credit.down_payment;
     delete credit.down_payment_method;
+    delete credit.down_payment_cash;
+    delete credit.down_payment_transfer;
     delete credit.down_payment_transfer_reference;
+    delete credit.prepaid_installments;
+    delete credit.prepaid_installments_method;
+    delete credit.prepaid_installments_cash;
+    delete credit.prepaid_installments_transfer;
+    delete credit.prepaid_installments_transfer_reference;
   }
   if (credit.type === "SALE") {
     delete credit.interest_rate;
@@ -243,7 +327,14 @@ const create = async (data, requestingUser) => {
       });
       delete credit.down_payment;
       delete credit.down_payment_method;
+      delete credit.down_payment_cash;
+      delete credit.down_payment_transfer;
       delete credit.down_payment_transfer_reference;
+      delete credit.prepaid_installments;
+      delete credit.prepaid_installments_method;
+      delete credit.prepaid_installments_cash;
+      delete credit.prepaid_installments_transfer;
+      delete credit.prepaid_installments_transfer_reference;
       return credit;
     });
   }
@@ -329,7 +420,19 @@ const create = async (data, requestingUser) => {
       titleByUnit.set(unitId, unit.title);
     }
 
-    const downPayment = parseFloat(data.down_payment || 0);
+    const downPaymentSplit = normalizeCreditIntake({
+      total: data.down_payment,
+      cash: data.down_payment_cash,
+      transfer: data.down_payment_transfer,
+      method: data.down_payment_method,
+    });
+    const downPayment = downPaymentSplit.amount;
+    const prepaidSplit = normalizeCreditIntake({
+      total: 0,
+      cash: data.prepaid_installments_cash,
+      transfer: data.prepaid_installments_transfer,
+      method: data.prepaid_installments_method,
+    });
     const prepaidInstallments = parseInt(data.prepaid_installments || 0, 10);
     if (downPayment >= totalAmount)
       throw {
@@ -350,11 +453,15 @@ const create = async (data, requestingUser) => {
       type: "SALE",
       total_amount: totalAmount,
       down_payment: downPayment,
-      down_payment_method: data.down_payment_method || null,
+      down_payment_method: downPaymentSplit.paymentMethod,
+      down_payment_cash: downPaymentSplit.amountCash,
+      down_payment_transfer: downPaymentSplit.amountTransfer,
       down_payment_transfer_reference:
         data.down_payment_transfer_reference || null,
       prepaid_installments: prepaidInstallments,
-      prepaid_installments_method: data.prepaid_installments_method || null,
+      prepaid_installments_method: prepaidSplit.paymentMethod,
+      prepaid_installments_cash: prepaidSplit.amountCash,
+      prepaid_installments_transfer: prepaidSplit.amountTransfer,
       prepaid_installments_transfer_reference:
         data.prepaid_installments_transfer_reference || null,
       installments_count: data.installments_count,
@@ -771,10 +878,18 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     if (credit.prepaid_installments > 0) {
       const n = credit.prepaid_installments;
       const prepaidTotal = await queries.markPrepaidInstallments(client, id, n);
+      const prepaidPayment = resolveStoredSplitForFinalAmount({
+        amount: prepaidTotal,
+        cash: credit.prepaid_installments_cash,
+        transfer: credit.prepaid_installments_transfer,
+        method: credit.prepaid_installments_method,
+      });
       await queries.createDownPayment(client, {
         creditId: id,
         amount: prepaidTotal,
-        paymentMethod: credit.prepaid_installments_method,
+        amountCash: prepaidPayment.amountCash,
+        amountTransfer: prepaidPayment.amountTransfer,
+        paymentMethod: prepaidPayment.paymentMethod,
         transferReference:
           credit.prepaid_installments_transfer_reference || null,
         approvedBy: adminId,
@@ -802,10 +917,31 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     await puQueries.updateStatusBulk(client, unitIds, "SOLD");
 
     if (downPayment > 0) {
+      const downPaymentMethod =
+        parseFloat(credit.down_payment_cash || 0) > 0 &&
+        parseFloat(credit.down_payment_transfer || 0) > 0
+          ? "MIXED"
+          : parseFloat(credit.down_payment_transfer || 0) > 0
+            ? "TRANSFER"
+            : credit.down_payment_method || "CASH";
       await queries.createDownPayment(client, {
         creditId: id,
         amount: downPayment,
-        paymentMethod: credit.down_payment_method || "CASH",
+        amountCash:
+          parseFloat(credit.down_payment_cash || 0) > 0 ||
+          parseFloat(credit.down_payment_transfer || 0) > 0
+            ? credit.down_payment_cash
+            : downPaymentMethod === "CASH"
+              ? downPayment
+              : 0,
+        amountTransfer:
+          parseFloat(credit.down_payment_cash || 0) > 0 ||
+          parseFloat(credit.down_payment_transfer || 0) > 0
+            ? credit.down_payment_transfer
+            : downPaymentMethod === "TRANSFER"
+              ? downPayment
+              : 0,
+        paymentMethod: downPaymentMethod,
         transferReference: credit.down_payment_transfer_reference || null,
         approvedBy: adminId,
         registerDate,
@@ -887,12 +1023,7 @@ const reject = async (id, rejectionReason, adminId) => {
   });
 };
 
-const earlySettlement = async (
-  id,
-  paymentMethod,
-  transferReference,
-  adminId,
-) => {
+const earlySettlement = async (id, paymentData, adminId) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: "Crédito no encontrado." };
   if (credit.status !== "ACTIVE")
@@ -926,29 +1057,52 @@ const earlySettlement = async (
         0,
       ) * 100,
     ) / 100;
+  const normalizedPayment = paymentsService._normalizePaymentAmounts({
+    ...paymentData,
+    amount_received:
+      hasValue(paymentData.amount_cash) || hasValue(paymentData.amount_transfer)
+        ? undefined
+        : settlementAmount,
+  });
+  if (normalizedPayment.amountReceived !== settlementAmount) {
+    throw {
+      status: 409,
+      message:
+        "El desglose de pago no coincide con el saldo de cancelación anticipada.",
+    };
+  }
+  const cashRatio =
+    settlementAmount > 0 ? normalizedPayment.amountCash / settlementAmount : 0;
 
   return withTransaction(async (client) => {
     // Un payment por cuota para mantener trazabilidad completa en reportes y auditoría
     // Se crean en PENDING status para requerir aprobación explícita (doble aprobación)
     const paymentIds = [];
-    for (const inst of pendingInstallments) {
+    let remainingCash = normalizedPayment.amountCash;
+    for (let i = 0; i < pendingInstallments.length; i++) {
+      const inst = pendingInstallments[i];
       const instAmount =
         Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
+      const instCash =
+        i === pendingInstallments.length - 1
+          ? round2(remainingCash)
+          : round2(instAmount * cashRatio);
+      const instTransfer = round2(instAmount - instCash);
+      remainingCash = round2(remainingCash - instCash);
       const paymentResult = await client.query(
         `INSERT INTO payments
            (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
-            status, notes)
-         VALUES ($1, $2, $3,
-                 CASE WHEN $4 = 'CASH'     THEN $3::numeric ELSE 0 END,
-                 CASE WHEN $4 = 'TRANSFER' THEN $3::numeric ELSE 0 END,
-                 $4, $5, 'PENDING', 'Cancelación anticipada')
-         RETURNING id`,
+             status, notes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', 'Cancelación anticipada')
+          RETURNING id`,
         [
           inst.id,
           adminId,
           instAmount,
-          paymentMethod,
-          transferReference || null,
+          instCash,
+          instTransfer,
+          normalizedPayment.paymentMethod,
+          paymentData.transfer_reference || null,
         ],
       );
       paymentIds.push(paymentResult.rows[0].id);
@@ -967,7 +1121,9 @@ const earlySettlement = async (
     return {
       credit_id: id,
       settlement_amount: settlementAmount,
-      payment_method: paymentMethod,
+      payment_method: normalizedPayment.paymentMethod,
+      amount_cash: normalizedPayment.amountCash,
+      amount_transfer: normalizedPayment.amountTransfer,
       payment_ids: paymentIds,
       message:
         "Cancelación anticipada creada. Los pagos están pendientes de aprobación.",

@@ -46,8 +46,10 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
 const findById = async (id) => {
   const r = await pool.query(
     `SELECT c.id, c.type, c.total_amount::float8, c.down_payment::float8,
-            c.down_payment_method, c.down_payment_transfer_reference,
+            c.down_payment_method, c.down_payment_cash::float8, c.down_payment_transfer::float8,
+            c.down_payment_transfer_reference,
             c.prepaid_installments::int, c.prepaid_installments_method,
+            c.prepaid_installments_cash::float8, c.prepaid_installments_transfer::float8,
             c.prepaid_installments_transfer_reference,
             c.installments_count::int, c.payment_frequency,
             -- to_char evita que node-postgres devuelva la fecha como Date en
@@ -135,9 +137,13 @@ const create = async (
     total_amount,
     down_payment,
     down_payment_method,
+    down_payment_cash,
+    down_payment_transfer,
     down_payment_transfer_reference,
     prepaid_installments,
     prepaid_installments_method,
+    prepaid_installments_cash,
+    prepaid_installments_transfer,
     prepaid_installments_transfer_reference,
     installments_count,
     payment_frequency,
@@ -148,14 +154,16 @@ const create = async (
   const r = await client.query(
     `INSERT INTO credits
        (customer_id, created_by, type, total_amount,
-        down_payment, down_payment_method, down_payment_transfer_reference,
-        prepaid_installments, prepaid_installments_method, prepaid_installments_transfer_reference,
-        installments_count, payment_frequency, first_payment_date, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
-                down_payment_transfer_reference,
-                prepaid_installments::int, prepaid_installments_method,
-                prepaid_installments_transfer_reference,
+         down_payment, down_payment_method, down_payment_cash, down_payment_transfer, down_payment_transfer_reference,
+         prepaid_installments, prepaid_installments_method, prepaid_installments_cash, prepaid_installments_transfer, prepaid_installments_transfer_reference,
+         installments_count, payment_frequency, first_payment_date, notes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+       RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
+                 down_payment_cash::float8, down_payment_transfer::float8,
+                 down_payment_transfer_reference,
+                 prepaid_installments::int, prepaid_installments_method,
+                 prepaid_installments_cash::float8, prepaid_installments_transfer::float8,
+                 prepaid_installments_transfer_reference,
                 installments_count::int, payment_frequency,
                 to_char(first_payment_date, 'YYYY-MM-DD') AS first_payment_date,
                 status, created_at`,
@@ -166,9 +174,13 @@ const create = async (
       total_amount,
       down_payment || 0,
       down_payment_method || null,
+      down_payment_cash || 0,
+      down_payment_transfer || 0,
       down_payment_transfer_reference || null,
       prepaid_installments || 0,
       prepaid_installments_method || null,
+      prepaid_installments_cash || 0,
+      prepaid_installments_transfer || 0,
       prepaid_installments_transfer_reference || null,
       installments_count,
       payment_frequency,
@@ -384,13 +396,15 @@ const markPrepaidInstallments = async (client, creditId, count) => {
  * Registra un ingreso aprobado (enganche u otro pago directo) asociado a un crédito de venta.
  * No pasa por el flujo de pre-carga; se inserta ya aprobado dentro de la transacción de aprobación.
  * @param {object} client - Cliente de transacción.
- * @param {object} data - creditId, amount, paymentMethod, transferReference, approvedBy, paymentType.
+ * @param {object} data - creditId, amount, amountCash, amountTransfer, paymentMethod, transferReference, approvedBy, paymentType.
  */
 const createDownPayment = async (
   client,
   {
     creditId,
     amount,
+    amountCash,
+    amountTransfer,
     paymentMethod,
     transferReference,
     approvedBy,
@@ -401,11 +415,13 @@ const createDownPayment = async (
 ) => {
   await client.query(
     `INSERT INTO credit_down_payments
-       (credit_id, amount, payment_method, transfer_reference, approved_by, payment_type, register_date, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (credit_id, amount, amount_cash, amount_transfer, payment_method, transfer_reference, approved_by, payment_type, register_date, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
     [
       creditId,
       amount,
+      amountCash || 0,
+      amountTransfer || 0,
       paymentMethod,
       transferReference || null,
       approvedBy,
@@ -574,7 +590,7 @@ const createRefinancingRecord = async (
       pending_balance,
       extra_charges || 0,
       total_transferred,
-      refinancing_type || 'STANDARD',
+      refinancing_type || "STANDARD",
       reason,
       notes || null,
       metadata ? JSON.stringify(metadata) : null,
@@ -623,17 +639,21 @@ const getRefinancingChain = async (creditId) => {
   // Puede haber varios a depth=1 si hubo intentos rechazados antes del actual.
   // Se prioriza el no-rechazado (PENDING_APPROVAL o ACTIVE) sobre REJECTED.
   const successor =
-    chain.find((n) => n.depth === 1 && n.status !== 'REJECTED') ||
+    chain.find((n) => n.depth === 1 && n.status !== "REJECTED") ||
     chain.find((n) => n.depth === 1) ||
     null;
 
   return {
-    predecessor_id:  predecessor?.id || null,
-    successor_id:    successor?.id   || null,
-    chain_depth:     chain.length,
-    chain:           chain.map(({ id, status, created_at }) => ({ id, status, created_at })),
-    is_refinancing:  !!current?.refinanced_from_credit_id,
-    is_predecessor:  !!successor,
+    predecessor_id: predecessor?.id || null,
+    successor_id: successor?.id || null,
+    chain_depth: chain.length,
+    chain: chain.map(({ id, status, created_at }) => ({
+      id,
+      status,
+      created_at,
+    })),
+    is_refinancing: !!current?.refinanced_from_credit_id,
+    is_predecessor: !!successor,
   };
 };
 
