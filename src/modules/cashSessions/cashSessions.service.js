@@ -8,6 +8,8 @@ const { localDate } = require("../../utils/date");
 
 const SNAPSHOT_VERSION = 1;
 
+const round2 = (n) => Math.round((n || 0) * 100) / 100;
+
 /**
  * Construye el snapshot inmutable del cierre de una caja. Fuente de verdad de
  * la auditoría: el JSON guardado en closure_snapshot. La versión permite
@@ -316,6 +318,74 @@ const snapshot = async (id) => {
   };
 };
 
+// ── Auto-fondeo a Caja General ──────────────────────────────────────────────
+
+/**
+ * Fondea Caja General con lo declarado al cerrar una caja operativa.
+ * Genera UN movimiento `DROP_IN` (split cash/transfer) en la MISMA transacción
+ * del cierre/reconciliación, vía `insertMovementWithBalance`.
+ *
+ * Idempotente: además del índice único `cam_one_drop_in_per_closure_idx`, esta
+ * función chequea `findMovementByReference` antes de insertar.
+ *
+ * No inserta nada si `declared.cash + declared.transfer <= 0`.
+ *
+ * @param {object} client - cliente de la transacción en curso.
+ * @param {object} params
+ * @param {object} params.session - la `cash_session` (requiere id, owner_user_id).
+ * @param {{cash:number, transfer:number}} params.declared - montos declarados al cierre.
+ * @param {string} params.capturedBy - id del usuario que ejecuta el cierre/reconciliación.
+ * @returns {Promise<object|null>} el movimiento `DROP_IN` (nuevo o preexistente), o `null` si declared = 0.
+ */
+const transferDeclaredToGeneralCash = async (
+  client,
+  { session, declared, capturedBy },
+) => {
+  const cash = round2(declared.cash);
+  const transfer = round2(declared.transfer);
+  const total = round2(cash + transfer);
+  if (total <= 0) return null;
+
+  const general = await cashAccountsQueries.findGeneralCashAccount(client);
+  if (!general)
+    throw { status: 500, message: "No hay Caja General configurada." };
+
+  // Idempotencia a nivel app (defensa adicional al índice único de la migración 036).
+  const existing = await cashAccountsQueries.findMovementByReference(
+    {
+      referenceType: "CASH_SESSION_CLOSURE",
+      referenceId: session.id,
+      movementType: "DROP_IN",
+    },
+    client,
+  );
+  if (existing) return existing;
+
+  const owner = await client.query(
+    `SELECT full_name FROM users WHERE id = $1`,
+    [session.owner_user_id],
+  );
+  const ownerName = owner.rows[0]?.full_name || null;
+
+  const { movement } = await cashAccountsService.insertMovementWithBalance(
+    client,
+    {
+      cashAccountId: general.id,
+      movementType: "DROP_IN",
+      direction: "IN",
+      amount: total,
+      amountCash: cash,
+      amountTransfer: transfer,
+      description: `Cierre de caja ${session.id} — declarado CASH ${cash} / TRANSFER ${transfer}`,
+      beneficiaryName: ownerName,
+      referenceType: "CASH_SESSION_CLOSURE",
+      referenceId: session.id,
+      createdBy: capturedBy,
+    },
+  );
+  return movement;
+};
+
 // ── Cierre ──────────────────────────────────────────────────────────────────
 
 /**
@@ -400,6 +470,13 @@ const close = async (id, data, requestingUser) => {
       };
 
     await queries.insertClosureDetails(client, id, details);
+
+    // Auto-fondeo a Caja General con lo declarado (CASH + TRANSFER), misma tx.
+    await transferDeclaredToGeneralCash(client, {
+      session,
+      declared: { cash: cashDeclared, transfer: transferDeclared },
+      capturedBy: requestingUser.id,
+    });
 
     // Si todas las cajas de la jornada terminales → READY_TO_CLOSE automático.
     await bdQueries.maybeTransitionToReadyToClose(
@@ -505,6 +582,13 @@ const reconcile = async (id, data, requestingUser) => {
       throw { status: 409, message: "La caja cambió de estado. Reintentá." };
     await queries.insertClosureDetails(client, id, details);
 
+    // Auto-fondeo a Caja General con lo declarado (CASH + TRANSFER), misma tx.
+    await transferDeclaredToGeneralCash(client, {
+      session,
+      declared: { cash: cashDeclared, transfer: transferDeclared },
+      capturedBy: requestingUser.id,
+    });
+
     await bdQueries.maybeTransitionToReadyToClose(
       client,
       session.business_day_id,
@@ -538,6 +622,14 @@ const resolveDropDestinationAccount = async (client, destinationAccountId) => {
   return def;
 };
 
+/**
+ * @deprecated El fondeo de Caja General ahora ocurre AUTOMÁTICAMENTE al
+ * cerrar/reconciliar una `cash_session` (ver `transferDeclaredToGeneralCash`).
+ * Los drops manuales no representan una operación real del negocio: en V4 toda
+ * la caja operativa se vuelca a Caja General en el cierre. Se mantiene esta
+ * función (y su ruta) por compatibilidad hacia atrás, pero NO debe usarse en
+ * flujos nuevos. La eliminación física queda para `feat/cash-system-cleanup`.
+ */
 const addDrop = async (id, data, requestingUser) => {
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
@@ -644,6 +736,16 @@ const addManualIncome = async (id, data, requestingUser) => {
   });
 };
 
+/**
+ * @deprecated Contraparte de `addDrop` (también `@deprecated`). Con el
+ * auto-fondeo al cierre, los drops manuales no existen en el negocio real, por
+ * lo que tampoco hace falta revertirlos en flujos nuevos. Se mantiene como
+ * ÚNICO mecanismo para corregir drops históricos backfilleados (migración 025,
+ * `reference_type='CASH_SESSION_DROP'`). NO usar para nada relacionado al
+ * cierre/reconciliación (esos movimientos usan `reference_type='CASH_SESSION_CLOSURE'`
+ * y no tienen flujo de reversa — ver design de
+ * `sdd/auto-drop-on-cash-session-close`).
+ */
 const reverseDrop = async (sessionId, dropId, data, requestingUser) => {
   const reason = (data.reason || "").trim();
   if (!reason)
@@ -752,4 +854,6 @@ module.exports = {
   getActive,
   getById,
   getAll,
+  // exportado para tests unitarios (cashSessions.service.test.js)
+  transferDeclaredToGeneralCash,
 };
