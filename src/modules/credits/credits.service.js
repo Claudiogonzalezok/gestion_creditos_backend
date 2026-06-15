@@ -10,6 +10,7 @@ const businessDaysService = require("../businessDays/businessDays.service");
 const {
   getInstallmentAmount,
   getTotalToReturn,
+  getTotalWithInterest,
   getDueDates,
   getDueDatesFromFirstPayment,
   adjustDueDatesWithBusinessDayRule,
@@ -1167,6 +1168,118 @@ const refinance = async (creditId, data, adminId) => {
   });
 };
 
+/**
+ * CAMBIO DE PLAN — Etapa 1: SIMULACIÓN (no ejecuta nada, no persiste).
+ *
+ * Recalcula el saldo de un crédito ACTIVE aplicando la tasa del plan más corto
+ * que deja una única cuota viva: nuevo_plan = cuotas_pagadas + 1.
+ *
+ * Definiciones de negocio (cambio-de-plan.md):
+ *  - Fórmula: nuevo_total = capital × (1 + tasa_nuevo_plan); nuevo_saldo = nuevo_total − total_pagado.
+ *  - La cuota sobreviviente es la (pagadas+1); las posteriores se anularán al ejecutar.
+ *  - Si nuevo_saldo ≤ 0, al ejecutar el crédito quedará cancelado (acá solo se informa).
+ *  - V1: solo LOAN.
+ *
+ * No valida pre-cargas PENDING acá (eso se controla al EJECUTAR, Etapa 2). Esta
+ * función es solo de lectura para mostrar la simulación antes de confirmar.
+ *
+ * @param {string} creditId
+ * @returns {Promise<object>} Resumen de la simulación (ver shape en el retorno).
+ */
+const simulatePlanChange = async (creditId) => {
+  const credit = await queries.findById(creditId);
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (credit.type !== "LOAN")
+    throw {
+      status: 422,
+      message: "El cambio de plan solo está disponible para créditos de tipo LOAN.",
+    };
+  if (credit.status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: "Solo se puede cambiar el plan de un crédito ACTIVO.",
+    };
+
+  const installments = (credit.installments || [])
+    .slice()
+    .sort((a, b) => a.installment_number - b.installment_number);
+
+  // La cuota sobreviviente es la primera no pagada.
+  const firstUnpaidIdx = installments.findIndex((i) => i.status !== "PAID");
+  if (firstUnpaidIdx === -1)
+    throw { status: 409, message: "El crédito no tiene cuotas pendientes." };
+
+  // Las cuotas pagadas deben ser un prefijo contiguo: no puede haber una PAID
+  // después de la sobreviviente (pagos fuera de orden invalidan el modelo).
+  const paidAfter = installments
+    .slice(firstUnpaidIdx + 1)
+    .some((i) => i.status === "PAID");
+  if (paidAfter)
+    throw {
+      status: 409,
+      message:
+        "El crédito tiene cuotas pagadas fuera de orden; no es elegible para cambio de plan.",
+    };
+
+  const surviving = installments[firstUnpaidIdx];
+  const paidCount = firstUnpaidIdx; // cuotas PAID del prefijo
+  const newInstallmentsCount = paidCount + 1; // = surviving.installment_number
+
+  if (newInstallmentsCount >= credit.installments_count)
+    throw {
+      status: 409,
+      message:
+        "El cambio de plan requiere un plan más corto que el actual; este crédito no es elegible.",
+    };
+
+  const capital = getFinancedAmount(credit.total_amount, credit.down_payment);
+  const totalPaid =
+    Math.round(
+      installments.reduce((sum, i) => sum + parseFloat(i.amount_paid), 0) * 100,
+    ) / 100;
+
+  // Tasa del plan destino (misma fuente que simulate/approve).
+  const rateRecord = await irQueries.findActiveRate(
+    credit.payment_frequency,
+    newInstallmentsCount,
+    capital,
+  );
+  if (!rateRecord)
+    throw {
+      status: 422,
+      message: `No existe una tasa configurada para un plan de ${newInstallmentsCount} cuotas ${credit.payment_frequency}.`,
+    };
+  const newCoef = parseFloat(rateRecord.rate);
+
+  const newCreditTotal = getTotalWithInterest(capital, newCoef); // capital × (1 + coef)
+  const newBalance = Math.round((newCreditTotal - totalPaid) * 100) / 100;
+
+  const toPct = (coef) => Math.round(parseFloat(coef) * 10000) / 100;
+
+  const cancelledInstallments = installments
+    .slice(firstUnpaidIdx + 1)
+    .map((i) => i.installment_number);
+
+  return {
+    currentPlan: {
+      installments: credit.installments_count,
+      rate: toPct(credit.interest_rate || 0),
+    },
+    newPlan: {
+      installments: newInstallmentsCount,
+      rate: toPct(newCoef),
+    },
+    totalPaid,
+    newCreditTotal,
+    newBalance,
+    // Si el saldo queda ≤ 0, al ejecutar no sobrevive ninguna cuota (el crédito
+    // se cancela). Se informa con survivingInstallmentId = null + flag.
+    survivingInstallmentId: newBalance > 0 ? surviving.id : null,
+    cancelledInstallments,
+    creditWillBeSettled: newBalance <= 0,
+  };
+};
+
 module.exports = {
   getAll,
   getById,
@@ -1177,4 +1290,5 @@ module.exports = {
   reject,
   earlySettlement,
   refinance,
+  simulatePlanChange,
 };

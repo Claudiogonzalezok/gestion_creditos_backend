@@ -150,4 +150,17 @@ const refinance = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, getSimulateOptions, getSimulateProducts, simulate, simulateAll, approve, reject, earlySettlement, refinance };
+// Cambio de plan — Etapa 1: simulación (solo lectura, no ejecuta)
+const planChangeSimulate = async (req, res) => {
+  try {
+    const result = await service.simulatePlanChange(req.params.id);
+    return response.success(res, result);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { getAll, getById, create, getSimulateOptions, getSimulateProducts, simulate, simulateAll, approve, reject, earlySettlement, refinance, planChangeSimulate };
