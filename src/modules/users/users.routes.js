@@ -21,6 +21,13 @@ router.get('/',
   authorize('ADMIN'),
   [
     query('role').optional().isIn(['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR']).withMessage('role inválido.'),
+    query('roles').optional().custom((value) => {
+      const valid = ['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'];
+      const tokens = String(value).split(',').map((r) => r.trim()).filter(Boolean);
+      if (!tokens.length || tokens.some((t) => !valid.includes(t)))
+        throw new Error('roles inválido. Use una lista separada por comas de roles válidos.');
+      return true;
+    }),
     query('status').optional().isIn(['ACTIVE','INACTIVE']).withMessage('status inválido.'),
   ],
   validate,

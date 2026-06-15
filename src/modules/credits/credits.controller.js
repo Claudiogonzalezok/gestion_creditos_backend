@@ -224,6 +224,38 @@ const refinance = async (req, res) => {
   }
 };
 
+// Cambio de plan — Etapa 1: simulación (solo lectura, no ejecuta)
+const planChangeSimulate = async (req, res) => {
+  try {
+    const result = await service.simulatePlanChange(req.params.id);
+    return response.success(res, result);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422)
+      return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+// Cambio de plan — Etapa 2: ejecución (admin-only, sin doble aprobación)
+const planChangeExecute = async (req, res) => {
+  try {
+    const result = await service.changePlan(
+      req.params.id,
+      { reason: req.body.reason },
+      req.user.id,
+    );
+    return response.success(res, result, result.message);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 422)
+      return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 module.exports = {
   getAll,
   getById,
@@ -236,4 +268,6 @@ module.exports = {
   reject,
   earlySettlement,
   refinance,
+  planChangeSimulate,
+  planChangeExecute,
 };

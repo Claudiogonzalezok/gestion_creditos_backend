@@ -4,8 +4,12 @@ const response = require('../../utils/response');
 // GET /api/users
 const getAll = async (req, res) => {
   try {
-    const { role, status, search } = req.query;
-    const users = await service.getAll({ role, status, search });
+    const { role, roles, status, search } = req.query;
+    // `roles` llega como CSV (ej: "COLLECTOR,SELLER_COLLECTOR"); se normaliza a array.
+    const rolesArr = roles
+      ? String(roles).split(',').map((r) => r.trim()).filter(Boolean)
+      : undefined;
+    const users = await service.getAll({ role, roles: rolesArr, status, search });
     return response.success(res, users);
   } catch (err) {
     return response.serverError(res, err);
