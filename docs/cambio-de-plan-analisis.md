@@ -347,9 +347,15 @@ estado PENDING. Flujo: **SIMULAR → CONFIRMAR (admin) → EJECUTAR → AUDITOR�
   `getFinancedAmount`, `getTotalWithInterest` e `irQueries.findActiveRate`. Tests:
   `credits.planchange.test.js` (8 casos: 6→3, SALE, no-ACTIVE, 404, sin tasa, fuera de orden,
   no más corto, saldo≤0).
-- **Etapa 2 — Ejecución (backend):** migración `credit_plan_changes` (+status), `changePlan`
-  transaccional, endpoint `POST`, validators. Tests unit + integración (cierre/saldo consistente,
-  cuotas pagadas intactas, cuota viva con fecha original, futuras anuladas, auditoría escrita).
+- **Etapa 2 — Ejecución (backend):** ✅ **IMPLEMENTADA** (rama `feat/cambio-de-plan`).
+  Migración `033_credit_plan_change.sql` (tabla `credit_plan_changes`; status de cuota
+  `PLAN_CHANGE_CANCELLED` —columna ensanchada a VARCHAR(30)—; `settlement_type` `PLAN_CHANGE`).
+  `service.changePlan` transaccional (`FOR UPDATE` crédito+cuotas, guard de pre-cargas PENDING,
+  núcleo `_resolvePlanChange` compartido con la simulación). `POST /credits/:id/plan-change`
+  (ADMIN). El nuevo estado se propagó a todos los `NOT IN ('PAID','REFINANCED')` (installmentSql,
+  reports.queries ×3, payments.queries ×4). Tests: unit (`credits.planchange.test.js`, 12) +
+  integración (`tests/integration/cambio-de-plan.test.js`, 2) — incluye verificación de que el
+  saldo pendiente excluye las cuotas anuladas.
 - **Etapa 3 — Frontend:** `plan-change-dialog` + botón en credit-detail + service, con
   simulación previa obligatoria.
 - **Etapa 4 — Reportes/visualización:** mostrar historial de cambios de plan en el detalle;

@@ -428,6 +428,7 @@ const lockCredit = async (client, id) => {
   const r = await client.query(
     `SELECT id, status, type, customer_id, payment_frequency,
             installments_count::int, total_amount::float8,
+            down_payment::float8, interest_rate::float8,
             refinanced_from_credit_id
      FROM credits WHERE id = $1 FOR UPDATE`,
     [id],
@@ -444,7 +445,8 @@ const lockCredit = async (client, id) => {
  */
 const lockInstallments = async (client, creditId) => {
   const r = await client.query(
-    `SELECT id, status, amount_due::float8, amount_paid::float8
+    `SELECT id, installment_number, status,
+            amount_due::float8, amount_paid::float8
      FROM installments WHERE credit_id = $1 FOR UPDATE`,
     [creditId],
   );
@@ -637,6 +639,122 @@ const getRefinancingChain = async (creditId) => {
   };
 };
 
+// ── Cambio de plan ────────────────────────────────────────────────────────────
+
+/**
+ * Reescribe la cuota sobreviviente de un cambio de plan para que su saldo
+ * pendiente sea exactamente `newBalance`, conservando su pago parcial previo y
+ * su due_date original. Resetea la mora (el nuevo saldo ya es la deuda total al
+ * nuevo plan). Mantiene la invariante amount_due = original_amount + penalty.
+ * @param {object} client
+ * @param {string} installmentId
+ * @param {number} newBalance - Saldo nuevo que debe quedar vivo en la cuota.
+ * @param {number} graceDays - Días de gracia para recalcular el status.
+ */
+const setSurvivingInstallment = async (client, installmentId, newBalance, graceDays) => {
+  await client.query(
+    `UPDATE installments
+       SET original_amount = amount_paid + $2,
+           penalty_amount  = 0,
+           amount_due      = amount_paid + $2,
+           status          = CASE
+                               WHEN due_date < (CURRENT_DATE - ($3)::int * INTERVAL '1 day') THEN 'OVERDUE'
+                               WHEN amount_paid > 0                                           THEN 'PARTIAL'
+                               ELSE 'PENDING'
+                             END,
+           updated_at      = NOW()
+     WHERE id = $1`,
+    [installmentId, newBalance, graceDays],
+  );
+};
+
+/**
+ * Anula cuotas por cambio de plan (estado propio PLAN_CHANGE_CANCELLED). No toca
+ * cuotas pagadas ni los pagos históricos.
+ * @param {object} client
+ * @param {string[]} installmentIds
+ */
+const cancelInstallmentsForPlanChange = async (client, installmentIds) => {
+  if (!installmentIds.length) return;
+  await client.query(
+    `UPDATE installments
+       SET status = 'PLAN_CHANGE_CANCELLED', updated_at = NOW()
+     WHERE id = ANY($1::uuid[])`,
+    [installmentIds],
+  );
+};
+
+/**
+ * Liquida un crédito por cambio de plan cuando el saldo recalculado es <= 0.
+ * @param {object} client
+ * @param {string} creditId
+ */
+const settleCreditByPlanChange = async (client, creditId) => {
+  await client.query(
+    `UPDATE credits
+       SET status = 'SETTLED', settled_at = NOW(),
+           settlement_type = 'PLAN_CHANGE', settlement_amount = 0,
+           updated_at = NOW()
+     WHERE id = $1`,
+    [creditId],
+  );
+};
+
+/**
+ * Inserta el registro de trazabilidad de un cambio de plan (snapshot antes/después).
+ * @param {object} client
+ * @param {object} data
+ * @returns {Promise<object>} Fila insertada (id, executed_at).
+ */
+const createPlanChangeRecord = async (
+  client,
+  {
+    credit_id,
+    original_installments_count,
+    original_rate,
+    original_total,
+    paid_so_far,
+    pending_before,
+    new_installments_count,
+    new_rate,
+    new_total,
+    new_balance,
+    surviving_installment_id,
+    cancelled_installment_ids,
+    credit_cancelled,
+    reason,
+    executed_by,
+  },
+) => {
+  const r = await client.query(
+    `INSERT INTO credit_plan_changes
+       (credit_id, original_installments_count, original_rate, original_total,
+        paid_so_far, pending_before, new_installments_count, new_rate, new_total,
+        new_balance, surviving_installment_id, cancelled_installment_ids,
+        credit_cancelled, reason, executed_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+     RETURNING id, executed_at`,
+    [
+      credit_id,
+      original_installments_count,
+      original_rate,
+      original_total,
+      paid_so_far,
+      pending_before,
+      new_installments_count,
+      new_rate,
+      new_total,
+      new_balance,
+      surviving_installment_id || null,
+      cancelled_installment_ids ? JSON.stringify(cancelled_installment_ids) : null,
+      credit_cancelled,
+      reason || null,
+      executed_by,
+    ],
+  );
+  return r.rows[0];
+};
+
 module.exports = {
   findAll,
   findById,
@@ -662,4 +780,9 @@ module.exports = {
   markAsRefinanced,
   createRefinancingRecord,
   getRefinancingChain,
+  // cambio de plan
+  setSurvivingInstallment,
+  cancelInstallmentsForPlanChange,
+  settleCreditByPlanChange,
+  createPlanChangeRecord,
 };
