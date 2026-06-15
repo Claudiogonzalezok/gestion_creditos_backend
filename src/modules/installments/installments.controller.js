@@ -1,11 +1,16 @@
-const service  = require('./installments.service');
-const response = require('../../utils/response');
+const service = require("./installments.service");
+const response = require("../../utils/response");
 
 const getAll = async (req, res) => {
   try {
     const { credit_id, status, collector_id } = req.query;
-    return response.success(res, await service.getAll({ credit_id, status, collector_id }, req.user));
-  } catch (err) { return response.serverError(res, err); }
+    return response.success(
+      res,
+      await service.getAll({ credit_id, status, collector_id }, req.user),
+    );
+  } catch (err) {
+    return response.serverError(res, err);
+  }
 };
 
 const getById = async (req, res) => {
@@ -19,8 +24,11 @@ const getById = async (req, res) => {
 
 const applyPenalty = async (req, res) => {
   try {
-    const result = await service.applyPenalty(req.params.id, parseFloat(req.body.penalty_amount));
-    return response.success(res, result, 'Mora aplicada correctamente.');
+    const result = await service.applyPenalty(
+      req.params.id,
+      parseFloat(req.body.penalty_amount),
+    );
+    return response.success(res, result, "Mora aplicada correctamente.");
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
@@ -31,7 +39,7 @@ const applyPenalty = async (req, res) => {
 const waivePenalty = async (req, res) => {
   try {
     const result = await service.waivePenalty(req.params.id);
-    return response.success(res, result, 'Mora condonada correctamente.');
+    return response.success(res, result, "Mora condonada correctamente.");
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
@@ -41,11 +49,10 @@ const waivePenalty = async (req, res) => {
 
 const earlyPay = async (req, res) => {
   try {
-    const { payment_method, transfer_reference } = req.body;
-    const result = await service.earlyPay(req.params.id, payment_method, transfer_reference, req.user.id);
+    const result = await service.earlyPay(req.params.id, req.body, req.user.id);
     const msg = result.credit_settled
-      ? 'Pago anticipado aplicado. El crédito quedó liquidado.'
-      : 'Pago anticipado de cuota aplicado correctamente.';
+      ? "Pago anticipado aplicado. El crédito quedó liquidado."
+      : "Pago anticipado de cuota aplicado correctamente.";
     return response.success(res, result, msg);
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
@@ -56,7 +63,10 @@ const earlyPay = async (req, res) => {
 
 const getManagementLog = async (req, res) => {
   try {
-    return response.success(res, await service.getManagementLog(req.params.id, req.user));
+    return response.success(
+      res,
+      await service.getManagementLog(req.params.id, req.user),
+    );
   } catch (err) {
     if (err.status === 403) return response.forbidden(res, err.message);
     if (err.status === 404) return response.notFound(res, err.message);
@@ -64,4 +74,11 @@ const getManagementLog = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, applyPenalty, waivePenalty, earlyPay, getManagementLog };
+module.exports = {
+  getAll,
+  getById,
+  applyPenalty,
+  waivePenalty,
+  earlyPay,
+  getManagementLog,
+};

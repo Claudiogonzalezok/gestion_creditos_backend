@@ -2,7 +2,8 @@ const pool = require("../../config/db");
 
 const findAll = async ({ status, collector_id, installment_id } = {}) => {
   let q = `
-    SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
+    SELECT p.id, p.installment_id, p.amount_received::float8,
+           p.amount_cash::float8, p.amount_transfer::float8, p.payment_method,
            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date, p.created_at,
            p.approved_at, p.approved_by,
            p.is_reversal, p.admin_direct, p.parent_payment_id,
@@ -35,7 +36,8 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
 
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8, p.payment_method,
+    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8, p.payment_method,
             p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date,
             p.is_reversal, p.admin_direct, p.reversal_reason,
             p.created_at, p.approved_at, p.approved_by,
@@ -528,6 +530,7 @@ const findChildPayments = async (client, parentPaymentId) => {
 const findPaymentsByCredit = async (creditId) => {
   const r = await pool.query(
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.is_reversal,
             p.reversal_reason, p.admin_direct, p.notes,
             p.created_at, p.approved_at, p.approved_by,

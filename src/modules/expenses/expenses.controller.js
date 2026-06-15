@@ -22,6 +22,7 @@ const create = async (req, res) => {
     const result = await service.create(req.body, req.user);
     return response.created(res, result, 'Gasto registrado correctamente.');
   } catch (err) {
+    if (err.status === 409) return response.conflict(res, err.message);
     if (err.status === 422) return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);
   }

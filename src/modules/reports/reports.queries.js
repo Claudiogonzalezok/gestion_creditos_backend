@@ -537,6 +537,175 @@ const getCashConversionsReport = async (dateFrom, dateTo) => {
   };
 };
 
+/**
+ * Obtiene el reporte de movimientos de caja (cobros, enganches, gastos,
+ * drops y conversiones) imputados a una caja operativa puntual.
+ * @param {string} cashSessionId - ID de la caja operativa (cash_sessions.id).
+ * @returns {Promise<object>} Resumen agregado y detalle de movimientos.
+ */
+const getCashMovementsReport = async (cashSessionId) => {
+  const result = await pool.query(
+    `WITH movements AS (
+       SELECT p.id, 'COBRO' AS type, p.approved_at AS occurred_at,
+               p.cash_session_id, p.amount_received::float8 AS amount,
+               p.payment_method,
+               'Cobro cuota #' || i.installment_number || ' · ' || c.full_name AS description,
+               u.full_name AS performed_by_name,
+               p.transfer_reference,
+               c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,
+               cr.id AS credit_id, cr.type::text AS credit_type, i.id AS installment_id,
+               i.installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               prod.product_summary
+          FROM payments p
+          JOIN installments i ON i.id = p.installment_id
+          JOIN credits cr ON cr.id = i.credit_id
+          JOIN customers c ON c.id = cr.customer_id
+          LEFT JOIN users u ON u.id = p.approved_by
+          LEFT JOIN LATERAL (
+            SELECT string_agg(pr.title || COALESCE(' · ' || pu.unit_code, ''), ', ' ORDER BY pr.title, pu.unit_code) AS product_summary
+              FROM credit_products cp
+              JOIN product_units pu ON pu.id = cp.product_unit_id
+              JOIN product_variants pv ON pv.id = pu.variant_id
+              JOIN products pr ON pr.id = pv.product_id
+             WHERE cp.credit_id = cr.id
+          ) prod ON TRUE
+         WHERE p.status = 'APPROVED' AND p.cash_session_id IS NOT NULL
+
+       UNION ALL
+
+        SELECT dp.id, 'ENGANCHE' AS type, dp.created_at AS occurred_at,
+               dp.cash_session_id, dp.amount::float8 AS amount,
+               dp.payment_method,
+               'Enganche · ' || c.full_name AS description,
+               u.full_name AS performed_by_name,
+               dp.transfer_reference,
+               c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,
+               cr.id AS credit_id, cr.type::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               prod.product_summary
+          FROM credit_down_payments dp
+          JOIN credits cr ON cr.id = dp.credit_id
+          JOIN customers c ON c.id = cr.customer_id
+          LEFT JOIN users u ON u.id = dp.approved_by
+          LEFT JOIN LATERAL (
+            SELECT string_agg(pr.title || COALESCE(' · ' || pu.unit_code, ''), ', ' ORDER BY pr.title, pu.unit_code) AS product_summary
+              FROM credit_products cp
+              JOIN product_units pu ON pu.id = cp.product_unit_id
+              JOIN product_variants pv ON pv.id = pu.variant_id
+              JOIN products pr ON pr.id = pv.product_id
+             WHERE cp.credit_id = cr.id
+          ) prod ON TRUE
+         WHERE dp.cash_session_id IS NOT NULL
+
+       UNION ALL
+
+        SELECT e.id, 'GASTO' AS type, e.created_at AS occurred_at,
+               e.cash_session_id, e.amount::float8 AS amount,
+               e.payment_method, e.description,
+               u.full_name AS performed_by_name,
+               e.transfer_reference,
+               NULL::uuid AS customer_id, NULL::text AS customer_name, NULL::text AS customer_dni,
+               NULL::uuid AS credit_id, NULL::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, ec.id AS expense_category_id,
+               ec.name AS expense_category_name, e.source AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               NULL::text AS product_summary
+          FROM expenses e
+          LEFT JOIN users u ON u.id = e.created_by
+          LEFT JOIN expense_categories ec ON ec.id = e.category_id
+         WHERE e.cash_session_id IS NOT NULL
+
+       UNION ALL
+
+        SELECT d.id, 'DROP' AS type, d.performed_at AS occurred_at,
+               d.cash_session_id, d.amount::float8 AS amount,
+               d.payment_method,
+               'Drop a ' || d.destination
+                 || COALESCE(' · ' || d.reason, '')
+                 || CASE WHEN d.status = 'REVERSED' THEN ' (revertido)' ELSE '' END AS description,
+               u.full_name AS performed_by_name,
+               NULL::text AS transfer_reference,
+               NULL::uuid AS customer_id, NULL::text AS customer_name, NULL::text AS customer_dni,
+               NULL::uuid AS credit_id, NULL::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               d.destination AS drop_destination, d.reason AS drop_reason,
+               d.status AS drop_status, d.receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               NULL::text AS product_summary
+          FROM cash_session_drops d
+          LEFT JOIN users u ON u.id = d.performed_by
+
+       UNION ALL
+
+        SELECT cv.id, 'CONVERSION' AS type, cv.created_at AS occurred_at,
+               cv.cash_session_id, cv.amount::float8 AS amount,
+               cv.source_method || '_' || cv.target_method AS payment_method,
+               COALESCE(cv.notes, 'Conversión ' || cv.source_method || ' → ' || cv.target_method) AS description,
+               u.full_name AS performed_by_name,
+               NULL::text AS transfer_reference,
+               NULL::uuid AS customer_id, NULL::text AS customer_name, NULL::text AS customer_dni,
+               NULL::uuid AS credit_id, NULL::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               cv.source_method AS conversion_source_method, cv.target_method AS conversion_target_method,
+               cv.criteria AS conversion_criteria,
+               NULL::text AS product_summary
+          FROM cash_conversions cv
+          LEFT JOIN users u ON u.id = cv.created_by
+         WHERE cv.cash_session_id IS NOT NULL
+     )
+     SELECT m.id, m.type, m.occurred_at, m.cash_session_id,
+            bd.business_date::text AS business_date, b.name AS branch_name,
+             cs.shift_label, m.amount, m.payment_method, m.description,
+             m.performed_by_name, m.transfer_reference, m.customer_id,
+             m.customer_name, m.customer_dni, m.credit_id, m.credit_type,
+             m.installment_id, m.installment_number, m.expense_category_id,
+             m.expense_category_name, m.expense_source, m.drop_destination,
+             m.drop_reason, m.drop_status, m.receipt_reference,
+             m.conversion_source_method, m.conversion_target_method,
+             m.conversion_criteria, m.product_summary
+       FROM movements m
+       JOIN cash_sessions cs ON cs.id = m.cash_session_id
+       JOIN business_days bd ON bd.id = cs.business_day_id
+       JOIN branches b ON b.id = bd.branch_id
+      WHERE cs.id = $1
+      ORDER BY m.occurred_at DESC`,
+    [cashSessionId],
+  );
+
+  const rows = result.rows;
+  const sumByType = (type) =>
+    rows.filter((r) => r.type === type).reduce((acc, r) => acc + r.amount, 0);
+
+  return {
+    summary: {
+      total_movements: rows.length,
+      total_collections: sumByType("COBRO"),
+      total_down_payments: sumByType("ENGANCHE"),
+      total_expenses: sumByType("GASTO"),
+      total_drops: sumByType("DROP"),
+    },
+    rows,
+  };
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -547,5 +716,6 @@ module.exports = {
   getSummaryReport,
   getSellersReport,
   getPaymentsOverdue48h,
+  getCashMovementsReport,
   getCashConversionsReport,
 };

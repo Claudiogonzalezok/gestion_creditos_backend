@@ -178,6 +178,7 @@ const createConversion = async (data, adminId) => {
     };
 
   const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+  const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 
   const amount = parseFloat(data.amount);
   if (!Number.isFinite(amount) || amount <= 0)
@@ -188,30 +189,60 @@ const createConversion = async (data, adminId) => {
 
   const sourceMethod = data.source_method;
   const targetMethod = sourceMethod === "CASH" ? "TRANSFER" : "CASH";
+  const criteria = data.criteria;
 
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    // V4.3: la conversión se imputa a la caja activa de la jornada (no del admin).
-    const activeSession =
-      await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
-    if (!activeSession) {
-      await client.query("ROLLBACK");
-      throw {
-        status: 409,
-        message:
-          "No hay caja operativa abierta. Abrí una caja para registrar conversiones.",
-        code: "NO_ACTIVE_SESSION",
-      };
+
+    let cashSessionId = null;
+    if (criteria === "COMPANY") {
+      // COMPANY: la conversión es plata de Caja General, no de la caja activa.
+      // current_balance es un pool único (no separa efectivo/transferencia),
+      // así que una conversión CASH<->TRANSFER tiene delta neto 0 sobre él —
+      // no se inserta movimiento en cash_account_movements, solo se valida
+      // que el monto no supere el saldo disponible.
+      const account = await cashAccountsQueries.findGeneralCashAccount(client);
+      if (!account) {
+        await client.query("ROLLBACK");
+        throw {
+          status: 409,
+          message: "No existe una Caja General activa.",
+          code: "NO_GENERAL_CASH_ACCOUNT",
+        };
+      }
+      if (amount > account.current_balance) {
+        await client.query("ROLLBACK");
+        throw {
+          status: 409,
+          message: `Saldo insuficiente en Caja General. Saldo actual: ${account.current_balance}. Monto requerido: ${amount}.`,
+          code: "INSUFFICIENT_BALANCE",
+        };
+      }
+    } else {
+      // DAILY: V4.3, la conversión se imputa a la caja activa de la jornada.
+      const activeSession =
+        await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+      if (!activeSession) {
+        await client.query("ROLLBACK");
+        throw {
+          status: 409,
+          message:
+            "No hay caja operativa abierta. Abrí una caja para registrar conversiones.",
+          code: "NO_ACTIVE_SESSION",
+        };
+      }
+      cashSessionId = activeSession.id;
     }
+
     const conversion = await queries.createConversion(client, {
       registerDate,
-      criteria: data.criteria,
+      criteria,
       sourceMethod,
       targetMethod,
       amount,
       notes: data.notes,
-      cashSessionId: activeSession.id,
+      cashSessionId,
       createdBy: adminId,
     });
     await client.query("COMMIT");

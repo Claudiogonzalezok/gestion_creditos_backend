@@ -7,8 +7,14 @@ jest.mock("./installments.queries", () => ({ findById: jest.fn() }));
 jest.mock("../payments/payments.queries", () => ({
   getPendingCommittedAmount: jest.fn(),
 }));
-jest.mock("../payments/payments.service", () => ({ adminDirect: jest.fn() }));
-jest.mock("../systemConfig/systemConfig.queries", () => ({ getValue: jest.fn() }));
+jest.mock("../payments/payments.service", () => ({
+  adminDirect: jest.fn(),
+  _normalizePaymentAmounts: jest.requireActual("../payments/payments.service")
+    ._normalizePaymentAmounts,
+}));
+jest.mock("../systemConfig/systemConfig.queries", () => ({
+  getValue: jest.fn(),
+}));
 
 const pool = require("../../config/db");
 const queries = require("./installments.queries");
@@ -39,12 +45,18 @@ describe("installments.earlyPay — imputa a caja vía adminDirect", () => {
     paymentsService.adminDirect.mockResolvedValue({ id: "pay-1" });
     pool.query.mockResolvedValue({ rows: [{ status: "SETTLED" }] });
 
-    const res = await service.earlyPay("inst-1", "CASH", null, "admin-1");
+    const res = await service.earlyPay(
+      "inst-1",
+      { payment_method: "CASH" },
+      "admin-1",
+    );
 
     expect(paymentsService.adminDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         installment_id: "inst-1",
         amount_received: 800, // 1000 - 200
+        amount_cash: 800,
+        amount_transfer: 0,
         payment_method: "CASH",
       }),
       "admin-1",
@@ -63,7 +75,7 @@ describe("installments.earlyPay — imputa a caja vía adminDirect", () => {
     paymentsQueries.getPendingCommittedAmount.mockResolvedValue(500);
 
     await expect(
-      service.earlyPay("inst-1", "CASH", null, "admin-1"),
+      service.earlyPay("inst-1", { payment_method: "CASH" }, "admin-1"),
     ).rejects.toMatchObject({ status: 409 });
     expect(paymentsService.adminDirect).not.toHaveBeenCalled();
   });
@@ -78,7 +90,7 @@ describe("installments.earlyPay — imputa a caja vía adminDirect", () => {
     });
 
     await expect(
-      service.earlyPay("inst-1", "CASH", null, "admin-1"),
+      service.earlyPay("inst-1", { payment_method: "CASH" }, "admin-1"),
     ).rejects.toMatchObject({ status: 409 });
     expect(paymentsService.adminDirect).not.toHaveBeenCalled();
   });

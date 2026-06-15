@@ -132,8 +132,19 @@ router.post(
   "/:id/manual-incomes",
   [
     ...idParam,
-    body("amount").isFloat({ gt: 0 }).withMessage("amount debe ser > 0."),
-    body("payment_method").isIn(["CASH", "TRANSFER"]),
+    body("amount")
+      .optional({ nullable: true })
+      .isFloat({ gt: 0 })
+      .withMessage("amount debe ser > 0."),
+    body("amount_cash")
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage("amount_cash debe ser >= 0."),
+    body("amount_transfer")
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage("amount_transfer debe ser >= 0."),
+    body("payment_method").optional().isIn(["CASH", "TRANSFER"]),
     body("description")
       .isString()
       .trim()
@@ -143,6 +154,26 @@ router.post(
       .optional({ nullable: true })
       .isString()
       .isLength({ max: 120 }),
+    body().custom((b) => {
+      const has = (v) =>
+        v !== undefined && v !== null && String(v).trim() !== "";
+      const splitShape = has(b.amount_cash) || has(b.amount_transfer);
+      if (splitShape) {
+        const transfer = parseFloat(b.amount_transfer) || 0;
+        const total = (parseFloat(b.amount_cash) || 0) + transfer;
+        if (!(total > 0))
+          throw new Error("La suma de efectivo y transferencia debe ser > 0.");
+        if (transfer > 0 && !has(b.receipt_reference))
+          throw new Error(
+            "receipt_reference es obligatorio cuando hay monto por transferencia.",
+          );
+      } else {
+        if (!has(b.amount)) throw new Error("amount es obligatorio.");
+        if (!has(b.payment_method))
+          throw new Error("payment_method es obligatorio.");
+      }
+      return true;
+    }),
   ],
   validate,
   controller.addManualIncome,
