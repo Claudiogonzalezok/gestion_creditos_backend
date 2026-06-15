@@ -1,5 +1,7 @@
 const queries = require("./expenses.queries");
 const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
+const cashAccountsService = require("../cashAccounts/cashAccounts.service");
 const {
   getActiveJornadaDate,
 } = require("../businessDays/businessDays.service");
@@ -14,6 +16,24 @@ const getById = async (id) => {
   return expense;
 };
 
+/**
+ * Calcula el efectivo disponible en la caja activa replicando la fórmula de
+ * `expectedCash` usada en el cierre (buildClosureSnapshot), pero a partir de
+ * los totales acumulados hasta el momento (antes de imputar el nuevo gasto).
+ * @param {object} session - Sesión activa (incluye opening_amount).
+ * @param {object} totals - Resultado de computeSessionTotals.
+ * @returns {number} Efectivo disponible.
+ */
+const computeAvailableCash = (session, totals) =>
+  session.opening_amount +
+  totals.collections_payments_cash +
+  totals.collections_down_payments_cash +
+  totals.collections_manual_incomes_cash -
+  totals.outflows_expenses_cash -
+  totals.outflows_commissions_cash +
+  totals.conversions_cash_delta -
+  totals.drops_cash;
+
 const create = async (data, requestingUser) => {
   if (data.category_id) {
     const category = await queries.findActiveCategoryById(data.category_id);
@@ -24,21 +44,11 @@ const create = async (data, requestingUser) => {
       };
   }
 
+  const source = data.source || "DAILY";
   const registerDate = await getActiveJornadaDate();
 
   const { withTransaction } = require("../../utils/transaction");
   return withTransaction(async (client) => {
-    // V4.3: imputar a la caja activa de la jornada (no a la caja del admin).
-    const activeSession =
-      await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
-    if (!activeSession)
-      throw {
-        status: 409,
-        message:
-          "No hay caja operativa abierta. Abrí una caja para registrar gastos.",
-        code: "NO_ACTIVE_SESSION",
-      };
-
     const duplicate = await queries.findRecentDuplicate(
       {
         amount: parseFloat(data.amount),
@@ -55,6 +65,73 @@ const create = async (data, requestingUser) => {
           "Ya existe un gasto idéntico registrado en los últimos 30 segundos. Verificá antes de reintentar.",
       };
 
+    // COMPANY: el gasto sale de Caja General, sin pasar por la caja operativa.
+    // insertMovementWithBalance valida current_balance >= 0 (409 INSUFFICIENT_BALANCE).
+    if (source === "COMPANY") {
+      const account = await cashAccountsQueries.findGeneralCashAccount(client);
+      if (!account)
+        throw {
+          status: 409,
+          message: "No existe una Caja General activa.",
+          code: "NO_GENERAL_CASH_ACCOUNT",
+        };
+
+      const expense = await queries.create(
+        {
+          amount: parseFloat(data.amount),
+          description: data.description,
+          expenseDate: data.expense_date,
+          paymentMethod: data.payment_method,
+          transferReference: data.transfer_reference || null,
+          categoryId: data.category_id || null,
+          createdBy: requestingUser.id,
+          registerDate,
+          cashSessionId: null,
+          source,
+        },
+        client,
+      );
+
+      await cashAccountsService.insertMovementWithBalance(client, {
+        cashAccountId: account.id,
+        movementType: "EXPENSE",
+        direction: "OUT",
+        amount: parseFloat(data.amount),
+        description: data.description,
+        referenceType: "EXPENSE",
+        referenceId: expense.id,
+        createdBy: requestingUser.id,
+      });
+
+      return expense;
+    }
+
+    // DAILY (default): V4.3, imputar a la caja activa de la jornada.
+    const activeSession =
+      await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession)
+      throw {
+        status: 409,
+        message:
+          "No hay caja operativa abierta. Abrí una caja para registrar gastos.",
+        code: "NO_ACTIVE_SESSION",
+      };
+
+    if (data.payment_method === "CASH") {
+      const totals = await cashSessionsQueries.computeSessionTotals(
+        activeSession.id,
+        client,
+      );
+      const availableCash = computeAvailableCash(activeSession, totals);
+      if (parseFloat(data.amount) > availableCash) {
+        throw {
+          status: 409,
+          message: `El monto supera el efectivo disponible en caja ($${availableCash.toFixed(2)}).`,
+          code: "INSUFFICIENT_CASH",
+        };
+      }
+    }
+
     return queries.create(
       {
         amount: parseFloat(data.amount),
@@ -66,6 +143,7 @@ const create = async (data, requestingUser) => {
         createdBy: requestingUser.id,
         registerDate,
         cashSessionId: activeSession.id,
+        source,
       },
       client,
     );

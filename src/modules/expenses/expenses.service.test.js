@@ -6,6 +6,15 @@ jest.mock("./expenses.queries", () => ({
 
 jest.mock("../cashSessions/cashSessions.queries", () => ({
   lockActiveSessionForCurrentJornada: jest.fn(),
+  computeSessionTotals: jest.fn(),
+}));
+
+jest.mock("../cashAccounts/cashAccounts.queries", () => ({
+  findGeneralCashAccount: jest.fn(),
+}));
+
+jest.mock("../cashAccounts/cashAccounts.service", () => ({
+  insertMovementWithBalance: jest.fn(),
 }));
 
 jest.mock("../businessDays/businessDays.service", () => ({
@@ -35,6 +44,16 @@ describe("expenses.service", () => {
     queries.findRecentDuplicate.mockResolvedValue(null);
     cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
       id: "cash-session-1",
+      opening_amount: 5000,
+    });
+    cashSessionsQueries.computeSessionTotals.mockResolvedValue({
+      collections_payments_cash: 0,
+      collections_down_payments_cash: 0,
+      collections_manual_incomes_cash: 0,
+      outflows_expenses_cash: 0,
+      outflows_commissions_cash: 0,
+      conversions_cash_delta: 0,
+      drops_cash: 0,
     });
     queries.create.mockResolvedValue({ id: "expense-1" });
   });
