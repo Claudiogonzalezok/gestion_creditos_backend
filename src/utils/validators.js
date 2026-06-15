@@ -638,7 +638,12 @@ const credits = {
       .isLength({ max: 500 })
       .withMessage("Las notas no pueden superar los 500 caracteres."),
   ],
-  id: [isUUIDParam("id", "El ID de crédito")],
+  planChange: [
+    isUUIDParam('id', 'El ID de crédito'),
+    body('reason').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('El motivo no puede superar los 500 caracteres.'),
+  ],
+  id: [ isUUIDParam('id', 'El ID de crédito') ],
 };
 
 // ── PAYMENTS (pre-cargas de cobro) ────────────────────────────

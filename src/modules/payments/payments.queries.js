@@ -247,7 +247,7 @@ const updateInstallment = async (
 const countPendingInstallments = async (client, creditId) => {
   const r = await client.query(
     `SELECT COUNT(*) FROM installments
-     WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED')`,
+     WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')`,
     [creditId],
   );
   return parseInt(r.rows[0].count);
@@ -299,7 +299,7 @@ const getTotalPendingBalance = async (creditId) => {
          ), 0)
      )::float8 AS total
      FROM installments i
-     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID','REFINANCED')`,
+     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')`,
     [creditId],
   );
   return Math.max(r.rows[0].total, 0);
@@ -316,7 +316,7 @@ const getPendingInstallmentsFrom = async (
             amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments
      WHERE credit_id = $1
-       AND status NOT IN ('PAID','REFINANCED')
+       AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')
        AND installment_number >= $2
      ORDER BY installment_number`,
     [creditId, fromInstallmentNumber],
@@ -354,7 +354,7 @@ const shiftInstallmentDates = async (
     `WITH ordered AS (
        SELECT id, ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
        FROM installments
-       WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED')
+       WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')
      )
      UPDATE installments i
      SET original_due_date = COALESCE(i.original_due_date, i.due_date),

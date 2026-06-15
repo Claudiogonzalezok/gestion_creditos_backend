@@ -47,6 +47,15 @@ router.post('/:id/refinance',
   authorize('ADMIN'), v.credits.refinance, validate, controller.refinance
 );
 
+// Cambio de plan — Etapa 1: simulación previa (solo ADMIN, solo lectura)
+router.get('/:id/plan-change/simulate',
+  authorize('ADMIN'), v.credits.id, validate, controller.planChangeSimulate
+);
+// Cambio de plan — Etapa 2: ejecución (solo ADMIN, sin doble aprobación)
+router.post('/:id/plan-change',
+  authorize('ADMIN'), v.credits.planChange, validate, controller.planChangeExecute
+);
+
 // Historial de cobros aprobados del crédito
 router.get('/:creditId/payments',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),

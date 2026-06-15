@@ -9,7 +9,7 @@
 //   · saldo_pendiente_real = amount_due − amount_paid (Fórmula B oficial).
 //   · is_overdue (derivado) = due_date + grace_days < CURRENT_DATE
 //                            AND saldo_pendiente_real > 0
-//                            AND status NOT IN ('PAID','REFINANCED').
+//                            AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED').
 //
 // El campo persistido status='OVERDUE' es un snapshot operativo/visual; la
 // lógica financiera no debe depender de él. Estas expresiones permiten usar
@@ -47,7 +47,7 @@ const REMAINING_CAPITAL = (alias = 'i') =>
 const IS_OVERDUE_DERIVED = (alias = 'i', graceDaysParam = '0') =>
   `(${alias}.due_date < (CURRENT_DATE - (${graceDaysParam})::int * INTERVAL '1 day')
     AND (${alias}.amount_due - ${alias}.amount_paid) > 0
-    AND ${alias}.status NOT IN ('PAID','REFINANCED'))`;
+    AND ${alias}.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED'))`;
 
 module.exports = {
   REAL_REMAINING_BALANCE,
