@@ -1342,12 +1342,7 @@ const refinance = async (creditId, data, adminId) => {
  * @returns {Promise<{result: object, plan: object}>} `result` = shape público de la
  *   simulación; `plan` = datos internos para ejecutar/auditar.
  */
-const _resolvePlanChange = async (credit, rawInstallments) => {
-  if (credit.type !== "LOAN")
-    throw {
-      status: 422,
-      message: "El cambio de plan solo está disponible para créditos de tipo LOAN.",
-    };
+const _resolvePlanChange = async (credit, rawInstallments, db = pool) => {
   if (credit.status !== "ACTIVE")
     throw {
       status: 409,
@@ -1397,19 +1392,46 @@ const _resolvePlanChange = async (credit, rawInstallments) => {
       .reduce((s, i) => s + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)), 0),
   );
 
-  // Tasa del plan destino (misma fuente que simulate/approve).
-  const rateRecord = await irQueries.findActiveRate(
-    credit.payment_frequency,
-    newInstallmentsCount,
-    capital,
-  );
-  if (!rateRecord)
-    throw {
-      status: 422,
-      message: `No existe una tasa configurada para un plan de ${newInstallmentsCount} cuotas ${credit.payment_frequency}.`,
-    };
-  const newCoef = parseFloat(rateRecord.rate);
-  const originalCoef = parseFloat(credit.interest_rate || 0);
+  // Tasa del plan destino, según el tipo (misma fuente que simulate/approve).
+  let newCoef;
+  let originalCoef;
+  if (credit.type === "LOAN") {
+    const rateRecord = await irQueries.findActiveRate(
+      credit.payment_frequency,
+      newInstallmentsCount,
+      capital,
+    );
+    if (!rateRecord)
+      throw {
+        status: 422,
+        message: `No existe una tasa configurada para un plan de ${newInstallmentsCount} cuotas ${credit.payment_frequency}.`,
+      };
+    newCoef = parseFloat(rateRecord.rate);
+    originalCoef = parseFloat(credit.interest_rate || 0);
+  } else {
+    // SALE: un crédito = un producto. La tasa sale de product_rates del producto.
+    const products = await queries.getSaleCreditProducts(credit.id, db);
+    if (products.length !== 1)
+      throw {
+        status: 409,
+        message:
+          "El crédito no tiene exactamente un producto; no es elegible para cambio de plan.",
+      };
+    const { product_id, historical_rate, product_name } = products[0];
+    const rateRecord = await prQueries.findActiveRate(
+      product_id,
+      credit.payment_frequency,
+      newInstallmentsCount,
+      db,
+    );
+    if (!rateRecord)
+      throw {
+        status: 422,
+        message: `No existe una tasa configurada para "${product_name}" con ${newInstallmentsCount} cuotas ${credit.payment_frequency}.`,
+      };
+    newCoef = parseFloat(rateRecord.rate);
+    originalCoef = parseFloat(historical_rate || 0);
+  }
 
   const newCreditTotal = getTotalWithInterest(capital, newCoef); // capital × (1 + coef)
   const newBalance = round2(newCreditTotal - totalPaid);
@@ -1513,7 +1535,7 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
       };
 
     const installments = await queries.lockInstallments(client, creditId);
-    const { result, plan } = await _resolvePlanChange(credit, installments);
+    const { result, plan } = await _resolvePlanChange(credit, installments, client);
 
     if (plan.willSettle) {
       // Saldo ≤ 0: se anulan todas las pendientes y el crédito queda cancelado.
@@ -1533,12 +1555,23 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
     // El plan vigente del crédito pasa a ser el nuevo (cuotas + tasa), para que
     // todo lo que lee credits (detalle, label "Cuota X de N" de la planilla,
     // reportes) refleje el cambio. El plan original queda en credit_plan_changes.
+    // LOAN: la tasa vive en credits.interest_rate. SALE: interest_rate sigue NULL
+    // y la tasa por producto se actualiza en credit_products.
+    const newInterestRate =
+      credit.type === "LOAN" ? plan.snapshot.new_rate : null;
     await queries.updateCreditPlanColumns(
       client,
       creditId,
       plan.snapshot.new_installments_count,
-      plan.snapshot.new_rate,
+      newInterestRate,
     );
+    if (credit.type === "SALE") {
+      await queries.updateSaleCreditProductRate(
+        client,
+        creditId,
+        plan.snapshot.new_rate,
+      );
+    }
 
     const record = await queries.createPlanChangeRecord(client, {
       credit_id: creditId,
