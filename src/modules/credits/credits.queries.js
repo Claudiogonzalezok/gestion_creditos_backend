@@ -746,6 +746,44 @@ const updateCreditPlanColumns = async (
 };
 
 /**
+ * Devuelve los productos DISTINTOS de un crédito SALE con su tasa histórica.
+ * Regla de negocio: un crédito SALE debe tener un único producto, así que esto
+ * normalmente devuelve 1 fila (aunque haya varias unidades del mismo producto).
+ * @param {string} creditId
+ * @param {object} [db=pool] - pool o client (client si se llama bajo transacción).
+ * @returns {Promise<Array<{product_id, historical_rate, product_name}>>}
+ */
+const getSaleCreditProducts = async (creditId, db = pool) => {
+  const r = await db.query(
+    `SELECT DISTINCT pv.product_id,
+            cp.historical_rate::float8 AS historical_rate,
+            p.title AS product_name
+     FROM credit_products cp
+     JOIN product_units    pu ON pu.id = cp.product_unit_id
+     JOIN product_variants pv ON pv.id = pu.variant_id
+     JOIN products         p  ON p.id  = pv.product_id
+     WHERE cp.credit_id = $1`,
+    [creditId],
+  );
+  return r.rows;
+};
+
+/**
+ * Actualiza la tasa histórica de las líneas de producto de un crédito SALE tras
+ * un cambio de plan (1 producto → todas las unidades comparten la nueva tasa).
+ * La tasa original queda preservada en credit_plan_changes.
+ * @param {object} client
+ * @param {string} creditId
+ * @param {number} newRate - Nueva tasa (coeficiente) del plan destino.
+ */
+const updateSaleCreditProductRate = async (client, creditId, newRate) => {
+  await client.query(
+    `UPDATE credit_products SET historical_rate = $2 WHERE credit_id = $1`,
+    [creditId, newRate],
+  );
+};
+
+/**
  * Inserta el registro de trazabilidad de un cambio de plan (snapshot antes/después).
  * @param {object} client
  * @param {object} data
@@ -844,6 +882,8 @@ module.exports = {
   cancelInstallmentsForPlanChange,
   settleCreditByPlanChange,
   updateCreditPlanColumns,
+  getSaleCreditProducts,
+  updateSaleCreditProductRate,
   createPlanChangeRecord,
   hasPlanChange,
 };

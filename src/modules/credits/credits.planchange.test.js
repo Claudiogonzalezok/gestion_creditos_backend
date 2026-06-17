@@ -10,10 +10,15 @@ jest.mock("./credits.queries", () => ({
   cancelInstallmentsForPlanChange: jest.fn(),
   settleCreditByPlanChange: jest.fn(),
   updateCreditPlanColumns: jest.fn(),
+  getSaleCreditProducts: jest.fn(),
+  updateSaleCreditProductRate: jest.fn(),
   createPlanChangeRecord: jest.fn(),
   hasPlanChange: jest.fn(),
 }));
 jest.mock("../interestRates/interestRates.queries", () => ({
+  findActiveRate: jest.fn(),
+}));
+jest.mock("../productRates/productRates.queries", () => ({
   findActiveRate: jest.fn(),
 }));
 jest.mock("../systemConfig/systemConfig.queries", () => ({
@@ -25,6 +30,7 @@ jest.mock("../../utils/transaction", () => ({
 
 const queries = require("./credits.queries");
 const irQueries = require("../interestRates/interestRates.queries");
+const prQueries = require("../productRates/productRates.queries");
 const { withTransaction } = require("../../utils/transaction");
 const service = require("./credits.service");
 
@@ -88,13 +94,6 @@ describe("simulatePlanChange — cálculo (caso del negocio 6→3)", () => {
 });
 
 describe("simulatePlanChange — validaciones", () => {
-  it("rechaza créditos SALE (V1 solo LOAN) → 422", async () => {
-    queries.findById.mockResolvedValue(credit({ type: "SALE" }));
-    await expect(service.simulatePlanChange("credit-1")).rejects.toMatchObject({
-      status: 422,
-    });
-  });
-
   it("rechaza crédito no ACTIVE → 409", async () => {
     queries.findById.mockResolvedValue(credit({ status: "SETTLED" }));
     await expect(service.simulatePlanChange("credit-1")).rejects.toMatchObject({
@@ -324,5 +323,122 @@ describe("cambio de plan — solo se permite una vez", () => {
     expect(queries.lockInstallments).not.toHaveBeenCalled();
     expect(queries.setSurvivingInstallment).not.toHaveBeenCalled();
     expect(queries.createPlanChangeRecord).not.toHaveBeenCalled();
+  });
+});
+
+describe("cambio de plan — créditos SALE (1 producto)", () => {
+  const client = { query: jest.fn() };
+  const saleCredit = (overrides = {}) =>
+    credit({ type: "SALE", interest_rate: null, ...overrides });
+  const sixInstallments = () => [
+    inst(1, "PAID", 20000),
+    inst(2, "PAID", 20000),
+    inst(3, "PENDING", 0),
+    inst(4, "PENDING", 0),
+    inst(5, "PENDING", 0),
+    inst(6, "PENDING", 0),
+  ];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    withTransaction.mockImplementation(async (cb) => cb(client));
+    queries.hasPlanChange.mockResolvedValue(false);
+    queries.hasPendingPayments.mockResolvedValue(false);
+    queries.createPlanChangeRecord.mockResolvedValue({
+      id: "pc-1",
+      executed_at: "2026-06-16T00:00:00Z",
+    });
+  });
+
+  it("simula tomando la tasa del producto (product_rates)", async () => {
+    queries.findById.mockResolvedValue(
+      saleCredit({ installments: sixInstallments() }),
+    );
+    queries.getSaleCreditProducts.mockResolvedValue([
+      { product_id: "p1", historical_rate: 0.96, product_name: "TV" },
+    ]);
+    prQueries.findActiveRate.mockResolvedValue({ rate: 0.8 });
+
+    const r = await service.simulatePlanChange("credit-1");
+
+    expect(prQueries.findActiveRate).toHaveBeenCalledWith(
+      "p1",
+      "MONTHLY",
+      3,
+      expect.anything(),
+    );
+    expect(r).toMatchObject({
+      currentPlan: { installments: 6, rate: 96 },
+      newPlan: { installments: 3, rate: 80 },
+      totalPaid: 40000,
+      newCreditTotal: 180000,
+      newBalance: 140000,
+      survivingInstallmentId: "i3",
+      cancelledInstallments: [4, 5, 6],
+      creditWillBeSettled: false,
+    });
+  });
+
+  it("rechaza SALE con más de un producto → 409", async () => {
+    queries.findById.mockResolvedValue(
+      saleCredit({ installments: sixInstallments() }),
+    );
+    queries.getSaleCreditProducts.mockResolvedValue([
+      { product_id: "p1", historical_rate: 0.96, product_name: "TV" },
+      { product_id: "p2", historical_rate: 0.8, product_name: "Heladera" },
+    ]);
+
+    await expect(
+      service.simulatePlanChange("credit-1"),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("rechaza si no hay product_rate para el nuevo plan → 422", async () => {
+    queries.findById.mockResolvedValue(
+      saleCredit({ installments: sixInstallments() }),
+    );
+    queries.getSaleCreditProducts.mockResolvedValue([
+      { product_id: "p1", historical_rate: 0.96, product_name: "TV" },
+    ]);
+    prQueries.findActiveRate.mockResolvedValue(null);
+
+    await expect(
+      service.simulatePlanChange("credit-1"),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it("ejecuta: recalcula cuota, actualiza credit_products.historical_rate y deja interest_rate NULL", async () => {
+    queries.lockCredit.mockResolvedValue(saleCredit());
+    queries.lockInstallments.mockResolvedValue(sixInstallments());
+    queries.getSaleCreditProducts.mockResolvedValue([
+      { product_id: "p1", historical_rate: 0.96, product_name: "TV" },
+    ]);
+    prQueries.findActiveRate.mockResolvedValue({ rate: 0.8 });
+    queries.setSurvivingInstallment.mockResolvedValue();
+    queries.cancelInstallmentsForPlanChange.mockResolvedValue();
+    queries.updateCreditPlanColumns.mockResolvedValue();
+    queries.updateSaleCreditProductRate.mockResolvedValue();
+
+    await service.changePlan("credit-1", { reason: "ok" }, "admin-1");
+
+    expect(queries.setSurvivingInstallment).toHaveBeenCalledWith(
+      client,
+      "i3",
+      140000,
+      3,
+    );
+    // SALE: installments_count al nuevo plan, interest_rate NULL.
+    expect(queries.updateCreditPlanColumns).toHaveBeenCalledWith(
+      client,
+      "credit-1",
+      3,
+      null,
+    );
+    // La tasa nueva se guarda en credit_products.
+    expect(queries.updateSaleCreditProductRate).toHaveBeenCalledWith(
+      client,
+      "credit-1",
+      0.8,
+    );
   });
 });
