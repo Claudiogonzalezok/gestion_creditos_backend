@@ -1594,6 +1594,82 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
   });
 };
 
+/**
+ * CASTIGO DE CRÉDITO (write off) — retira un crédito ACTIVE de la cobranza.
+ *
+ * Operación atómica admin-only y definitiva (V1): bloquea crédito + cuotas,
+ * valida, marca las cuotas abiertas y el crédito como WRITTEN_OFF y registra la
+ * auditoría en credit_write_offs. No toca cuotas pagadas, pagos, ni comisiones.
+ * El saldo castigado (lo que se deja de cobrar) se preserva en la auditoría.
+ *
+ * Elegibilidad: crédito ACTIVE con al menos una cuota abierta (cualquier saldo
+ * pendiente, incluso parcial). Sin pre-cargas PENDING sin resolver.
+ *
+ * @param {string} creditId
+ * @param {{ reason: string, observations?: string }} data
+ * @param {string} adminId
+ * @returns {Promise<object>} Resumen del castigo + id de auditoría.
+ */
+const writeOffCredit = async (creditId, { reason, observations } = {}, adminId) => {
+  return withTransaction(async (client) => {
+    const credit = await queries.lockCredit(client, creditId);
+    if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+    if (credit.status !== "ACTIVE")
+      throw {
+        status: 409,
+        message: "Solo se puede castigar un crédito ACTIVO.",
+      };
+
+    // Un cobro sin aprobar dejaría dinero a medio imputar sobre un crédito que
+    // se retira de cobranza → resolverlo antes (igual que refinanciación).
+    const hasPending = await queries.hasPendingPayments(client, creditId);
+    if (hasPending)
+      throw {
+        status: 409,
+        message:
+          "El crédito tiene cobros pendientes de aprobación. Resolvelos antes de castigarlo.",
+      };
+
+    const installments = await queries.lockInstallments(client, creditId);
+    const openInstallments = installments.filter((i) =>
+      ["PENDING", "PARTIAL", "OVERDUE"].includes(i.status),
+    );
+    if (!openInstallments.length)
+      throw {
+        status: 409,
+        message: "El crédito no tiene saldo pendiente para castigar.",
+      };
+
+    // Saldo que se deja de cobrar (snapshot para auditoría / cartera castigada).
+    const writtenOffBalance =
+      Math.round(
+        openInstallments.reduce(
+          (sum, i) => sum + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)),
+          0,
+        ) * 100,
+      ) / 100;
+
+    await queries.writeOffInstallments(client, creditId);
+    await queries.writeOffCredit(client, creditId);
+
+    const record = await queries.createWriteOffRecord(client, {
+      credit_id: creditId,
+      written_off_balance: writtenOffBalance,
+      reason,
+      observations: observations || null,
+      executed_by: adminId,
+    });
+
+    return {
+      credit_id: creditId,
+      written_off_balance: writtenOffBalance,
+      write_off_id: record.id,
+      executed_at: record.executed_at,
+      message: "Crédito castigado y retirado de la operatoria de cobranza.",
+    };
+  });
+};
+
 module.exports = {
   getAll,
   getById,
@@ -1606,4 +1682,5 @@ module.exports = {
   refinance,
   simulatePlanChange,
   changePlan,
+  writeOffCredit,
 };

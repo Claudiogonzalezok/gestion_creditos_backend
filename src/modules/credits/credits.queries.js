@@ -852,6 +852,57 @@ const hasPlanChange = async (db, creditId) => {
   return r.rowCount > 0;
 };
 
+// ── Castigo de crédito (write off) ────────────────────────────────────────────
+
+/**
+ * Marca como WRITTEN_OFF las cuotas abiertas de un crédito castigado. Las cuotas
+ * PAID no se tocan. Salen así de saldo, planilla y del cron de mora.
+ * @param {object} client
+ * @param {string} creditId
+ */
+const writeOffInstallments = async (client, creditId) => {
+  await client.query(
+    `UPDATE installments
+       SET status = 'WRITTEN_OFF', updated_at = NOW()
+     WHERE credit_id = $1
+       AND status IN ('PENDING', 'PARTIAL', 'OVERDUE')`,
+    [creditId],
+  );
+};
+
+/**
+ * Marca un crédito como castigado (WRITTEN_OFF). NO escribe motivo/fecha/usuario
+ * acá: la auditoría vive únicamente en credit_write_offs.
+ * @param {object} client
+ * @param {string} creditId
+ */
+const writeOffCredit = async (client, creditId) => {
+  await client.query(
+    `UPDATE credits SET status = 'WRITTEN_OFF', updated_at = NOW() WHERE id = $1`,
+    [creditId],
+  );
+};
+
+/**
+ * Inserta el registro de auditoría del castigo (único lugar de trazabilidad).
+ * @param {object} client
+ * @param {object} data - credit_id, written_off_balance, reason, observations, executed_by.
+ * @returns {Promise<object>} Fila insertada (id, executed_at).
+ */
+const createWriteOffRecord = async (
+  client,
+  { credit_id, written_off_balance, reason, observations, executed_by },
+) => {
+  const r = await client.query(
+    `INSERT INTO credit_write_offs
+       (credit_id, written_off_balance, reason, observations, executed_by)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, executed_at`,
+    [credit_id, written_off_balance, reason, observations || null, executed_by],
+  );
+  return r.rows[0];
+};
+
 module.exports = {
   findAll,
   findById,
@@ -886,4 +937,8 @@ module.exports = {
   updateSaleCreditProductRate,
   createPlanChangeRecord,
   hasPlanChange,
+  // castigo (write off)
+  writeOffInstallments,
+  writeOffCredit,
+  createWriteOffRecord,
 };
