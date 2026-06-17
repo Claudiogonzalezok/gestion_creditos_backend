@@ -84,7 +84,7 @@ src/
 **Fuente de verdad arquitectónica:** `docs/cash-model-v4.md`. Resumen:
 
 - **Jornada (`business_days`)** = día contable del negocio. Estados: `OPEN → READY_TO_CLOSE → CLOSED → AUDITED`. `READY_TO_CLOSE` es reversible (vuelve a OPEN si se abre una nueva caja). El cierre formal a CLOSED es manual.
-- **Caja operativa (`cash_sessions`)** = turno operativo dentro de una jornada. **Una sola OPEN por jornada simultáneamente** (índice único parcial). Múltiples cajas secuenciales en el día (8-12, 16-22, 23-04) son válidas. `owner_user_id` representa al cajero responsable del turno, NO al dueño del dinero.
+- **Caja operativa (`cash_sessions`)** = la caja de la jornada. **Cada jornada tiene una sola caja, siempre** (índice único total sobre `business_day_id`, migración 037) — sin importar su status (OPEN, PENDING_RECONCILIATION o CLOSED). No existen turnos secuenciales ni reapertura: una vez cerrada la caja de la jornada, no se puede abrir otra para esa misma jornada. `owner_user_id` representa al cajero responsable del turno, NO al dueño del dinero.
 - **Cobradores NO administran cajas.** No abren, no cierran, no arquean. Solo registran pre-cargas. La pre-carga NO requiere caja abierta.
 - **Imputación de movimientos:** todo cobro aprobado, gasto, conversión, enganche y reversión se imputa a la **caja activa de la jornada** (vía `cashSessions.queries.lockActiveSessionForCurrentJornada`). Si no hay caja activa → `409 NO_ACTIVE_SESSION`.
 - **Aprobación = recepción del dinero.** No existe entidad de rendición ni `settled_at` — al aprobar una pre-carga, el dinero ya está en la empresa.

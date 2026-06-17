@@ -1,4 +1,4 @@
-const pool = require('../../config/db');
+const pool = require("../../config/db");
 
 // ── Branches (helpers livianos; el módulo de branches per se se hará luego) ─
 
@@ -101,11 +101,12 @@ const countSessionsByStatus = async (businessDayId, db = pool) => {
 const maybeTransitionToReadyToClose = async (client, businessDayId) => {
   const day = await lockAndGetById(client, businessDayId);
   if (!day) return { transitioned: false, status: null };
-  if (day.status !== 'OPEN') return { transitioned: false, status: day.status };
+  if (day.status !== "OPEN") return { transitioned: false, status: day.status };
 
   const counts = await countSessionsByStatus(businessDayId, client);
   // Necesita al menos una caja y NINGUNA OPEN ni PENDING.
-  if (counts.total_count === 0) return { transitioned: false, status: day.status };
+  if (counts.total_count === 0)
+    return { transitioned: false, status: day.status };
   if (counts.open_count > 0 || counts.pending_count > 0)
     return { transitioned: false, status: day.status };
 
@@ -117,7 +118,10 @@ const maybeTransitionToReadyToClose = async (client, businessDayId) => {
      RETURNING status`,
     [businessDayId],
   );
-  return { transitioned: r.rowCount === 1, status: r.rows[0]?.status ?? day.status };
+  return {
+    transitioned: r.rowCount === 1,
+    status: r.rows[0]?.status ?? day.status,
+  };
 };
 
 /**
@@ -142,14 +146,15 @@ const forceClose = async (client, id, { closedBy, observations }) => {
 };
 
 /**
- * V4.4: revierte una jornada de READY_TO_CLOSE a OPEN. Idempotente:
- * solo afecta filas que estén exactamente en READY_TO_CLOSE.
+ * @deprecated V4.6: sin callers. Servía para soportar multi-turno (revertir
+ * READY_TO_CLOSE a OPEN al abrir una segunda caja en la misma jornada);
+ * esa política fue descontinuada — cada jornada tiene una sola caja, siempre
+ * (ver migración 037 y `cashSessions.service.open`). Se conserva la función
+ * sin eliminar por si algún flujo histórico la necesitara, pero no debe
+ * invocarse desde código nuevo.
  *
- * Pensado para `cashSessions.service.open`: si la jornada quedó en
- * READY_TO_CLOSE (porque se cerraron todas las cajas previas) y se intenta
- * abrir una caja nueva, la jornada vuelve a OPEN para reflejar que sigue
- * operativa. ready_to_close_at se preserva como auditoría del momento en
- * que la jornada estuvo "lista para cerrar" la última vez.
+ * Revierte una jornada de READY_TO_CLOSE a OPEN. Idempotente: solo afecta
+ * filas que estén exactamente en READY_TO_CLOSE.
  */
 const revertToOpen = async (client, id) => {
   const r = await client.query(
@@ -252,7 +257,7 @@ const isJornadaMutable = async (businessDate, branchId, db = pool) => {
     [businessDate, branchId],
   );
   if (!r.rows.length) return false;
-  return ['OPEN','READY_TO_CLOSE'].includes(r.rows[0].status);
+  return ["OPEN", "READY_TO_CLOSE"].includes(r.rows[0].status);
 };
 
 const findAll = async ({ status, branchId, dateFrom, dateTo } = {}) => {
@@ -264,10 +269,22 @@ const findAll = async ({ status, branchId, dateFrom, dateTo } = {}) => {
     JOIN branches b ON b.id = bd.branch_id
     WHERE 1=1`;
   const params = [];
-  if (status)   { params.push(status);   q += ` AND bd.status = $${params.length}`; }
-  if (branchId) { params.push(branchId); q += ` AND bd.branch_id = $${params.length}`; }
-  if (dateFrom) { params.push(dateFrom); q += ` AND bd.business_date >= $${params.length}::date`; }
-  if (dateTo)   { params.push(dateTo);   q += ` AND bd.business_date <= $${params.length}::date`; }
+  if (status) {
+    params.push(status);
+    q += ` AND bd.status = $${params.length}`;
+  }
+  if (branchId) {
+    params.push(branchId);
+    q += ` AND bd.branch_id = $${params.length}`;
+  }
+  if (dateFrom) {
+    params.push(dateFrom);
+    q += ` AND bd.business_date >= $${params.length}::date`;
+  }
+  if (dateTo) {
+    params.push(dateTo);
+    q += ` AND bd.business_date <= $${params.length}::date`;
+  }
   q += ` ORDER BY bd.business_date DESC, b.code`;
   return (await pool.query(q, params)).rows;
 };
