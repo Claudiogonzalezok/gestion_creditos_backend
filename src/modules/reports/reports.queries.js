@@ -339,8 +339,8 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
      today_payments AS (
        SELECT
          COALESCE(SUM(p.amount_received), 0)::float8                                     AS collected,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0)::float8 AS cash,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0)::float8 AS transfer,
+         COALESCE(SUM(p.amount_cash),     0)::float8                                     AS cash,
+         COALESCE(SUM(p.amount_transfer), 0)::float8                                     AS transfer,
          COUNT(*)::int                                                                    AS count
        FROM payments p
        LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
@@ -351,8 +351,8 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
       today_down_payments AS (
         SELECT
           COALESCE(SUM(amount), 0)::float8 AS total,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0)::float8 AS cash,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0)::float8 AS transfer,
+          COALESCE(SUM(amount_cash),     0)::float8 AS cash,
+          COALESCE(SUM(amount_transfer), 0)::float8 AS transfer,
           COUNT(*)::int                    AS count
         FROM credit_down_payments
         WHERE register_date = $2
