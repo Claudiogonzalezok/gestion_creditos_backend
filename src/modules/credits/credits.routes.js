@@ -19,8 +19,8 @@ router.get('/',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   [
     query('status').optional()
-      .isIn(['PENDING_APPROVAL','ACTIVE','SETTLED','REJECTED','EXPIRED'])
-      .withMessage('status debe ser PENDING_APPROVAL, ACTIVE, SETTLED, REJECTED o EXPIRED.'),
+      .isIn(['PENDING_APPROVAL','ACTIVE','SETTLED','REJECTED','EXPIRED','REFINANCED','WRITTEN_OFF'])
+      .withMessage('status debe ser PENDING_APPROVAL, ACTIVE, SETTLED, REJECTED, EXPIRED, REFINANCED o WRITTEN_OFF.'),
     query('type').optional()
       .isIn(['SALE','LOAN'])
       .withMessage('type debe ser SALE o LOAN.'),
