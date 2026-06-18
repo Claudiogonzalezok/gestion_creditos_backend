@@ -106,7 +106,7 @@ const getPortfolioReport = async (graceDays) => {
     `SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS pending_balance
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
-     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')`,
+     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')`,
   );
 
   const topCustomers = await pool.query(
@@ -120,7 +120,7 @@ const getPortfolioReport = async (graceDays) => {
        COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED("i", "$1")})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
-     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')
+     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      LEFT JOIN users u   ON u.id = cu.assigned_collector_id
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY pending_balance DESC
@@ -368,7 +368,7 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
        SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS balance
        FROM installments i
        JOIN credits c ON c.id = i.credit_id
-       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')
+       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      ),
      overdue AS (
        SELECT

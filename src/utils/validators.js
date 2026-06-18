@@ -643,6 +643,14 @@ const credits = {
     body('reason').optional({ nullable: true, checkFalsy: true }).trim()
       .isLength({ max: 500 }).withMessage('El motivo no puede superar los 500 caracteres.'),
   ],
+  writeOff: [
+    isUUIDParam('id', 'El ID de crédito'),
+    body('reason').trim()
+      .notEmpty().withMessage('El motivo del castigo es obligatorio.')
+      .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
+    body('observations').optional({ nullable: true, checkFalsy: true }).trim()
+      .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
+  ],
   id: [ isUUIDParam('id', 'El ID de crédito') ],
 };
 

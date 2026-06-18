@@ -56,6 +56,11 @@ router.post('/:id/plan-change',
   authorize('ADMIN'), v.credits.planChange, validate, controller.planChangeExecute
 );
 
+// Castigo de crédito (write off) — solo ADMIN
+router.post('/:id/write-off',
+  authorize('ADMIN'), v.credits.writeOff, validate, controller.writeOff
+);
+
 // Historial de cobros aprobados del crédito
 router.get('/:creditId/payments',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
