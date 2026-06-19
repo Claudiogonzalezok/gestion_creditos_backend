@@ -223,6 +223,112 @@ describe("P — Integración Caja General (drops + commissions)", () => {
       });
       expect(movs.pagination.total).toBe(3);
     });
+  });
+
+  // ── registerMovement MANUAL_INCOME → ingreso directo a Caja General ──────
+  describe("cashAccountsService.registerMovement con MANUAL_INCOME", () => {
+    it("acredita Caja General sin necesitar ninguna cash_session", async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: "ADMIN" });
+
+      const result = await cashAccountsService.registerMovement(
+        acc.id,
+        {
+          movementType: "MANUAL_INCOME",
+          amount: 1200,
+          description: "Aporte de capital",
+        },
+        asUser(admin),
+      );
+
+      expect(result.movement.direction).toBe("IN");
+      expect(result.movement.amount).toBe(1200);
+
+      const bal = await cashAccountsService.getBalance(acc.id);
+      expect(bal.current_balance).toBe(1200);
+    });
+
+    it("respeta el split efectivo/transferencia", async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: "ADMIN" });
+
+      await cashAccountsService.registerMovement(
+        acc.id,
+        {
+          movementType: "MANUAL_INCOME",
+          amount: 500,
+          amount_cash: 300,
+          amount_transfer: 200,
+          description: "Ingreso mixto",
+        },
+        asUser(admin),
+      );
+
+      const movs = await cashAccountsService.listMovements(acc.id, {
+        movementType: "MANUAL_INCOME",
+      });
+      expect(movs.items[0].amount_cash).toBe(300);
+      expect(movs.items[0].amount_transfer).toBe(200);
+    });
+
+    it("acepta split de un solo lado (solo efectivo, transfer en 0)", async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: "ADMIN" });
+
+      const result = await cashAccountsService.registerMovement(
+        acc.id,
+        {
+          movementType: "MANUAL_INCOME",
+          amount: 1200,
+          amount_cash: 1200,
+          amount_transfer: 0,
+          description: "Aporte de capital en efectivo",
+        },
+        asUser(admin),
+      );
+
+      expect(result.movement.amount_cash).toBe(1200);
+      expect(result.movement.amount_transfer).toBe(0);
+    });
+
+    it("acepta split de un solo lado (solo transferencia, cash en 0)", async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: "ADMIN" });
+
+      const result = await cashAccountsService.registerMovement(
+        acc.id,
+        {
+          movementType: "MANUAL_INCOME",
+          amount: 900,
+          amount_cash: 0,
+          amount_transfer: 900,
+          description: "Aporte de capital por transferencia",
+        },
+        asUser(admin),
+      );
+
+      expect(result.movement.amount_cash).toBe(0);
+      expect(result.movement.amount_transfer).toBe(900);
+    });
+
+    it("rechaza split con un lado negativo", async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: "ADMIN" });
+
+      await expect(
+        cashAccountsService.registerMovement(
+          acc.id,
+          {
+            movementType: "MANUAL_INCOME",
+            amount: 100,
+            amount_cash: -50,
+            amount_transfer: 150,
+            description: "Split inválido",
+          },
+          asUser(admin),
+        ),
+      ).rejects.toMatchObject({ status: 422, code: "INVALID_SPLIT_AMOUNT" });
+    });
 
     it("rechaza abrir una segunda caja en la misma jornada después de cerrar la primera", async () => {
       const u1 = await createUserFixture({ role: "ADMIN" });
