@@ -435,6 +435,14 @@ const create = async (data, requestingUser) => {
       method: data.prepaid_installments_method,
     });
     const prepaidInstallments = parseInt(data.prepaid_installments || 0, 10);
+    // El monto adelantado se conoce solo al aprobar (depende de la tasa), por eso
+    // normalizeCreditIntake recibe total:0 acá — pero eso anula el método elegido
+    // porque su rama "sin split" descarta method cuando amount es 0. Forzamos a
+    // persistir el método declarado en el alta para no perderlo antes de aprobar.
+    const prepaidPaymentMethod =
+      prepaidInstallments > 0
+        ? prepaidSplit.paymentMethod || data.prepaid_installments_method || "CASH"
+        : prepaidSplit.paymentMethod;
     if (downPayment >= totalAmount)
       throw {
         status: 400,
@@ -460,7 +468,7 @@ const create = async (data, requestingUser) => {
       down_payment_transfer_reference:
         data.down_payment_transfer_reference || null,
       prepaid_installments: prepaidInstallments,
-      prepaid_installments_method: prepaidSplit.paymentMethod,
+      prepaid_installments_method: prepaidPaymentMethod,
       prepaid_installments_cash: prepaidSplit.amountCash,
       prepaid_installments_transfer: prepaidSplit.amountTransfer,
       prepaid_installments_transfer_reference:

@@ -43,6 +43,9 @@ const getCashConversionsReport = async (dateFrom, dateTo) =>
 const getCashMovementsReport = async (cashSessionId) =>
   queries.getCashMovementsReport(cashSessionId);
 
+const getGeneralCashMovementsReport = async (dateFrom, dateTo) =>
+  queries.getGeneralCashMovementsReport(dateFrom, dateTo);
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -55,4 +58,5 @@ module.exports = {
   getPaymentsOverdue48h,
   getCashConversionsReport,
   getCashMovementsReport,
+  getGeneralCashMovementsReport,
 };

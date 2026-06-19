@@ -8,12 +8,18 @@ const FIXED_DIRECTION = {
   SUPPLIER_PAYMENT: "OUT",
   SALARY_PAYMENT: "OUT",
   EXPENSE: "OUT",
+  MANUAL_INCOME: "IN",
 };
 
 // IMP-6: SALARY_PAYMENT NO se acepta desde el endpoint público — debe pasar
 // por commissions.liquidate, que es la única fuente con trazabilidad de
 // período liquidado y mata el riesgo de doble pago (manual + liquidación).
-const PUBLIC_MOVEMENT_TYPES = ["SUPPLIER_PAYMENT", "EXPENSE", "ADJUSTMENT"];
+const PUBLIC_MOVEMENT_TYPES = [
+  "SUPPLIER_PAYMENT",
+  "EXPENSE",
+  "ADJUSTMENT",
+  "MANUAL_INCOME",
+];
 
 const round2 = (n) => Math.round(n * 100) / 100;
 const hasValue = (v) =>
@@ -214,10 +220,10 @@ const registerMovement = async (accountId, body, user) => {
       "INVALID_SPLIT_DIRECTION",
     );
   }
-  if (hasSplit && (!amountCash || !amountTransfer)) {
+  if (hasSplit && (amountCash < 0 || amountTransfer < 0)) {
     throw err(
       422,
-      "Para un ajuste mixto ambos importes deben ser mayores a 0.",
+      "amount_cash y amount_transfer no pueden ser negativos.",
       "INVALID_SPLIT_AMOUNT",
     );
   }

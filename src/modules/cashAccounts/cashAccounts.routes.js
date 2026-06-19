@@ -17,7 +17,12 @@ const idParam = [
 
 // IMP-6: SALARY_PAYMENT excluido del POST público (única vía:
 // commissions.liquidate). Sí se acepta como filtro de listado.
-const PUBLIC_TYPES = ["SUPPLIER_PAYMENT", "EXPENSE", "ADJUSTMENT"];
+const PUBLIC_TYPES = [
+  "SUPPLIER_PAYMENT",
+  "EXPENSE",
+  "ADJUSTMENT",
+  "MANUAL_INCOME",
+];
 const ALL_TYPES = ["DROP_IN", "SALARY_PAYMENT", ...PUBLIC_TYPES];
 
 router.get("/", controller.getAll);
@@ -87,16 +92,19 @@ router.post(
         if (!has(b.amount)) throw new Error("amount es obligatorio.");
         return true;
       }
-      if (b.movement_type !== "ADJUSTMENT" || b.direction !== "IN") {
+      const isAdjustmentIn =
+        b.movement_type === "ADJUSTMENT" && b.direction === "IN";
+      const isManualIncome = b.movement_type === "MANUAL_INCOME";
+      if (!isAdjustmentIn && !isManualIncome) {
         throw new Error(
-          "amount_cash/amount_transfer solo aplican a ADJUSTMENT IN.",
+          "amount_cash/amount_transfer solo aplican a ADJUSTMENT IN o MANUAL_INCOME.",
         );
       }
       const cash = parseFloat(b.amount_cash) || 0;
       const transfer = parseFloat(b.amount_transfer) || 0;
-      if (cash <= 0 || transfer <= 0) {
+      if (cash < 0 || transfer < 0 || cash + transfer <= 0) {
         throw new Error(
-          "Para un ajuste mixto ambos importes deben ser mayores a 0.",
+          "amount_cash y amount_transfer deben ser >= 0 y al menos uno mayor a 0.",
         );
       }
       if (

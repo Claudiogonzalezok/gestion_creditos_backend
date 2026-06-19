@@ -706,6 +706,50 @@ const getCashMovementsReport = async (cashSessionId) => {
   };
 };
 
+/**
+ * Reporte de movimientos de Caja General (tesorería): ledger completo de
+ * `cash_account_movements`, independiente de cualquier jornada/caja operativa.
+ * Cubre gastos/conversiones COMPANY e ingresos manuales (MANUAL_INCOME), que
+ * no aparecen en `getCashMovementsReport` (scoped a cash_session_id).
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<object>} Resumen agregado y detalle de movimientos.
+ */
+const getGeneralCashMovementsReport = async (dateFrom, dateTo) => {
+  const summaryResult = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total_movements,
+       COALESCE(SUM(m.amount) FILTER (WHERE m.direction = 'IN'), 0)::float8 AS total_in,
+       COALESCE(SUM(m.amount) FILTER (WHERE m.direction = 'OUT'), 0)::float8 AS total_out
+     FROM cash_account_movements m
+     JOIN cash_accounts ca ON ca.id = m.cash_account_id AND ca.type = 'GENERAL_CASH'
+     WHERE m.created_at::date BETWEEN $1::date AND $2::date`,
+    [dateFrom, dateTo],
+  );
+
+  const detailResult = await pool.query(
+    `SELECT
+       m.id, m.movement_type, m.direction,
+       m.amount::float8 AS amount,
+       m.amount_cash::float8 AS amount_cash,
+       m.amount_transfer::float8 AS amount_transfer,
+       m.description, m.beneficiary_name,
+       m.reference_type, m.reference_id, m.created_at,
+       u.full_name AS performed_by_name
+     FROM cash_account_movements m
+     JOIN cash_accounts ca ON ca.id = m.cash_account_id AND ca.type = 'GENERAL_CASH'
+     LEFT JOIN users u ON u.id = m.created_by
+     WHERE m.created_at::date BETWEEN $1::date AND $2::date
+     ORDER BY m.created_at DESC`,
+    [dateFrom, dateTo],
+  );
+
+  return {
+    summary: summaryResult.rows[0],
+    rows: detailResult.rows,
+  };
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -718,4 +762,5 @@ module.exports = {
   getPaymentsOverdue48h,
   getCashMovementsReport,
   getCashConversionsReport,
+  getGeneralCashMovementsReport,
 };

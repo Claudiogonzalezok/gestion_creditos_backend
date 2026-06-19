@@ -34,8 +34,8 @@ const insertCreditUpfront = async ({
 }) => {
   await pool.query(
     `INSERT INTO credit_down_payments
-       (credit_id, amount, payment_method, approved_by, payment_type, register_date, cash_session_id)
-     VALUES ($1, $2, 'CASH', $3, $4, $5, $6)`,
+       (credit_id, amount, payment_method, approved_by, payment_type, register_date, cash_session_id, amount_cash, amount_transfer)
+     VALUES ($1, $2, 'CASH', $3, $4, $5, $6, $2, 0)`,
     [creditId, amount, adminId, paymentType, today(), sessionId],
   );
 };
@@ -124,8 +124,7 @@ describe("Caja — pago anticipado de cuota (GAP #2)", () => {
 
     const res = await installmentsService.earlyPay(
       inst.id,
-      "CASH",
-      null,
+      { payment_method: "CASH" },
       admin.id,
     );
 
@@ -164,7 +163,11 @@ describe("Caja — pago anticipado de cuota (GAP #2)", () => {
       asUser(admin),
     );
 
-    await installmentsService.earlyPay(inst.id, "CASH", null, admin.id);
+    await installmentsService.earlyPay(
+      inst.id,
+      { payment_method: "CASH" },
+      admin.id,
+    );
 
     await cashSessionsService.close(
       session.id,

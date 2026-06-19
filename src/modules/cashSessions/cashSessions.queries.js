@@ -71,6 +71,30 @@ const findActiveSessionByBusinessDay = async (businessDayId, db = pool) => {
 };
 
 /**
+ * V4.6: devuelve CUALQUIER caja ya existente en una jornada, sin importar
+ * status (OPEN, PENDING_RECONCILIATION o CLOSED).
+ *
+ * Regla de negocio: cada jornada tiene una sola caja, siempre. A diferencia
+ * de `findActiveSessionByBusinessDay` (que solo mira OPEN y se usa para
+ * imputar movimientos), este query se usa en `open()` para bloquear la
+ * apertura de una segunda caja en la misma jornada bajo cualquier estado.
+ *
+ * @param {string} businessDayId
+ * @param {import('pg').Pool|import('pg').PoolClient} [db=pool]
+ */
+const findAnySessionByBusinessDay = async (businessDayId, db = pool) => {
+  const r = await db.query(
+    `SELECT id, business_day_id, owner_user_id, opened_at, opened_by,
+            opening_amount::float8 AS opening_amount, status
+     FROM cash_sessions
+     WHERE business_day_id = $1
+     LIMIT 1`,
+    [businessDayId],
+  );
+  return r.rows[0] || null;
+};
+
+/**
  * V4: lock + read de la caja activa de una jornada dentro de una tx.
  *
  * Equivalente transaccional de `findActiveSessionByBusinessDay`. Sirve para
@@ -588,6 +612,7 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
 
 module.exports = {
   findActiveSessionByBusinessDay,
+  findAnySessionByBusinessDay,
   lockActiveSessionByBusinessDay,
   lockActiveSessionForCurrentJornada,
   findById,

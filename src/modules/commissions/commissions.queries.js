@@ -1,5 +1,5 @@
-const pool = require('../../config/db');
-const { getWeekBounds } = require('../../utils/creditCalculator');
+const pool = require("../../config/db");
+const { getWeekBounds } = require("../../utils/creditCalculator");
 
 // ── Comisiones ────────────────────────────────────────────────
 
@@ -16,9 +16,18 @@ const findCommissions = async ({ userId, status, weekStart } = {}) => {
     JOIN customers cu ON cu.id = c.customer_id
     WHERE 1=1`;
   const params = [];
-  if (userId)    { params.push(userId);    q += ` AND cm.user_id = $${params.length}`; }
-  if (status)    { params.push(status);    q += ` AND cm.status = $${params.length}`; }
-  if (weekStart) { params.push(weekStart); q += ` AND cm.week_start = $${params.length}`; }
+  if (userId) {
+    params.push(userId);
+    q += ` AND cm.user_id = $${params.length}`;
+  }
+  if (status) {
+    params.push(status);
+    q += ` AND cm.status = $${params.length}`;
+  }
+  if (weekStart) {
+    params.push(weekStart);
+    q += ` AND cm.week_start = $${params.length}`;
+  }
   q += ` ORDER BY cm.created_at DESC`;
   return (await pool.query(q, params)).rows;
 };
@@ -29,7 +38,7 @@ const getPendingTotal = async (userId) => {
     `SELECT COALESCE(SUM(amount), 0)::float8 AS total
      FROM commissions
      WHERE user_id = $1 AND status = 'PENDING'`,
-    [userId]
+    [userId],
   );
   return r.rows[0].total;
 };
@@ -41,7 +50,7 @@ const getPendingIds = async (client, userId) => {
     `SELECT id, amount::float8, week_start, week_end FROM commissions
      WHERE user_id = $1 AND status = 'PENDING'
      FOR UPDATE`,
-    [userId]
+    [userId],
   );
   return r.rows;
 };
@@ -50,7 +59,7 @@ const markCommissionsPaid = async (client, ids) => {
   if (!ids.length) return;
   await client.query(
     `UPDATE commissions SET status = 'PAID' WHERE id = ANY($1::uuid[])`,
-    [ids]
+    [ids],
   );
 };
 
@@ -58,7 +67,7 @@ const markCommissionsPaid = async (client, ids) => {
 const findSalary = async (userId) => {
   const r = await pool.query(
     `SELECT id, user_id, weekly_amount::float8 FROM salaries WHERE user_id = $1 AND active = true`,
-    [userId]
+    [userId],
   );
   return r.rows[0] || null;
 };
@@ -68,7 +77,7 @@ const createSalary = async (userId, weeklyAmount) => {
     `INSERT INTO salaries (user_id, weekly_amount)
      VALUES ($1, $2)
      RETURNING id, user_id, weekly_amount::float8, active`,
-    [userId, weeklyAmount]
+    [userId, weeklyAmount],
   );
   return r.rows[0];
 };
@@ -77,18 +86,28 @@ const updateSalary = async (id, weeklyAmount) => {
   const r = await pool.query(
     `UPDATE salaries SET weekly_amount = $1 WHERE id = $2
      RETURNING id, user_id, weekly_amount::float8, active`,
-    [weeklyAmount, id]
+    [weeklyAmount, id],
   );
   return r.rows[0];
 };
 
 // ── Liquidaciones ─────────────────────────────────────────────
 
-const createLiquidation = async (client, {
-  userId, weekStart, weekEnd,
-  commissionsTotal, salaryAmount, totalPaid,
-  paymentMethod, transferReference, paidBy, cashSessionId,
-}) => {
+const createLiquidation = async (
+  client,
+  {
+    userId,
+    weekStart,
+    weekEnd,
+    commissionsTotal,
+    salaryAmount,
+    totalPaid,
+    paymentMethod,
+    transferReference,
+    paidBy,
+    cashSessionId,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO commission_liquidations
        (user_id, week_start, week_end, commissions_total, salary_amount,
@@ -98,10 +117,17 @@ const createLiquidation = async (client, {
                commissions_total::float8, salary_amount::float8, total_paid::float8,
                payment_method, transfer_reference, paid_by, paid_at, cash_session_id`,
     [
-      userId, weekStart, weekEnd,
-      commissionsTotal, salaryAmount, totalPaid,
-      paymentMethod, transferReference || null, paidBy, cashSessionId || null,
-    ]
+      userId,
+      weekStart,
+      weekEnd,
+      commissionsTotal,
+      salaryAmount,
+      totalPaid,
+      paymentMethod,
+      transferReference || null,
+      paidBy,
+      cashSessionId || null,
+    ],
   );
   return r.rows[0];
 };
@@ -117,7 +143,10 @@ const findLiquidations = async ({ userId } = {}) => {
     JOIN users adm ON adm.id = cl.paid_by
     WHERE 1=1`;
   const params = [];
-  if (userId) { params.push(userId); q += ` AND cl.user_id = $${params.length}`; }
+  if (userId) {
+    params.push(userId);
+    q += ` AND cl.user_id = $${params.length}`;
+  }
   q += ` ORDER BY cl.paid_at DESC`;
   return (await pool.query(q, params)).rows;
 };
@@ -139,18 +168,35 @@ const getWeeklySummary = async () => {
      LEFT JOIN salaries s     ON s.user_id  = u.id AND s.active = true
      WHERE u.status = 'ACTIVE'
        AND u.role IN ('SELLER','COLLECTOR','SELLER_COLLECTOR')
-       AND (cm.id IS NOT NULL OR s.id IS NOT NULL)
+       AND (
+         cm.id IS NOT NULL
+         OR (
+           s.id IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM commission_liquidations cl
+             WHERE cl.user_id = u.id
+               AND CURRENT_DATE BETWEEN cl.week_start AND cl.week_end
+           )
+         )
+       )
      GROUP BY u.id, u.full_name, u.role, s.weekly_amount
-     ORDER BY u.full_name`
+     ORDER BY u.full_name`,
   );
-  return r.rows.map(row => ({
+  return r.rows.map((row) => ({
     ...row,
     total_net: row.commissions_total + row.salary_amount,
   }));
 };
 
 module.exports = {
-  findCommissions, getPendingTotal, getPendingIds, markCommissionsPaid,
-  findSalary, createSalary, updateSalary,
-  createLiquidation, findLiquidations, getWeeklySummary,
+  findCommissions,
+  getPendingTotal,
+  getPendingIds,
+  markCommissionsPaid,
+  findSalary,
+  createSalary,
+  updateSalary,
+  createLiquidation,
+  findLiquidations,
+  getWeeklySummary,
 };

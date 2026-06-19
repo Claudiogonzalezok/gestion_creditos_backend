@@ -139,23 +139,23 @@ const resolveOrCreateBusinessDay = async (client, branchId) => {
 // ── Apertura ───────────────────────────────────────────────────────────────
 
 /**
- * V4.4: abre una caja operativa para la jornada.
+ * V4.6: abre una caja operativa para la jornada.
  *
  * Reglas (V4 — directiva arquitectónica oficial):
  *   1. owner_user_id deja de representar al "dueño del dinero" — pasa a ser
  *      el cajero responsable del turno. El nombre del campo se conserva por
  *      compat de schema; la semántica cambia.
- *   2. Solo puede existir UNA caja OPEN simultáneamente por business_day
- *      (independientemente del owner). Si ya hay otra OPEN en la jornada,
- *      esta apertura falla con 409 ACTIVE_SESSION_IN_BUSINESS_DAY.
- *   3. Si la jornada está en READY_TO_CLOSE (porque la caja anterior cerró
- *      y todas estaban CLOSED), abrir una nueva caja la revierte a OPEN.
- *      Esto permite jornadas multi-turno (8-12, 16-22, 23-04 etc.) sin
- *      cerrar formalmente la jornada entre cajas.
+ *   2. Cada jornada tiene una sola caja, siempre — sin importar su status
+ *      (OPEN, PENDING_RECONCILIATION o CLOSED). Si ya existe cualquier caja
+ *      para el business_day, esta apertura falla con 409
+ *      ACTIVE_SESSION_IN_BUSINESS_DAY. No existe reapertura ni multi-turno:
+ *      una jornada cerrada (su única caja CLOSED) no vuelve a aceptar
+ *      aperturas nuevas.
  *
- * El invariante "una OPEN por jornada" será endurecido a nivel DB con la
- * migración 027 (V4.5). Hasta entonces el chequeo a nivel service es la
- * única protección.
+ * El invariante "una sola caja por jornada, siempre" está endurecido a nivel
+ * DB con la migración 037 (índice único total sobre business_day_id, sin
+ * filtro de status). El chequeo a nivel service da el mensaje de error
+ * legible; la constraint de DB es la defensa final contra carreras.
  *
  * @param {object} data
  * @param {number} data.opening_amount
@@ -193,25 +193,20 @@ const open = async (data, requestingUser) => {
         message: `La jornada del ${businessDay.business_date} ya está ${businessDay.status}. No se pueden abrir nuevas cajas.`,
       };
 
-    // V4.4: unicidad por jornada (no por owner). Solo una OPEN simultánea
-    // por business_day. Si la jornada está en READY_TO_CLOSE, la revertimos
-    // a OPEN porque va a tener una caja activa nueva.
-    const existingActive = await queries.findActiveSessionByBusinessDay(
+    // V4.6: unicidad por jornada, siempre (no solo mientras está OPEN). Cada
+    // business_day acepta una sola caja en toda su vida, sin importar su
+    // status actual.
+    const existingSession = await queries.findAnySessionByBusinessDay(
       businessDay.id,
       client,
     );
-    if (existingActive) {
+    if (existingSession) {
       throw {
         status: 409,
-        message: `Ya hay una caja operativa abierta en la jornada (id ${existingActive.id}). Cerrala antes de abrir otra.`,
+        message: `Ya existe una caja para esta jornada (id ${existingSession.id}, status ${existingSession.status}). Cada jornada tiene una sola caja.`,
         code: "ACTIVE_SESSION_IN_BUSINESS_DAY",
-        existing_session_id: existingActive.id,
+        existing_session_id: existingSession.id,
       };
-    }
-
-    if (businessDay.status === "READY_TO_CLOSE") {
-      const reverted = await bdQueries.revertToOpen(client, businessDay.id);
-      if (reverted) businessDay.status = "OPEN";
     }
 
     try {
@@ -225,9 +220,9 @@ const open = async (data, requestingUser) => {
       return { ...session, business_day: businessDay };
     } catch (err) {
       if (err.code === "23505") {
-        // V4.5 (migración 027) reemplaza one_open_session_per_owner_idx por
-        // one_open_session_per_business_day_idx → este error pasa a indicar
-        // que otra request abrió la caja primero.
+        // V4.6 (migración 037): índice único total one_session_per_business_day_idx
+        // (sin filtro de status) → este error indica que otra request creó
+        // la caja de la jornada en simultáneo (race ganada por la otra).
         throw {
           status: 409,
           message:
