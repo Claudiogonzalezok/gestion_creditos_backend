@@ -256,6 +256,23 @@ const planChangeExecute = async (req, res) => {
   }
 };
 
+// Castigo de crédito (write off) — admin-only
+const writeOff = async (req, res) => {
+  try {
+    const { reason, observations } = req.body;
+    const result = await service.writeOffCredit(
+      req.params.id,
+      { reason, observations },
+      req.user.id,
+    );
+    return response.success(res, result, result.message);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 module.exports = {
   getAll,
   getById,
@@ -270,4 +287,5 @@ module.exports = {
   refinance,
   planChangeSimulate,
   planChangeExecute,
+  writeOff,
 };

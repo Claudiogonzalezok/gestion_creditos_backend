@@ -106,7 +106,7 @@ const getPortfolioReport = async (graceDays) => {
     `SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS pending_balance
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
-     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')`,
+     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')`,
   );
 
   const topCustomers = await pool.query(
@@ -120,7 +120,7 @@ const getPortfolioReport = async (graceDays) => {
        COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED("i", "$1")})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
-     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')
+     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      LEFT JOIN users u   ON u.id = cu.assigned_collector_id
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY pending_balance DESC
@@ -339,8 +339,8 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
      today_payments AS (
        SELECT
          COALESCE(SUM(p.amount_received), 0)::float8                                     AS collected,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0)::float8 AS cash,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0)::float8 AS transfer,
+         COALESCE(SUM(p.amount_cash),     0)::float8                                     AS cash,
+         COALESCE(SUM(p.amount_transfer), 0)::float8                                     AS transfer,
          COUNT(*)::int                                                                    AS count
        FROM payments p
        LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
@@ -351,8 +351,8 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
       today_down_payments AS (
         SELECT
           COALESCE(SUM(amount), 0)::float8 AS total,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0)::float8 AS cash,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0)::float8 AS transfer,
+          COALESCE(SUM(amount_cash),     0)::float8 AS cash,
+          COALESCE(SUM(amount_transfer), 0)::float8 AS transfer,
           COUNT(*)::int                    AS count
         FROM credit_down_payments
         WHERE register_date = $2
@@ -368,7 +368,7 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
        SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS balance
        FROM installments i
        JOIN credits c ON c.id = i.credit_id
-       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED')
+       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      ),
      overdue AS (
        SELECT
