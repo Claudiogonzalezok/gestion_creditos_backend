@@ -1,9 +1,24 @@
 const pool = require('../../config/db');
 
+/**
+ * Lista marcas con la cantidad de productos activos asociados para la tabla de configuración.
+ * @param {boolean} includeInactive - Indica si debe incluir marcas inactivas.
+ */
 const findAll = async (includeInactive = false) => {
-  const q = includeInactive
-    ? `SELECT id, name, active, created_at FROM product_brands ORDER BY name ASC`
-    : `SELECT id, name, active, created_at FROM product_brands WHERE active = TRUE ORDER BY name ASC`;
+  let q = `
+    SELECT
+      pb.id,
+      pb.name,
+      pb.active,
+      pb.created_at,
+      COUNT(p.id)::int AS product_count
+    FROM product_brands pb
+    LEFT JOIN products p
+      ON p.brand_id = pb.id
+     AND p.status = 'ACTIVE'
+  `;
+  if (!includeInactive) q += ` WHERE pb.active = TRUE`;
+  q += ` GROUP BY pb.id, pb.name, pb.active, pb.created_at ORDER BY pb.name ASC`;
   return (await pool.query(q)).rows;
 };
 
