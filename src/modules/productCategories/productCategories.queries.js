@@ -1,9 +1,24 @@
 const pool = require('../../config/db');
 
+/**
+ * Lista categorías con la cantidad de productos activos asociados para la tabla de configuración.
+ * @param {{ includeInactive?: boolean }} options - Filtros de listado.
+ */
 const findAll = async ({ includeInactive = false } = {}) => {
-  let q = `SELECT id, name, active, created_at FROM product_categories WHERE 1=1`;
-  if (!includeInactive) q += ` AND active = TRUE`;
-  q += ` ORDER BY name ASC`;
+  let q = `
+    SELECT
+      pc.id,
+      pc.name,
+      pc.active,
+      pc.created_at,
+      COUNT(p.id)::int AS product_count
+    FROM product_categories pc
+    LEFT JOIN products p
+      ON p.category_id = pc.id
+     AND p.status = 'ACTIVE'
+  `;
+  if (!includeInactive) q += ` WHERE pc.active = TRUE`;
+  q += ` GROUP BY pc.id, pc.name, pc.active, pc.created_at ORDER BY pc.name ASC`;
   return (await pool.query(q)).rows;
 };
 
