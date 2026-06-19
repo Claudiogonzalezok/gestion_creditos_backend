@@ -86,3 +86,52 @@ describe("reports.queries.getCashMovementsReport", () => {
     expect(result.rows).toEqual([]);
   });
 });
+
+describe("reports.queries.getGeneralCashMovementsReport", () => {
+  beforeEach(() => {
+    pool.query.mockReset();
+  });
+
+  it("consulta cash_account_movements filtrando por Caja General y rango de fechas", async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ total_movements: 0, total_in: 0, total_out: 0 }],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await queries.getGeneralCashMovementsReport("2026-06-01", "2026-06-17");
+
+    const [summarySql, summaryParams] = pool.query.mock.calls[0];
+    expect(summaryParams).toEqual(["2026-06-01", "2026-06-17"]);
+    expect(summarySql).toContain("FROM cash_account_movements m");
+    expect(summarySql).toContain("type = 'GENERAL_CASH'");
+
+    const [detailSql] = pool.query.mock.calls[1];
+    expect(detailSql).toContain("LEFT JOIN users u ON u.id = m.created_by");
+  });
+
+  it("devuelve summary y rows tal como los entrega la DB", async () => {
+    pool.query
+      .mockResolvedValueOnce({
+        rows: [{ total_movements: 2, total_in: 1700, total_out: 1500 }],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          { id: "m-1", movement_type: "MANUAL_INCOME", direction: "IN" },
+          { id: "m-2", movement_type: "EXPENSE", direction: "OUT" },
+        ],
+      });
+
+    const result = await queries.getGeneralCashMovementsReport(
+      "2026-06-01",
+      "2026-06-17",
+    );
+
+    expect(result.summary).toEqual({
+      total_movements: 2,
+      total_in: 1700,
+      total_out: 1500,
+    });
+    expect(result.rows).toHaveLength(2);
+  });
+});

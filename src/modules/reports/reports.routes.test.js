@@ -23,6 +23,9 @@ jest.mock("./reports.controller", () => ({
   getCashMovementsReport: jest.fn((req, res) =>
     res.status(200).json({ ok: true, data: req.query }),
   ),
+  getGeneralCashMovementsReport: jest.fn((req, res) =>
+    res.status(200).json({ ok: true, data: req.query }),
+  ),
 }));
 
 jest.mock("../../middlewares/auth.middleware", () => ({

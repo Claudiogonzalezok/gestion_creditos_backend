@@ -117,6 +117,21 @@ const getCashMovementsReport = async (req, res) => {
   }
 };
 
+const getGeneralCashMovementsReport = async (req, res) => {
+  try {
+    return response.success(
+      res,
+      await service.getGeneralCashMovementsReport(
+        req.query.date_from,
+        req.query.date_to,
+      ),
+    );
+  } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 module.exports = {
   getCollectionReport,
   getPortfolioReport,
@@ -129,4 +144,5 @@ module.exports = {
   getPaymentsOverdue48h,
   getCashConversionsReport,
   getCashMovementsReport,
+  getGeneralCashMovementsReport,
 };

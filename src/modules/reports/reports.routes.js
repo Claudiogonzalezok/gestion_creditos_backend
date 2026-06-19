@@ -94,5 +94,11 @@ router.get(
   validate,
   controller.getCashMovementsReport,
 );
+router.get(
+  "/general-cash-movements",
+  dateRangeRules,
+  validate,
+  controller.getGeneralCashMovementsReport,
+);
 
 module.exports = router;
