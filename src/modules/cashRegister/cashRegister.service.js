@@ -170,13 +170,6 @@ const getSessionMovements = async (cashSessionId) =>
 const createConversion = async (data, adminId) => {
   const registerDate = data.register_date || (await getActiveJornadaDate());
 
-  const existing = await queries.findByDate(registerDate);
-  if (existing)
-    throw {
-      status: 409,
-      message: `La caja del ${registerDate} ya está cerrada. No se pueden registrar conversiones.`,
-    };
-
   const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
   const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 
@@ -221,6 +214,17 @@ const createConversion = async (data, adminId) => {
       }
     } else {
       // DAILY: V4.3, la conversión se imputa a la caja activa de la jornada.
+      // El chequeo de caja legacy cerrada solo aplica a esta rama — COMPANY
+      // no depende de la jornada en absoluto (mismo patrón que expenses.service.create).
+      const existing = await queries.findByDate(registerDate);
+      if (existing) {
+        await client.query("ROLLBACK");
+        throw {
+          status: 409,
+          message: `La caja del ${registerDate} ya está cerrada. No se pueden registrar conversiones.`,
+        };
+      }
+
       const activeSession =
         await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
       if (!activeSession) {
