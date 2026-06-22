@@ -157,7 +157,7 @@ const approve = async (req, res) => {
     const credit = await service.approve(
       req.params.id,
       req.user.id,
-      req.body.installments_count,
+      req.body?.installments_count,
     );
     return response.success(
       res,

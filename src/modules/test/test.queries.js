@@ -81,10 +81,64 @@ const deleteBusinessDay = async (client, businessDayId) => {
   ]);
 };
 
+/**
+ * Fuerza `due_date` de una cuota y limpia su rastro de mora previa, para que
+ * el cron `overdueInstallments` la trate como recién vencida desde cero.
+ * @param {object} client Cliente PG dentro de transacción.
+ * @param {string} installmentId Id de la cuota a manipular.
+ * @param {string} dueDate Fecha YYYY-MM-DD a forzar como vencimiento.
+ * @returns {Promise<object|undefined>} Cuota actualizada, o undefined si no existe.
+ */
+const forceInstallmentDueDate = async (client, installmentId, dueDate) => {
+  const r = await client.query(
+    `UPDATE installments
+     SET due_date = $2::date,
+         last_penalty_applied_at = NULL,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [installmentId, dueDate],
+  );
+  return r.rows[0];
+};
+
+/**
+ * Borra todas las liquidaciones de comisiones de un usuario (E2E de
+ * liquidación semanal, libera el constraint único por período).
+ * @param {object} client Cliente PG dentro de transacción.
+ * @param {string} userId Id del usuario liquidado.
+ * @returns {Promise<number>} Cantidad de filas borradas.
+ */
+const deleteCommissionLiquidations = async (client, userId) => {
+  const r = await client.query(
+    `DELETE FROM commission_liquidations WHERE user_id = $1`,
+    [userId],
+  );
+  return r.rowCount;
+};
+
+/**
+ * Fuerza `created_at` de un crédito (E2E del cron `creditExpiry`).
+ * @param {object} client Cliente PG dentro de transacción.
+ * @param {string} creditId Id del crédito a manipular.
+ * @param {string} createdAt Fecha ISO8601 a forzar como alta.
+ * @returns {Promise<object|undefined>} Crédito actualizado, o undefined si no existe.
+ */
+const forceCreditCreatedAt = async (client, creditId, createdAt) => {
+  const r = await client.query(
+    `UPDATE credits SET created_at = $2::timestamptz WHERE id = $1 RETURNING *`,
+    [creditId, createdAt],
+  );
+  return r.rows[0];
+};
+
 module.exports = {
   findCashSessionIdsByBusinessDay,
   unlinkMovements,
   deleteSessionChildren,
   deleteCashSessions,
   deleteBusinessDay,
+  forceInstallmentDueDate,
+  deleteCommissionLiquidations,
+  forceCreditCreatedAt,
 };
