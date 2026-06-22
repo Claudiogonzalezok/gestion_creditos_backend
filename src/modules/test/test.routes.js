@@ -28,5 +28,17 @@ router.patch(
   validate,
   controller.forceInstallmentDueDate,
 );
+router.delete(
+  "/commission-liquidations/:userId",
+  v.test.resetCommissionLiquidations,
+  validate,
+  controller.resetCommissionLiquidations,
+);
+router.patch(
+  "/credits/:id/force-created-at",
+  v.test.forceCreditCreatedAt,
+  validate,
+  controller.forceCreditCreatedAt,
+);
 
 module.exports = router;

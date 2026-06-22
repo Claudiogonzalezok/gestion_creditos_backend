@@ -1149,6 +1149,13 @@ const test = {
     isUUIDParam("id", "El ID de la cuota"),
     isDate("due_date", "La fecha de vencimiento"),
   ],
+  resetCommissionLiquidations: [isUUIDParam("userId", "El ID del usuario")],
+  forceCreditCreatedAt: [
+    isUUIDParam("id", "El ID del crédito"),
+    body("created_at")
+      .isISO8601()
+      .withMessage("created_at debe ser una fecha ISO8601 válida."),
+  ],
 };
 
 module.exports = {

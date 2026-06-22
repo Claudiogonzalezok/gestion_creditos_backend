@@ -31,4 +31,37 @@ const forceInstallmentDueDate = async (req, res) => {
   }
 };
 
-module.exports = { resetToday, forceInstallmentDueDate };
+/**
+ * Borra las liquidaciones de comisiones de un usuario (E2E de liquidación
+ * semanal, evita el conflicto "ya fue liquidado para el período" al
+ * re-correr la suite). Ver guarda de habilitación en `test.routes.js`.
+ */
+const resetCommissionLiquidations = async (req, res) => {
+  try {
+    const data = await service.resetCommissionLiquidations(req.params.userId);
+    return response.success(res, data, "Liquidaciones de comisiones borradas.");
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
+/**
+ * Fuerza el `created_at` de un crédito (E2E del cron `creditExpiry`). Ver
+ * guarda de habilitación en `test.routes.js`.
+ */
+const forceCreditCreatedAt = async (req, res) => {
+  try {
+    const data = await service.forceCreditCreatedAt(req.params.id, req.body.created_at);
+    return response.success(res, data, "created_at forzado.");
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ ok: false, message: err.message });
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = {
+  resetToday,
+  forceInstallmentDueDate,
+  resetCommissionLiquidations,
+  forceCreditCreatedAt,
+};
