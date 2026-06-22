@@ -1,5 +1,7 @@
 const router = require("express").Router();
 const controller = require("./test.controller");
+const v = require("../../utils/validators");
+const { validate } = require("../../middlewares/validate.middleware");
 const {
   authenticate,
   authorize,
@@ -20,5 +22,11 @@ router.use(authenticate);
 router.use(authorize("ADMIN"));
 
 router.delete("/business-days/today", controller.resetToday);
+router.patch(
+  "/installments/:id/force-due-date",
+  v.test.forceInstallmentDueDate,
+  validate,
+  controller.forceInstallmentDueDate,
+);
 
 module.exports = router;

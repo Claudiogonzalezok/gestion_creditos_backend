@@ -47,4 +47,27 @@ const resetToday = async () =>
     };
   });
 
-module.exports = { resetToday };
+/**
+ * Fuerza el `due_date` de una cuota para tests de mora/cron sin esperar el
+ * paso real del tiempo. Resetea `last_penalty_applied_at` para que el cron
+ * `overdueInstallments` recalcule la mora desde la nueva fecha.
+ * @param {string} installmentId Id de la cuota.
+ * @param {string} dueDate Fecha YYYY-MM-DD a forzar.
+ * @returns {Promise<object>} Cuota actualizada.
+ */
+const forceInstallmentDueDate = async (installmentId, dueDate) =>
+  withTransaction(async (client) => {
+    const installment = await queries.forceInstallmentDueDate(
+      client,
+      installmentId,
+      dueDate,
+    );
+    if (!installment) {
+      const err = new Error("Cuota no encontrada.");
+      err.status = 404;
+      throw err;
+    }
+    return installment;
+  });
+
+module.exports = { resetToday, forceInstallmentDueDate };

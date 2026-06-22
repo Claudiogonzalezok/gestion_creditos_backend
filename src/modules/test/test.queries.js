@@ -81,10 +81,32 @@ const deleteBusinessDay = async (client, businessDayId) => {
   ]);
 };
 
+/**
+ * Fuerza `due_date` de una cuota y limpia su rastro de mora previa, para que
+ * el cron `overdueInstallments` la trate como recién vencida desde cero.
+ * @param {object} client Cliente PG dentro de transacción.
+ * @param {string} installmentId Id de la cuota a manipular.
+ * @param {string} dueDate Fecha YYYY-MM-DD a forzar como vencimiento.
+ * @returns {Promise<object|undefined>} Cuota actualizada, o undefined si no existe.
+ */
+const forceInstallmentDueDate = async (client, installmentId, dueDate) => {
+  const r = await client.query(
+    `UPDATE installments
+     SET due_date = $2::date,
+         last_penalty_applied_at = NULL,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [installmentId, dueDate],
+  );
+  return r.rows[0];
+};
+
 module.exports = {
   findCashSessionIdsByBusinessDay,
   unlinkMovements,
   deleteSessionChildren,
   deleteCashSessions,
   deleteBusinessDay,
+  forceInstallmentDueDate,
 };

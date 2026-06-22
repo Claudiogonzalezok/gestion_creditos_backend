@@ -1144,6 +1144,13 @@ const holidays = {
   ],
 };
 
+const test = {
+  forceInstallmentDueDate: [
+    isUUIDParam("id", "El ID de la cuota"),
+    isDate("due_date", "La fecha de vencimiento"),
+  ],
+};
+
 module.exports = {
   // Bloques atómicos reutilizables
   isString,
@@ -1177,6 +1184,7 @@ module.exports = {
   expenses,
   expenseCategories,
   productCategories,
+  test,
 };
 
 // productUnits se valida directamente en su propio router.
