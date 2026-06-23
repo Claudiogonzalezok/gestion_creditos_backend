@@ -165,6 +165,36 @@ const markAllRead = async (userId) => {
 };
 
 /**
+ * Borra una notificación del historial del usuario autenticado.
+ * @param {string} id
+ * @param {string} userId - Asegura que solo el dueño pueda borrarla.
+ * @returns {Promise<boolean>} true si la fila existía y pertenecía al usuario
+ */
+const deleteById = async (id, userId) => {
+  const r = await pool.query(
+    `DELETE FROM notifications
+     WHERE id = $1 AND user_id = $2
+     RETURNING id`,
+    [id, userId],
+  );
+  return r.rowCount > 0;
+};
+
+/**
+ * Borra todas las notificaciones del usuario autenticado.
+ * @param {string} userId
+ * @returns {Promise<number>} cantidad de filas borradas
+ */
+const deleteAllByUser = async (userId) => {
+  const r = await pool.query(
+    `DELETE FROM notifications
+     WHERE user_id = $1`,
+    [userId],
+  );
+  return r.rowCount;
+};
+
+/**
  * Devuelve los IDs de usuarios ADMIN activos — destinatarios por defecto de
  * las notificaciones operativas en V1 (preferencias globales, no por usuario).
  * @returns {Promise<string[]>}
@@ -196,6 +226,8 @@ module.exports = {
   countUnread,
   markRead,
   markAllRead,
+  deleteById,
+  deleteAllByUser,
   getActiveAdminUserIds,
   getUserEmail,
 };

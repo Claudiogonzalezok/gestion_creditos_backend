@@ -14,6 +14,8 @@ jest.mock("./notifications.queries", () => ({
   countUnread: jest.fn(),
   markRead: jest.fn(),
   markAllRead: jest.fn(),
+  deleteById: jest.fn(),
+  deleteAllByUser: jest.fn(),
   getUserEmail: jest.fn(),
 }));
 
@@ -195,5 +197,21 @@ describe("notifications.service — historial y unread-count", () => {
     const result = await service.countUnread("user-1");
 
     expect(result).toBe(3);
+  });
+
+  it("deleteById delega en queries.deleteById con usuario dueño", async () => {
+    queries.deleteById.mockResolvedValue(true);
+
+    await service.deleteById("notif-1", "user-1");
+
+    expect(queries.deleteById).toHaveBeenCalledWith("notif-1", "user-1");
+  });
+
+  it("deleteAllByUser delega en queries.deleteAllByUser", async () => {
+    queries.deleteAllByUser.mockResolvedValue(2);
+
+    await service.deleteAllByUser("user-1");
+
+    expect(queries.deleteAllByUser).toHaveBeenCalledWith("user-1");
   });
 });

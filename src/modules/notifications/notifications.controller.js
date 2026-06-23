@@ -68,6 +68,24 @@ const markAllRead = async (req, res) => {
   }
 };
 
+const deleteById = async (req, res) => {
+  try {
+    await service.deleteById(req.params.id, req.user.id);
+    return response.success(res, null, "Notificación borrada correctamente.");
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
+const deleteAllByUser = async (req, res) => {
+  try {
+    await service.deleteAllByUser(req.user.id);
+    return response.success(res, null, "Notificaciones borradas correctamente.");
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
 module.exports = {
   getPreferences,
   updatePreference,
@@ -75,4 +93,6 @@ module.exports = {
   unreadCount,
   markRead,
   markAllRead,
+  deleteById,
+  deleteAllByUser,
 };

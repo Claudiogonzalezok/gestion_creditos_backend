@@ -138,6 +138,25 @@ const markAllRead = async (userId) => {
   await queries.markAllRead(userId);
 };
 
+/**
+ * Borra una notificación del usuario autenticado.
+ * @param {string} id
+ * @param {string} userId
+ * @returns {Promise<void>}
+ */
+const deleteById = async (id, userId) => {
+  await queries.deleteById(id, userId);
+};
+
+/**
+ * Borra todas las notificaciones del usuario autenticado.
+ * @param {string} userId
+ * @returns {Promise<void>}
+ */
+const deleteAllByUser = async (userId) => {
+  await queries.deleteAllByUser(userId);
+};
+
 module.exports = {
   notify,
   getPreferences,
@@ -146,4 +165,6 @@ module.exports = {
   countUnread,
   markRead,
   markAllRead,
+  deleteById,
+  deleteAllByUser,
 };

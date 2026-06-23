@@ -29,4 +29,8 @@ router.post("/:id/read", v.notifications.id, validate, controller.markRead);
 
 router.post("/read-all", controller.markAllRead);
 
+router.delete("/", controller.deleteAllByUser);
+
+router.delete("/:id", v.notifications.id, validate, controller.deleteById);
+
 module.exports = router;
