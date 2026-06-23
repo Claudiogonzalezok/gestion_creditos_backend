@@ -766,6 +766,9 @@ const findById = async (id) => {
          WHERE a.installment_id = i.id
            AND a.voided_at IS NULL
            AND a.created_at::date = CURRENT_DATE
+           -- SCHEDULED_VISIT es una gestión administrativa de agenda, no un
+           -- intento de campo del cobrador: queda fuera del estado vivo del día.
+           AND a.attempt_type <> 'SCHEDULED_VISIT'
          ORDER BY a.created_at DESC
          LIMIT 1
        ) ca ON TRUE
@@ -935,6 +938,10 @@ const recalcManagementStatusForActiveTodaySheet = async (
              AND a.collector_id = $1
              AND a.voided_at IS NULL
              AND a.created_at::date = CURRENT_DATE
+             -- SCHEDULED_VISIT (agenda administrativa) no es una gestión de
+             -- campo: no deriva management_status (que además no admite ese
+             -- valor en su CHECK). Solo cuentan NO_PAYMENT/NOT_FOUND.
+             AND a.attempt_type <> 'SCHEDULED_VISIT'
            ORDER BY a.created_at DESC
            LIMIT 1
          ), 'PENDING')

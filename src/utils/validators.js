@@ -1147,7 +1147,11 @@ const commissions = {
 const collectionAttempts = {
   create: [
     isUUID("installment_id", "La cuota"),
-    isEnum("attempt_type", "El tipo de intento", ["NO_PAYMENT", "NOT_FOUND"]),
+    isEnum("attempt_type", "El tipo de intento", [
+      "NO_PAYMENT",
+      "NOT_FOUND",
+      "SCHEDULED_VISIT",
+    ]),
     body("reason")
       .optional({ nullable: true, checkFalsy: true })
       .trim()
