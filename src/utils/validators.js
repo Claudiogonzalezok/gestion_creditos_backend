@@ -226,6 +226,26 @@ const users = {
       return true;
     }),
   ],
+  updateMe: [
+    isString("full_name", "El nombre completo", {
+      min: 3,
+      max: 150,
+      required: false,
+    }),
+    isEmail(false),
+    body("phone")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ min: 6, max: 30 })
+      .withMessage("El teléfono debe tener entre 6 y 30 caracteres.")
+      .matches(/^[0-9+()\s-]+$/)
+      .withMessage("El teléfono tiene un formato inválido."),
+    body("address")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ max: 255 })
+      .withMessage("La dirección no puede superar los 255 caracteres."),
+  ],
   id: [isUUIDParam("id", "El ID de usuario")],
 };
 

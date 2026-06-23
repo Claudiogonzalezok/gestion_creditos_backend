@@ -138,8 +138,17 @@ const logoutAllPortal = async (req, res) => {
 // GET /api/auth/me
 const me = async (req, res) => {
   try {
-    const { id, full_name, role, status, is_temp_password } = req.user;
-    const data = { id, full_name, role, status, is_temp_password };
+    const result = await pool.query(
+      `SELECT id, full_name, dni, email, phone, address, role, status,
+              is_temp_password, force_relogin_at, last_login_at, created_at
+       FROM users WHERE id = $1`,
+      [req.user.id]
+    );
+
+    if (!result.rows.length) return response.notFound(res, 'Usuario no encontrado.');
+
+    const data = result.rows[0];
+    const { role } = data;
 
     if (role === 'ADMIN') {
       const r = await pool.query(
