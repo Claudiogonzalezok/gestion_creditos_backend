@@ -1156,6 +1156,7 @@ const test = {
       .isISO8601()
       .withMessage("created_at debe ser una fecha ISO8601 válida."),
   ],
+  forceTokensExpired: [isUUIDParam("userId", "El ID del usuario")],
 };
 
 module.exports = {

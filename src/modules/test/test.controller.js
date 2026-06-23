@@ -59,9 +59,23 @@ const forceCreditCreatedAt = async (req, res) => {
   }
 };
 
+/**
+ * Fuerza a vencidos los tokens de un usuario (E2E del cron `tokenCleanup`).
+ * Ver guarda de habilitación en `test.routes.js`.
+ */
+const forceTokensExpired = async (req, res) => {
+  try {
+    const data = await service.forceTokensExpired(req.params.userId);
+    return response.success(res, data, "Tokens forzados a vencidos.");
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
 module.exports = {
   resetToday,
   forceInstallmentDueDate,
   resetCommissionLiquidations,
   forceCreditCreatedAt,
+  forceTokensExpired,
 };

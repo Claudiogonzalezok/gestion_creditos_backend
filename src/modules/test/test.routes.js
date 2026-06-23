@@ -40,5 +40,11 @@ router.patch(
   validate,
   controller.forceCreditCreatedAt,
 );
+router.patch(
+  "/tokens/:userId/force-expire",
+  v.test.forceTokensExpired,
+  validate,
+  controller.forceTokensExpired,
+);
 
 module.exports = router;
