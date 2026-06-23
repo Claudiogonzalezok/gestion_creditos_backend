@@ -102,9 +102,19 @@ const forceCreditCreatedAt = async (creditId, createdAt) =>
     return credit;
   });
 
+/**
+ * Fuerza a vencidos los tokens (blacklist + refresh) de un usuario, para el
+ * E2E del cron `tokenCleanup` sin esperar el TTL real.
+ * @param {string} userId
+ * @returns {Promise<{blacklist_rows: number, refresh_token_rows: number}>}
+ */
+const forceTokensExpired = async (userId) =>
+  withTransaction((client) => queries.forceTokensExpired(client, userId));
+
 module.exports = {
   resetToday,
   forceInstallmentDueDate,
   resetCommissionLiquidations,
   forceCreditCreatedAt,
+  forceTokensExpired,
 };

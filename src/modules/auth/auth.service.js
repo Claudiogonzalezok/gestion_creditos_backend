@@ -57,6 +57,8 @@ const loginInternal = async (dni, password) => {
     user: {
       id:               user.id,
       full_name:        user.full_name,
+      dni:              user.dni,
+      email:            user.email,
       role:             user.role,
       is_temp_password: user.is_temp_password,
     },

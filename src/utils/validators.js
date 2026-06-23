@@ -226,6 +226,26 @@ const users = {
       return true;
     }),
   ],
+  updateMe: [
+    isString("full_name", "El nombre completo", {
+      min: 3,
+      max: 150,
+      required: false,
+    }),
+    isEmail(false),
+    body("phone")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ min: 6, max: 30 })
+      .withMessage("El teléfono debe tener entre 6 y 30 caracteres.")
+      .matches(/^[0-9+()\s-]+$/)
+      .withMessage("El teléfono tiene un formato inválido."),
+    body("address")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ max: 255 })
+      .withMessage("La dirección no puede superar los 255 caracteres."),
+  ],
   id: [isUUIDParam("id", "El ID de usuario")],
 };
 
@@ -639,19 +659,28 @@ const credits = {
       .withMessage("Las notas no pueden superar los 500 caracteres."),
   ],
   planChange: [
-    isUUIDParam('id', 'El ID de crédito'),
-    body('reason').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 500 }).withMessage('El motivo no puede superar los 500 caracteres.'),
+    isUUIDParam("id", "El ID de crédito"),
+    body("reason")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ max: 500 })
+      .withMessage("El motivo no puede superar los 500 caracteres."),
   ],
   writeOff: [
-    isUUIDParam('id', 'El ID de crédito'),
-    body('reason').trim()
-      .notEmpty().withMessage('El motivo del castigo es obligatorio.')
-      .isLength({ min: 5, max: 500 }).withMessage('El motivo debe tener entre 5 y 500 caracteres.'),
-    body('observations').optional({ nullable: true, checkFalsy: true }).trim()
-      .isLength({ max: 500 }).withMessage('Las observaciones no pueden superar los 500 caracteres.'),
+    isUUIDParam("id", "El ID de crédito"),
+    body("reason")
+      .trim()
+      .notEmpty()
+      .withMessage("El motivo del castigo es obligatorio.")
+      .isLength({ min: 5, max: 500 })
+      .withMessage("El motivo debe tener entre 5 y 500 caracteres."),
+    body("observations")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ max: 500 })
+      .withMessage("Las observaciones no pueden superar los 500 caracteres."),
   ],
-  id: [ isUUIDParam('id', 'El ID de crédito') ],
+  id: [isUUIDParam("id", "El ID de crédito")],
 };
 
 // ── PAYMENTS (pre-cargas de cobro) ────────────────────────────
@@ -1069,6 +1098,38 @@ const productCategories = {
   id: [isUUIDParam("id", "El ID de categoría")],
 };
 
+// ── NOTIFICATIONS ─────────────────────────────────────────────
+const NOTIFICATION_TYPE_VALUES = [
+  "MORA",
+  "INSTALLMENT_DUE",
+  "APPROVAL_REQUEST",
+  "CASH_REGISTER",
+  "NEW_CUSTOMER",
+  "WEEKLY_REPORT",
+];
+const notifications = {
+  updatePreference: [
+    param("type")
+      .isIn(NOTIFICATION_TYPE_VALUES)
+      .withMessage(
+        `El tipo debe ser uno de: ${NOTIFICATION_TYPE_VALUES.join(", ")}.`,
+      ),
+    body("enabled")
+      .optional()
+      .isBoolean()
+      .withMessage("enabled debe ser booleano."),
+    body("email_enabled")
+      .optional()
+      .isBoolean()
+      .withMessage("email_enabled debe ser booleano."),
+    body("frequency")
+      .optional()
+      .isIn(["INSTANT", "DAILY", "WEEKLY"])
+      .withMessage("frequency debe ser INSTANT, DAILY o WEEKLY."),
+  ],
+  id: [isUUIDParam("id", "El ID de notificación")],
+};
+
 // ── COMMISSIONS ───────────────────────────────────────────────
 const commissions = {
   liquidate: [
@@ -1156,6 +1217,7 @@ const test = {
       .isISO8601()
       .withMessage("created_at debe ser una fecha ISO8601 válida."),
   ],
+  forceTokensExpired: [isUUIDParam("userId", "El ID del usuario")],
 };
 
 module.exports = {
@@ -1191,6 +1253,7 @@ module.exports = {
   expenses,
   expenseCategories,
   productCategories,
+  notifications,
   test,
 };
 

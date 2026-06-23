@@ -132,6 +132,25 @@ const forceCreditCreatedAt = async (client, creditId, createdAt) => {
   return r.rows[0];
 };
 
+/**
+ * Fuerza a vencido (`expires_at` = ayer) los tokens de blacklist y refresh
+ * de un usuario, para el E2E del cron `tokenCleanup` sin esperar el TTL real.
+ * @param {object} client Cliente PG dentro de transacción.
+ * @param {string} userId Id del usuario cuyos tokens se fuerzan a vencidos.
+ * @returns {Promise<{blacklist_rows: number, refresh_token_rows: number}>}
+ */
+const forceTokensExpired = async (client, userId) => {
+  const bl = await client.query(
+    `UPDATE token_blacklist SET expires_at = NOW() - INTERVAL '1 day' WHERE user_id = $1`,
+    [userId],
+  );
+  const rt = await client.query(
+    `UPDATE refresh_tokens SET expires_at = NOW() - INTERVAL '1 day' WHERE user_id = $1`,
+    [userId],
+  );
+  return { blacklist_rows: bl.rowCount, refresh_token_rows: rt.rowCount };
+};
+
 module.exports = {
   findCashSessionIdsByBusinessDay,
   unlinkMovements,
@@ -141,4 +160,5 @@ module.exports = {
   forceInstallmentDueDate,
   deleteCommissionLiquidations,
   forceCreditCreatedAt,
+  forceTokensExpired,
 };

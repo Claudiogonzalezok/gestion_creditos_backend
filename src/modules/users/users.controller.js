@@ -27,6 +27,17 @@ const getById = async (req, res) => {
   }
 };
 
+// GET /api/users/me
+const getMe = async (req, res) => {
+  try {
+    const user = await service.getOwnProfile(req.user.id);
+    return response.success(res, user);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 // POST /api/users
 const create = async (req, res) => {
   try {
@@ -45,6 +56,19 @@ const update = async (req, res) => {
     const { full_name, dni, email, address, role } = req.body;
     const user = await service.update(req.params.id, { full_name, dni, email, address, role });
     return response.success(res, user, 'Usuario actualizado correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+// PATCH /api/users/me
+const updateMe = async (req, res) => {
+  try {
+    const { full_name, email, phone, address } = req.body;
+    const user = await service.updateOwnProfile(req.user.id, { full_name, email, phone, address });
+    return response.success(res, user, 'Perfil actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
@@ -113,4 +137,4 @@ const changePassword = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, deactivate, activate, resetPassword, unlock, changePassword };
+module.exports = { getAll, getById, getMe, create, update, updateMe, deactivate, activate, resetPassword, unlock, changePassword };

@@ -8,6 +8,8 @@ const { withTransaction } = require("../../utils/transaction");
 const { localDate } = require("../../utils/date");
 const businessDaysService = require("../businessDays/businessDays.service");
 const paymentsService = require("../payments/payments.service");
+const notificationsService = require("../notifications/notifications.service");
+const notificationsQueries = require("../notifications/notifications.queries");
 const {
   getInstallmentAmount,
   getTotalToReturn,
@@ -278,6 +280,33 @@ const sanitizeCredit = (credit) => {
   return decorateSaleCredit(credit);
 };
 
+/**
+ * Hook: notifica a los admins activos que hay una nueva solicitud de
+ * aprobación de crédito (nace PENDING_APPROVAL). Best-effort, post-commit —
+ * un fallo de notify() nunca debe afectar el resultado del alta.
+ * @param {object} credit - Crédito recién creado.
+ * @param {string} creditType - 'LOAN' | 'SALE'.
+ */
+const _notifyApprovalRequest = async (credit, creditType) => {
+  try {
+    const adminIds = await notificationsQueries.getActiveAdminUserIds();
+    await notificationsService.notify({
+      type: "APPROVAL_REQUEST",
+      title: "Nueva solicitud de aprobación",
+      message: `Se generó una nueva operación de tipo ${creditType} pendiente de aprobación (ID: ${credit.id}).`,
+      targetUserIds: adminIds,
+      channels: ["push"],
+      entityType: "credit",
+      entityId: credit.id,
+    });
+  } catch (err) {
+    console.error(
+      "🔴  [notifications] Falló el hook de APPROVAL_REQUEST (crédito):",
+      err,
+    );
+  }
+};
+
 const getAll = async (filters, requestingUser) => {
   if (["SELLER", "SELLER_COLLECTOR"].includes(requestingUser.role))
     filters = { ...filters, created_by: requestingUser.id };
@@ -314,8 +343,8 @@ const create = async (data, requestingUser) => {
 
   // ── LOAN ─────────────────────────────────────────────────────
   if (data.type === "LOAN") {
-    return withTransaction(async (client) => {
-      const credit = await queries.create(client, {
+    const credit = await withTransaction(async (client) => {
+      const newCredit = await queries.create(client, {
         customer_id: data.customer_id,
         created_by: requestingUser.id,
         type: "LOAN",
@@ -326,18 +355,20 @@ const create = async (data, requestingUser) => {
         first_payment_date: data.first_payment_date,
         notes: data.notes,
       });
-      delete credit.down_payment;
-      delete credit.down_payment_method;
-      delete credit.down_payment_cash;
-      delete credit.down_payment_transfer;
-      delete credit.down_payment_transfer_reference;
-      delete credit.prepaid_installments;
-      delete credit.prepaid_installments_method;
-      delete credit.prepaid_installments_cash;
-      delete credit.prepaid_installments_transfer;
-      delete credit.prepaid_installments_transfer_reference;
-      return credit;
+      delete newCredit.down_payment;
+      delete newCredit.down_payment_method;
+      delete newCredit.down_payment_cash;
+      delete newCredit.down_payment_transfer;
+      delete newCredit.down_payment_transfer_reference;
+      delete newCredit.prepaid_installments;
+      delete newCredit.prepaid_installments_method;
+      delete newCredit.prepaid_installments_cash;
+      delete newCredit.prepaid_installments_transfer;
+      delete newCredit.prepaid_installments_transfer_reference;
+      return newCredit;
     });
+    await _notifyApprovalRequest(credit, "LOAN");
+    return credit;
   }
 
   // ── SALE: requiere unit_ids ───────────────────────────────────
@@ -358,7 +389,7 @@ const create = async (data, requestingUser) => {
       message: "No se pueden repetir unidades en una misma venta.",
     };
 
-  return withTransaction(async (client) => {
+  const saleCredit = await withTransaction(async (client) => {
     let totalAmount = 0;
     // Cache de precios durante la validación: se usa en la fase de reserva
     // sin re-consultar la DB, manteniendo consistencia con lo que se vio bajo
@@ -441,7 +472,9 @@ const create = async (data, requestingUser) => {
     // persistir el método declarado en el alta para no perderlo antes de aprobar.
     const prepaidPaymentMethod =
       prepaidInstallments > 0
-        ? prepaidSplit.paymentMethod || data.prepaid_installments_method || "CASH"
+        ? prepaidSplit.paymentMethod ||
+          data.prepaid_installments_method ||
+          "CASH"
         : prepaidSplit.paymentMethod;
     if (downPayment >= totalAmount)
       throw {
@@ -506,6 +539,8 @@ const create = async (data, requestingUser) => {
 
     return sanitizeCredit(credit);
   });
+  await _notifyApprovalRequest(saleCredit, "SALE");
+  return saleCredit;
 };
 
 // simulate: SALE acepta products[{variant_id, quantity}]
@@ -1243,7 +1278,7 @@ const simulateAll = async ({ type, total_amount, products }) => {
  * @returns {Promise<object>} Nuevo crédito en PENDING_APPROVAL + info de la operación.
  */
 const refinance = async (creditId, data, adminId) => {
-  return withTransaction(async (client) => {
+  const result = await withTransaction(async (client) => {
     // ── 1. Lock exclusivo: impide doble refinanciación y race conditions ─────
     const credit = await queries.lockCredit(client, creditId);
     if (!credit) throw { status: 404, message: "Crédito no encontrado." };
@@ -1330,6 +1365,8 @@ const refinance = async (creditId, data, adminId) => {
         "Refinanciación creada. El nuevo crédito está pendiente de aprobación.",
     };
   });
+  await _notifyApprovalRequest(result.new_credit, "LOAN");
+  return result;
 };
 
 /**
@@ -1397,7 +1434,10 @@ const _resolvePlanChange = async (credit, rawInstallments, db = pool) => {
   const pendingBefore = round2(
     installments
       .filter((i) => i.status !== "PAID")
-      .reduce((s, i) => s + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)), 0),
+      .reduce(
+        (s, i) => s + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)),
+        0,
+      ),
   );
 
   // Tasa del plan destino, según el tipo (misma fuente que simulate/approve).
@@ -1543,11 +1583,18 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
       };
 
     const installments = await queries.lockInstallments(client, creditId);
-    const { result, plan } = await _resolvePlanChange(credit, installments, client);
+    const { result, plan } = await _resolvePlanChange(
+      credit,
+      installments,
+      client,
+    );
 
     if (plan.willSettle) {
       // Saldo ≤ 0: se anulan todas las pendientes y el crédito queda cancelado.
-      await queries.cancelInstallmentsForPlanChange(client, plan.cancelledForExecuteIds);
+      await queries.cancelInstallmentsForPlanChange(
+        client,
+        plan.cancelledForExecuteIds,
+      );
       await queries.settleCreditByPlanChange(client, creditId);
     } else {
       // Saldo > 0: la sobreviviente toma el nuevo saldo; las futuras se anulan.
@@ -1557,7 +1604,10 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
         plan.newBalance,
         graceDays,
       );
-      await queries.cancelInstallmentsForPlanChange(client, plan.cancelledForExecuteIds);
+      await queries.cancelInstallmentsForPlanChange(
+        client,
+        plan.cancelledForExecuteIds,
+      );
     }
 
     // El plan vigente del crédito pasa a ser el nuevo (cuotas + tasa), para que
@@ -1618,7 +1668,11 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
  * @param {string} adminId
  * @returns {Promise<object>} Resumen del castigo + id de auditoría.
  */
-const writeOffCredit = async (creditId, { reason, observations } = {}, adminId) => {
+const writeOffCredit = async (
+  creditId,
+  { reason, observations } = {},
+  adminId,
+) => {
   return withTransaction(async (client) => {
     const credit = await queries.lockCredit(client, creditId);
     if (!credit) throw { status: 404, message: "Crédito no encontrado." };
@@ -1652,7 +1706,8 @@ const writeOffCredit = async (creditId, { reason, observations } = {}, adminId) 
     const writtenOffBalance =
       Math.round(
         openInstallments.reduce(
-          (sum, i) => sum + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)),
+          (sum, i) =>
+            sum + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)),
           0,
         ) * 100,
       ) / 100;
