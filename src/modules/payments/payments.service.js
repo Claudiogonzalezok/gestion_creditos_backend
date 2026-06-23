@@ -9,6 +9,34 @@ const {
 const collectionsQueries = require("../collections/collections.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
+const notificationsService = require("../notifications/notifications.service");
+const notificationsQueries = require("../notifications/notifications.queries");
+
+/**
+ * Hook: notifica a los admins activos que hay una nueva pre-carga de cobro
+ * pendiente de aprobación (nace PENDING). Best-effort — un fallo de notify()
+ * nunca debe afectar el resultado de la pre-carga ya persistida.
+ * @param {object} payment - Pre-carga recién creada.
+ */
+const _notifyApprovalRequest = async (payment) => {
+  try {
+    const adminIds = await notificationsQueries.getActiveAdminUserIds();
+    await notificationsService.notify({
+      type: "APPROVAL_REQUEST",
+      title: "Nueva solicitud de aprobación",
+      message: `Se registró un cobro pendiente de aprobación por $${Number(payment.amount_received).toLocaleString("es-AR")} (ID: ${payment.id}).`,
+      targetUserIds: adminIds,
+      channels: ["push"],
+      entityType: "payment",
+      entityId: payment.id,
+    });
+  } catch (err) {
+    console.error(
+      "🔴  [notifications] Falló el hook de APPROVAL_REQUEST (pago):",
+      err,
+    );
+  }
+};
 
 // ══════════════════════════════════════════════════════════════════════════════
 // NÚCLEO FINANCIERO REUTILIZABLE
@@ -437,6 +465,11 @@ const create = async (data, requestingUser) => {
     next_visit_date: data.next_visit_date,
     cash_session_id: null, // V4.2: se llena en approve.
   });
+
+  // Hook: notificar a los admins que hay una nueva pre-carga pendiente de
+  // aprobación. Post-creación, best-effort — nunca afecta el resultado del
+  // payment ya persistido.
+  await _notifyApprovalRequest(payment);
 
   // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
   // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED

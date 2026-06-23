@@ -57,10 +57,50 @@
 //   comportamiento legacy: limitar M a 1 para evitar "big bang" inicial.
 // ══════════════════════════════════════════════════════════════════════════════
 
-const cron = require('node-cron');
-const pool = require('../config/db');
-const { getValue } = require('../modules/systemConfig/systemConfig.queries');
-const { runWithLogging } = require('../utils/cronLogger');
+const cron = require("node-cron");
+const pool = require("../config/db");
+const { getValue } = require("../modules/systemConfig/systemConfig.queries");
+const { runWithLogging } = require("../utils/cronLogger");
+const notificationsService = require("../modules/notifications/notifications.service");
+const notificationsQueries = require("../modules/notifications/notifications.queries");
+
+/**
+ * Hook: notifica a los admins activos sobre las cuotas que entraron/siguen en
+ * mora en esta corrida. Se ejecuta DESPUÉS del COMMIT del UPDATE de mora —
+ * fuera de la transacción de negocio — y es best-effort: un fallo de notify()
+ * nunca debe afectar el resultado ya persistido del job.
+ * @param {Array<{id: string, days_applied: number}>} updatedRows
+ */
+const _notifyOverdueInstallments = async (updatedRows) => {
+  if (!updatedRows.length) return;
+  try {
+    const adminIds = await notificationsQueries.getActiveAdminUserIds();
+    const details = await pool.query(
+      `SELECT i.id, i.installment_number, c.id AS credit_id, cu.full_name AS customer_name
+       FROM installments i
+       JOIN credits c    ON c.id  = i.credit_id
+       JOIN customers cu ON cu.id = c.customer_id
+       WHERE i.id = ANY($1::uuid[])`,
+      [updatedRows.map((r) => r.id)],
+    );
+    for (const row of details.rows) {
+      await notificationsService.notify({
+        type: "MORA",
+        title: "Mora detectada",
+        message: `La cuota Nº ${row.installment_number} del cliente "${row.customer_name}" entró en mora.`,
+        targetUserIds: adminIds,
+        channels: ["push", "email"],
+        entityType: "credit",
+        entityId: row.credit_id,
+      });
+    }
+  } catch (err) {
+    console.error(
+      "🔴  [notifications] Falló el hook de MORA (overdueInstallments):",
+      err,
+    );
+  }
+};
 
 /**
  * Devuelve la fecha de la última corrida exitosa de este job, o null si nunca corrió.
@@ -71,39 +111,44 @@ const getLastSuccessfulRunDate = async (client) => {
   const r = await client.query(
     `SELECT MAX(finished_at::date) AS last_date
      FROM cron_execution_log
-     WHERE job_name = 'overdueInstallments' AND success = TRUE`
+     WHERE job_name = 'overdueInstallments' AND success = TRUE`,
   );
   return r.rows[0].last_date || null;
 };
 
-const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', async () => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+const markOverdueAndApplyPenalty = () =>
+  runWithLogging("overdueInstallments", async () => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    const graceDays = parseInt(await getValue('penalty_grace_days') || '3');
-    const maxRate   = parseFloat(await getValue('penalty_max_rate')  || '0.50');
-    const dailyRate = parseFloat(await getValue('penalty_rate_daily')|| '0.005');
+      const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+      const maxRate = parseFloat(
+        (await getValue("penalty_max_rate")) || "0.50",
+      );
+      const dailyRate = parseFloat(
+        (await getValue("penalty_rate_daily")) || "0.005",
+      );
 
-    // Congelar la fecha de referencia para toda la corrida.
-    const todayRes = await client.query('SELECT CURRENT_DATE AS today');
-    const effectiveToday = todayRes.rows[0].today;
+      // Congelar la fecha de referencia para toda la corrida.
+      const todayRes = await client.query("SELECT CURRENT_DATE AS today");
+      const effectiveToday = todayRes.rows[0].today;
 
-    // Primera corrida del sistema: limitar M a 1 para evitar big bang inicial.
-    const lastRun = await getLastSuccessfulRunDate(client);
-    const isFirstRun = lastRun === null;
+      // Primera corrida del sistema: limitar M a 1 para evitar big bang inicial.
+      const lastRun = await getLastSuccessfulRunDate(client);
+      const isFirstRun = lastRun === null;
 
-    // Single UPDATE con CTE — atómico.
-    // En to_update filtramos days_to_apply > 0 Y pending_adjusted_balance > 0:
-    //   · Cuotas en gracia → days_to_apply <= 0 → FUERA, no mueven last.
-    //   · Cuotas con pre-carga PENDING cubriendo saldo total → balance <= 0 →
-    //     FUERA, no mueven last (la pre-carga "protege" del cobro de mora).
-    //   · Cuotas con pre-carga PARCIAL → balance reducido, mora sobre la
-    //     parte aún no comprometida.
-    // CRÍTICO: si una cuota cubierta quedara marcada como "procesada hoy",
-    // perdería días legítimos de mora si la pre-carga se rechazara después.
-    const result = await client.query(
-      `WITH params AS (
+      // Single UPDATE con CTE — atómico.
+      // En to_update filtramos days_to_apply > 0 Y pending_adjusted_balance > 0:
+      //   · Cuotas en gracia → days_to_apply <= 0 → FUERA, no mueven last.
+      //   · Cuotas con pre-carga PENDING cubriendo saldo total → balance <= 0 →
+      //     FUERA, no mueven last (la pre-carga "protege" del cobro de mora).
+      //   · Cuotas con pre-carga PARCIAL → balance reducido, mora sobre la
+      //     parte aún no comprometida.
+      // CRÍTICO: si una cuota cubierta quedara marcada como "procesada hoy",
+      // perdería días legítimos de mora si la pre-carga se rechazara después.
+      const result = await client.query(
+        `WITH params AS (
          SELECT $1::date    AS effective_today,
                 $2::int     AS grace_days,
                 $3::numeric AS daily_rate,
@@ -174,43 +219,48 @@ const markOverdueAndApplyPenalty = () => runWithLogging('overdueInstallments', a
          AND t.days_to_apply             > 0
          AND t.pending_adjusted_balance  > 0
        RETURNING i.id, t.days_to_apply::int AS days_applied`,
-      [effectiveToday, graceDays, dailyRate, maxRate, isFirstRun]
-    );
+        [effectiveToday, graceDays, dailyRate, maxRate, isFirstRun],
+      );
 
-    await client.query('COMMIT');
+      await client.query("COMMIT");
 
-    const updatedCount = result.rows.length;
-    const totalDays    = result.rows.reduce((sum, r) => sum + r.days_applied, 0);
-    console.log(
-      `[JOB overdueInstallments] ` +
-      `${updatedCount} cuota(s) actualizada(s) — total ${totalDays} día(s) de mora aplicados ` +
-      `(effective_today=${effectiveToday}, last_run=${lastRun || 'NUNCA'}).`
-    );
+      // Hook MORA: fuera de la transacción, post-commit. Best-effort.
+      await _notifyOverdueInstallments(result.rows);
 
-    return {
-      affected_rows: updatedCount,
-      metadata: {
-        effective_today: effectiveToday,
-        last_successful_run: lastRun,
-        is_first_run: isFirstRun,
-        cuotas_updated: updatedCount,
-        total_days_applied: totalDays,
-      },
-    };
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
-});
+      const updatedCount = result.rows.length;
+      const totalDays = result.rows.reduce((sum, r) => sum + r.days_applied, 0);
+      console.log(
+        `[JOB overdueInstallments] ` +
+          `${updatedCount} cuota(s) actualizada(s) — total ${totalDays} día(s) de mora aplicados ` +
+          `(effective_today=${effectiveToday}, last_run=${lastRun || "NUNCA"}).`,
+      );
+
+      return {
+        affected_rows: updatedCount,
+        metadata: {
+          effective_today: effectiveToday,
+          last_successful_run: lastRun,
+          is_first_run: isFirstRun,
+          cuotas_updated: updatedCount,
+          total_days_applied: totalDays,
+        },
+      };
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  });
 
 const start = () => {
   // Todos los días a las 02:00 (zona horaria configurada en TZ o por defecto AR).
-  cron.schedule('0 2 * * *', markOverdueAndApplyPenalty, {
-    timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
+  cron.schedule("0 2 * * *", markOverdueAndApplyPenalty, {
+    timezone: process.env.TZ || "America/Argentina/Buenos_Aires",
   });
-  console.log('[JOB overdueInstallments] Programado — todos los días a las 02:00.');
+  console.log(
+    "[JOB overdueInstallments] Programado — todos los días a las 02:00.",
+  );
 };
 
 module.exports = { start, markOverdueAndApplyPenalty };

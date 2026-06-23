@@ -13,46 +13,49 @@
 //       });
 //     });
 
-const path = require('path');
+const path = require("path");
 
 // Importante: cargar .env.test ANTES de require('src/config/db'),
 // porque el pool se crea al momento del require leyendo process.env.
-require('dotenv').config({ path: path.join(__dirname, '../../../.env.test') });
+require("dotenv").config({ path: path.join(__dirname, "../../../.env.test") });
 
-const pool = require('../../../src/config/db');
+const pool = require("../../../src/config/db");
 
 // Tablas transaccionales que se truncan entre tests.
 // Se ordenan por dependencia (la primera no referencia a las siguientes),
 // pero TRUNCATE ... CASCADE limpia FKs automáticamente, así que el orden
 // es solo documental.
 const TRANSACTIONAL_TABLES = [
-  'cron_execution_log',
-  'collection_attempts',
-  'collection_sheet_details',
-  'collection_sheets',
-  'cash_movements',
-  'cash_account_movements',
-  'cash_session_closure_details',
-  'cash_session_drops',
-  'cash_sessions',
-  'business_days',
+  "cron_execution_log",
+  "notifications",
+  // notification_preferences NO se trunca: la migración 039 inyecta el seed
+  // de las 6 filas default (una por tipo). Es config global, no transaccional.
+  "collection_attempts",
+  "collection_sheet_details",
+  "collection_sheets",
+  "cash_movements",
+  "cash_account_movements",
+  "cash_session_closure_details",
+  "cash_session_drops",
+  "cash_sessions",
+  "business_days",
   // branches NO se trunca: la migración 023 inyecta una sucursal default 'HQ'
   // necesaria para abrir cajas. Se queda intacta entre tests.
   // cash_accounts TAMPOCO se trunca: la migración 025 inyecta la seed
   // 'Caja General' obligatoria. current_balance se resetea en truncateAll.
-  'payments',
-  'credit_refinancings',
-  'credit_down_payments',
-  'credit_products',
-  'installments',
-  'commission_liquidations',
-  'commissions',
-  'credits',
-  'customers',
+  "payments",
+  "credit_refinancings",
+  "credit_down_payments",
+  "credit_products",
+  "installments",
+  "commission_liquidations",
+  "commissions",
+  "credits",
+  "customers",
   // users entra acá porque las fixtures crean admins/cobradores. CASCADE
   // limpia cualquier referencia desde otras tablas. No interfiere con seeds:
   // el test DB solo corre migrations, no seeds, así que la tabla arranca vacía.
-  'users',
+  "users",
 ];
 
 /**
@@ -66,7 +69,7 @@ const TRANSACTIONAL_TABLES = [
  */
 const truncateAll = async () => {
   await pool.query(
-    `TRUNCATE TABLE ${TRANSACTIONAL_TABLES.join(', ')} RESTART IDENTITY CASCADE`
+    `TRUNCATE TABLE ${TRANSACTIONAL_TABLES.join(", ")} RESTART IDENTITY CASCADE`,
   );
   // Resetear current_balance: cash_accounts no se trunca (preserva seed),
   // pero su balance cacheado tiene que arrancar en 0 en cada test.
@@ -79,13 +82,15 @@ const truncateAll = async () => {
  * Idempotente vía ON CONFLICT DO NOTHING.
  */
 const reseedSystemConfig = async () => {
-  const { DEFAULT_VALUES } = require('../../../src/modules/systemConfig/systemConfig.queries');
+  const {
+    DEFAULT_VALUES,
+  } = require("../../../src/modules/systemConfig/systemConfig.queries");
   for (const [key, def] of Object.entries(DEFAULT_VALUES)) {
     await pool.query(
       `INSERT INTO system_config (key, value, description)
        VALUES ($1, $2, $3)
        ON CONFLICT (key) DO NOTHING`,
-      [key, def.value, def.description]
+      [key, def.value, def.description],
     );
   }
 };
@@ -98,12 +103,12 @@ const reseedSystemConfig = async () => {
 const withTestClient = async (fn) => {
   const client = await pool.connect();
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
     const result = await fn(client);
-    await client.query('COMMIT');
+    await client.query("COMMIT");
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw err;
   } finally {
     client.release();
