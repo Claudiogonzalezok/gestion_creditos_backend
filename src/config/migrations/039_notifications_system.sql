@@ -9,7 +9,6 @@
 --   MORA, INSTALLMENT_DUE, APPROVAL_REQUEST, CASH_REGISTER, NEW_CUSTOMER,
 --   WEEKLY_REPORT.
 --
--- WhatsApp queda fuera de alcance: no hay tabla, columna ni canal asociado.
 --
 -- Idempotencia: CREATE TABLE IF NOT EXISTS + INSERT...WHERE NOT EXISTS para el
 -- seed. Re-ejecutar la migración no rompe el estado convergente.
