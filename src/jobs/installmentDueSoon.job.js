@@ -1,7 +1,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // Job diario: recordatorio de cuotas a vencer en 3 días.
 // Busca installments con due_date = hoy+3 y status PENDING/PARTIAL, y notifica
-// (push + email best-effort) a los admins activos por cada cuota encontrada.
+// (push, best-effort) a los admins activos por cada cuota encontrada.
 //
 // No modifica ningún registro de negocio — es puramente informativo. Por eso
 // no necesita transacción ni cron_execution_log de filas afectadas más allá
@@ -39,7 +39,6 @@ const checkInstallmentsDueSoon = () =>
         title: "Cuota próxima a vencer",
         message: `La cuota Nº ${row.installment_number} del cliente "${row.customer_name}" vence el ${row.due_date}.`,
         targetUserIds: adminIds,
-        channels: ["push", "email"],
         entityType: "credit",
         entityId: row.credit_id,
       });

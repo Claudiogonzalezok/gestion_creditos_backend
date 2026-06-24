@@ -1,13 +1,12 @@
--- ── 039: sistema de notificaciones (push in-app + email) ──────────────────
+-- ── 039: sistema de notificaciones (push in-app) ───────────────────────────
 --
 -- Introduce dos tablas nuevas:
 --   · notifications              → historial/push de notificaciones por usuario.
 --   · notification_preferences   → configuración GLOBAL por tipo de notificación
 --                                   (V1: una sola fila por tipo, no por usuario).
 --
--- 6 tipos de notificación soportados (CHECK explícito en ambas tablas):
---   MORA, INSTALLMENT_DUE, APPROVAL_REQUEST, CASH_REGISTER, NEW_CUSTOMER,
---   WEEKLY_REPORT.
+-- 5 tipos de notificación soportados (CHECK explícito en ambas tablas):
+--   MORA, INSTALLMENT_DUE, APPROVAL_REQUEST, CASH_REGISTER, NEW_CUSTOMER.
 --
 --
 -- Idempotencia: CREATE TABLE IF NOT EXISTS + INSERT...WHERE NOT EXISTS para el
@@ -20,7 +19,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
                     CONSTRAINT notifications_type_check
                     CHECK (type IN (
                         'MORA','INSTALLMENT_DUE','APPROVAL_REQUEST',
-                        'CASH_REGISTER','NEW_CUSTOMER','WEEKLY_REPORT'
+                        'CASH_REGISTER','NEW_CUSTOMER'
                     )),
     title       VARCHAR(150)    NOT NULL,
     message     TEXT            NOT NULL,
@@ -42,26 +41,24 @@ CREATE TABLE IF NOT EXISTS public.notification_preferences (
                       CONSTRAINT notification_preferences_type_check
                       CHECK (type IN (
                           'MORA','INSTALLMENT_DUE','APPROVAL_REQUEST',
-                          'CASH_REGISTER','NEW_CUSTOMER','WEEKLY_REPORT'
+                          'CASH_REGISTER','NEW_CUSTOMER'
                       )),
     enabled       BOOLEAN       NOT NULL DEFAULT TRUE,
-    email_enabled BOOLEAN       NOT NULL DEFAULT FALSE,
     frequency     VARCHAR(20)   NOT NULL DEFAULT 'INSTANT'
                       CONSTRAINT notification_preferences_frequency_check
                       CHECK (frequency IN ('INSTANT','DAILY','WEEKLY')),
     updated_at    TIMESTAMPTZ   NOT NULL DEFAULT NOW()
 );
 
--- Seed: una fila por tipo con los valores default (enabled=true, email_enabled=false).
-INSERT INTO public.notification_preferences (type, enabled, email_enabled, frequency)
-SELECT v.type, TRUE, FALSE, v.frequency
+-- Seed: una fila por tipo con los valores default (enabled=true).
+INSERT INTO public.notification_preferences (type, enabled, frequency)
+SELECT v.type, TRUE, v.frequency
 FROM (VALUES
     ('MORA',             'INSTANT'),
     ('INSTALLMENT_DUE',  'INSTANT'),
     ('APPROVAL_REQUEST', 'INSTANT'),
     ('CASH_REGISTER',    'INSTANT'),
-    ('NEW_CUSTOMER',     'INSTANT'),
-    ('WEEKLY_REPORT',    'WEEKLY')
+    ('NEW_CUSTOMER',     'INSTANT')
 ) AS v(type, frequency)
 WHERE NOT EXISTS (
     SELECT 1 FROM public.notification_preferences p WHERE p.type = v.type

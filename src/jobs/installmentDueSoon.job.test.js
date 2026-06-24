@@ -42,7 +42,6 @@ describe("installmentDueSoon.job", () => {
       expect.objectContaining({
         type: "INSTALLMENT_DUE",
         targetUserIds: ["admin-1"],
-        channels: ["push", "email"],
         entityType: "credit",
         entityId: "credit-1",
       }),

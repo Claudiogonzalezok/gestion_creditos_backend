@@ -1105,7 +1105,6 @@ const NOTIFICATION_TYPE_VALUES = [
   "APPROVAL_REQUEST",
   "CASH_REGISTER",
   "NEW_CUSTOMER",
-  "WEEKLY_REPORT",
 ];
 const notifications = {
   updatePreference: [
@@ -1118,10 +1117,6 @@ const notifications = {
       .optional()
       .isBoolean()
       .withMessage("enabled debe ser booleano."),
-    body("email_enabled")
-      .optional()
-      .isBoolean()
-      .withMessage("email_enabled debe ser booleano."),
     body("frequency")
       .optional()
       .isIn(["INSTANT", "DAILY", "WEEKLY"])

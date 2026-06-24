@@ -89,7 +89,6 @@ const _notifyOverdueInstallments = async (updatedRows) => {
         title: "Mora detectada",
         message: `La cuota Nº ${row.installment_number} del cliente "${row.customer_name}" entró en mora.`,
         targetUserIds: adminIds,
-        channels: ["push", "email"],
         entityType: "credit",
         entityId: row.credit_id,
       });
