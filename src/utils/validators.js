@@ -925,6 +925,22 @@ const collections = {
     ),
     isBool("skip_if_exists", "La opción de no regenerar si ya existe", false),
   ],
+  generateBatch: [
+    body("collector_ids")
+      .isArray({ min: 1 })
+      .withMessage("collector_ids debe ser un array con al menos un cobrador."),
+    body("collector_ids.*")
+      .isUUID()
+      .withMessage("Cada collector_id debe ser un UUID válido."),
+    isDate("date", "La fecha de cobro"),
+    isEnum(
+      "filter",
+      "El filtro de cuotas",
+      ["TODAY", "OVERDUE", "TODAY_AND_OVERDUE", "ALL_PENDING"],
+      false,
+    ),
+    isBool("skip_if_exists", "La opción de no regenerar si ya existe", false),
+  ],
   id: [isUUIDParam("id", "El ID de planilla")],
 };
 

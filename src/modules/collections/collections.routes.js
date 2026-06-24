@@ -29,6 +29,13 @@ router.post('/',
   controller.generate
 );
 
+// Generar planillas para varios cobradores en una sola operación — solo Admin
+router.post('/generate-batch',
+  authorize('ADMIN'),
+  v.collections.generateBatch, validate,
+  controller.generateBatch
+);
+
 // Cerrar / cancelar planilla — solo Admin. Operaciones terminales.
 router.post('/:id/close',  authorize('ADMIN'), v.collections.id, validate, controller.close);
 router.post('/:id/cancel', authorize('ADMIN'), v.collections.id, validate, controller.cancel);
