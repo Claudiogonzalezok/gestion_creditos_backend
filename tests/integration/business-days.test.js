@@ -20,17 +20,24 @@ describe('M — Jornadas (business_days)', () => {
     expect(s.business_day.id).toBeDefined();
   });
 
-  it('V4: aperturas secuenciales del mismo día apuntan a la misma jornada', async () => {
-    // V4: una OPEN por jornada. La segunda apertura se hace tras cerrar la
-    // primera (turnos multi-cajero secuenciales son válidos).
+  it('V4.6: una segunda apertura el mismo día es rechazada y apunta a la jornada/caja ya existente', async () => {
+    // V4.6 (migración 037): cada jornada tiene una sola caja, siempre, sin
+    // importar su status — no hay turnos multi-cajero secuenciales. El 409
+    // referencia la MISMA caja (s1), confirmando que ambos opens resolvieron
+    // la misma jornada en vez de crear una nueva.
     const u1 = await createUserFixture({ role: 'ADMIN' });
     const u2 = await createUserFixture({ role: 'ADMIN' });
     const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
     await cashSessions.close(s1.id, {
       declared: [{ payment_method: 'CASH', declared_amount: 0 }],
     }, asUser(u1));
-    const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
-    expect(s1.business_day_id).toBe(s2.business_day_id);
+
+    await expect(cashSessions.open({ opening_amount: 0 }, asUser(u2)))
+      .rejects.toMatchObject({
+        status: 409,
+        code: 'ACTIVE_SESSION_IN_BUSINESS_DAY',
+        existing_session_id: s1.id,
+      });
   });
 
   it('V4: transición OPEN → READY_TO_CLOSE cuando la última caja cierra', async () => {
