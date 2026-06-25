@@ -342,10 +342,12 @@ const shiftInstallmentDates = async (
   paymentFrequency,
   baseDueDate,
 ) => {
+  // MENSUAL usa "1 month" (mes calendario, con clamp a fin de mes que hace
+  // PostgreSQL) para coincidir con addMonthsClamped del cronograma original.
   let interval;
   if (paymentFrequency === "WEEKLY") interval = "1 week";
   else if (paymentFrequency === "BIWEEKLY") interval = "2 weeks";
-  else interval = "30 days";
+  else interval = "1 month";
 
   // Las cuotas restantes toman las fechas de las cuotas adelantadas:
   // rn=1 → baseDueDate + 0 (toma la fecha de la primera cuota adelantada)

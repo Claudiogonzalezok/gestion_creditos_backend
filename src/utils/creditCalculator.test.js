@@ -16,7 +16,7 @@ describe("creditCalculator", () => {
 
     expect(toKey(addFrequencyPeriods(base, "WEEKLY", 1))).toBe("2026-01-17");
     expect(toKey(addFrequencyPeriods(base, "BIWEEKLY", 1))).toBe("2026-01-24");
-    expect(toKey(addFrequencyPeriods(base, "MONTHLY", 1))).toBe("2026-02-09");
+    expect(toKey(addFrequencyPeriods(base, "MONTHLY", 1))).toBe("2026-02-10");
   });
 
   it("genera vencimientos desde aprobación moviendo la primera cuota un período después", () => {
@@ -24,23 +24,36 @@ describe("creditCalculator", () => {
     expect(result).toEqual(["2026-01-17", "2026-01-24", "2026-01-31"]);
   });
 
-  it("usa la primera fecha explícita como ancla en getDueDatesFromFirstPayment", () => {
+  it("usa la primera fecha explícita como ancla y vence el mismo día cada mes", () => {
     const result = getDueDatesFromFirstPayment("2026-03-15", 3, "MONTHLY").map(
       toKey,
     );
-    expect(result).toEqual(["2026-03-15", "2026-04-14", "2026-05-14"]);
+    expect(result).toEqual(["2026-03-15", "2026-04-15", "2026-05-15"]);
   });
 
-  it("genera vencimientos mensuales cada 30 días corridos — CR-25/CR-26", () => {
-    const result = getDueDatesFromFirstPayment("2026-01-01", 4, "MONTHLY").map(
+  it("vence el mismo día de cada mes calendario (ancla día 24)", () => {
+    const result = getDueDatesFromFirstPayment("2026-01-24", 4, "MONTHLY").map(
       toKey,
     );
 
     expect(result).toEqual([
-      "2026-01-01",
+      "2026-01-24",
+      "2026-02-24",
+      "2026-03-24",
+      "2026-04-24",
+    ]);
+  });
+
+  it("recorta al último día del mes cuando el ancla (31) no existe en el mes destino", () => {
+    const result = getDueDatesFromFirstPayment("2026-01-31", 4, "MONTHLY").map(
+      toKey,
+    );
+
+    expect(result).toEqual([
       "2026-01-31",
-      "2026-03-02",
-      "2026-04-01",
+      "2026-02-28",
+      "2026-03-31",
+      "2026-04-30",
     ]);
   });
 
