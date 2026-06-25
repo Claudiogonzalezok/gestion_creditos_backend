@@ -5,7 +5,7 @@ jest.mock("../../config/db", () => ({
 const queries = require("./payments.queries");
 
 describe("payments.queries", () => {
-  it("reprograma cuotas mensuales adelantadas cada 30 días corridos — CR-24/CR-26", async () => {
+  it("reprograma cuotas mensuales adelantadas por mes calendario (1 month)", async () => {
     const client = { query: jest.fn().mockResolvedValue({ rows: [] }) };
 
     await queries.shiftInstallmentDates(
@@ -17,7 +17,7 @@ describe("payments.queries", () => {
 
     expect(client.query).toHaveBeenCalledWith(
       expect.stringContaining("$2::interval"),
-      ["credit-1", "30 days", "2026-01-01"],
+      ["credit-1", "1 month", "2026-01-01"],
     );
   });
 });
