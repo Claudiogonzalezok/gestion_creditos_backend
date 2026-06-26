@@ -259,14 +259,18 @@ const generateInstallments = async (
   dueDates,
   paymentFrequency,
 ) => {
+  const rows = [];
   for (let i = 0; i < dueDates.length; i++) {
-    await client.query(
+    const r = await client.query(
       `INSERT INTO installments
          (credit_id, installment_number, due_date, amount_due, original_amount, payment_frequency)
-       VALUES ($1, $2, $3, $4, $4, $5)`,
+       VALUES ($1, $2, $3, $4, $4, $5)
+       RETURNING id, installment_number, amount_due::float8`,
       [creditId, i + 1, dueDates[i], installmentAmount, paymentFrequency],
     );
+    rows.push(r.rows[0]);
   }
+  return rows;
 };
 
 /**
@@ -371,25 +375,6 @@ const expireOldCredits = async (days) => {
     [days],
   );
   return r.rowCount;
-};
-
-/**
- * Marca las primeras N cuotas de un crédito como PAID al momento de la aprobación.
- * Se usa cuando el cliente adelantó cuotas al contratar; las cuotas restantes se corren en fecha.
- * @param {object} client - Cliente de transacción.
- * @param {string} creditId
- * @param {number} count - Cantidad de cuotas a marcar como pagadas desde la número 1.
- * @returns {Promise<number>} Suma total de amount_due de las cuotas marcadas.
- */
-const markPrepaidInstallments = async (client, creditId, count) => {
-  const r = await client.query(
-    `UPDATE installments
-     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
-     WHERE credit_id = $1 AND installment_number <= $2
-     RETURNING amount_due::float8`,
-    [creditId, count],
-  );
-  return r.rows.reduce((sum, row) => sum + row.amount_due, 0);
 };
 
 /**
@@ -915,7 +900,6 @@ module.exports = {
   generateInstallments,
   createCommission,
   createDownPayment,
-  markPrepaidInstallments,
   getPendingInstallments,
   settleAllInstallments,
   settleCredit,

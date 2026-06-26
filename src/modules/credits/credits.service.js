@@ -1,3 +1,4 @@
+const { randomUUID } = require("crypto");
 const pool = require("../../config/db");
 const queries = require("./credits.queries");
 const irQueries = require("../interestRates/interestRates.queries");
@@ -911,7 +912,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       }
     }
 
-    await queries.generateInstallments(
+    const generatedInstallments = await queries.generateInstallments(
       client,
       id,
       totalInstallment,
@@ -921,26 +922,39 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
     if (credit.prepaid_installments > 0) {
       const n = credit.prepaid_installments;
-      const prepaidTotal = await queries.markPrepaidInstallments(client, id, n);
-      const prepaidPayment = resolveStoredSplitForFinalAmount({
+      // Cuotas adelantadas YA resueltas (recién creadas en esta misma tx): se
+      // pasan al servicio de payments sin re-consultar ni lockear la base.
+      const prepaidInstallments = generatedInstallments
+        .filter((i) => i.installment_number <= n)
+        .map((i) => ({ id: i.id, amountDue: i.amount_due }));
+      const prepaidTotal = round2(
+        prepaidInstallments.reduce((sum, i) => sum + i.amountDue, 0),
+      );
+      const prepaidSplit = resolveStoredSplitForFinalAmount({
         amount: prepaidTotal,
         cash: credit.prepaid_installments_cash,
         transfer: credit.prepaid_installments_transfer,
         method: credit.prepaid_installments_method,
       });
-      await queries.createDownPayment(client, {
-        creditId: id,
-        amount: prepaidTotal,
-        amountCash: prepaidPayment.amountCash,
-        amountTransfer: prepaidPayment.amountTransfer,
-        paymentMethod: prepaidPayment.paymentMethod,
+
+      // Unificación de trazabilidad: cada cuota adelantada se registra como un
+      // cobro APROBADO en `payments` (única fuente de verdad de la fecha de
+      // cobro = approved_at), imputado a la caja activa y agrupado por batch_id.
+      // Ya NO se crea un credit_down_payments PREPAID_INSTALLMENT — los registros
+      // históricos siguen funcionando igual (caja y reportes). El servicio valida
+      // que la suma de los pagos coincida con el adelanto o aborta la tx.
+      const batchId = randomUUID();
+      await paymentsService.generatePrepaidInstallmentPayments(client, {
+        installments: prepaidInstallments,
+        amountCash: prepaidSplit.amountCash,
+        amountTransfer: prepaidSplit.amountTransfer,
         transferReference:
           credit.prepaid_installments_transfer_reference || null,
-        approvedBy: adminId,
-        paymentType: "PREPAID_INSTALLMENT",
-        registerDate,
+        adminId,
         cashSessionId: activeCashSessionId,
+        batchId,
       });
+
       // Correr las fechas de las cuotas pendientes: la primera no-pagada toma
       // el lugar de la cuota 1 (first_payment_date), la siguiente la fecha de
       // la cuota 2, etc. Reusa el helper de payments.queries que ya se usa
