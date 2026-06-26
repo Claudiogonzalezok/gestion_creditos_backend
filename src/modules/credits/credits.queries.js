@@ -292,6 +292,32 @@ const generateInstallments = async (
 };
 
 /**
+ * Fija el vencimiento de las primeras N cuotas (las adelantadas) a la fecha de
+ * aprobación del crédito. Se usa solo al aprobar una venta con cuotas adelantadas:
+ * esas cuotas se cancelan en el acto, así que vencen ese día. Preserva
+ * original_due_date (la fecha que tenían en el plan) para auditoría.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} creditId
+ * @param {number} count - Cantidad de cuotas adelantadas desde la número 1.
+ * @param {string|Date} approvalDate - Fecha de aprobación (vencimiento a fijar).
+ */
+const setPrepaidInstallmentsDueDate = async (
+  client,
+  creditId,
+  count,
+  approvalDate,
+) => {
+  await client.query(
+    `UPDATE installments
+       SET original_due_date = COALESCE(original_due_date, due_date),
+           due_date          = $3,
+           updated_at        = NOW()
+     WHERE credit_id = $1 AND installment_number <= $2`,
+    [creditId, count, approvalDate],
+  );
+};
+
+/**
  * Registra una comisión PENDING para el vendedor al aprobar una venta (tipo SALE).
  * @param {object} client - Cliente de transacción.
  * @param {string} userId - ID del vendedor.
@@ -916,6 +942,7 @@ module.exports = {
   saveHistoricalRate,
   approve,
   generateInstallments,
+  setPrepaidInstallmentsDueDate,
   createCommission,
   createDownPayment,
   getPendingInstallments,
