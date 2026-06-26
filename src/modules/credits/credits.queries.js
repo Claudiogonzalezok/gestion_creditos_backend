@@ -292,28 +292,25 @@ const generateInstallments = async (
 };
 
 /**
- * Fija el vencimiento de las primeras N cuotas (las adelantadas) a la fecha de
+ * Fija el vencimiento de las primeras N cuotas (las adelantadas) al día real de
  * aprobación del crédito. Se usa solo al aprobar una venta con cuotas adelantadas:
- * esas cuotas se cancelan en el acto, así que vencen ese día. Preserva
+ * esas cuotas se cancelan en el acto, así que vencen ese día. Usa CURRENT_DATE
+ * (NO la fecha de la jornada, que puede ir atrasada si la caja anterior sigue
+ * abierta): dentro de la misma transacción coincide con approved_at::date del
+ * pago, así vencimiento y fecha de cobro quedan en el mismo día. Preserva
  * original_due_date (la fecha que tenían en el plan) para auditoría.
  * @param {object} client - Cliente de transacción.
  * @param {string} creditId
  * @param {number} count - Cantidad de cuotas adelantadas desde la número 1.
- * @param {string|Date} approvalDate - Fecha de aprobación (vencimiento a fijar).
  */
-const setPrepaidInstallmentsDueDate = async (
-  client,
-  creditId,
-  count,
-  approvalDate,
-) => {
+const setPrepaidInstallmentsDueDate = async (client, creditId, count) => {
   await client.query(
     `UPDATE installments
        SET original_due_date = COALESCE(original_due_date, due_date),
-           due_date          = $3,
+           due_date          = CURRENT_DATE,
            updated_at        = NOW()
      WHERE credit_id = $1 AND installment_number <= $2`,
-    [creditId, count, approvalDate],
+    [creditId, count],
   );
 };
 

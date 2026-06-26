@@ -955,10 +955,11 @@ const approve = async (id, adminId, newInstallmentsCount) => {
         batchId,
       });
 
-      // Las cuotas adelantadas vencen el día de la aprobación (se cancelan en ese
-      // acto). Conserva original_due_date para auditar la fecha que tenían en el
-      // plan. No afecta el corrimiento de abajo (solo toca las PAID).
-      await queries.setPrepaidInstallmentsDueDate(client, id, n, registerDate);
+      // Las cuotas adelantadas vencen el día real de la aprobación (CURRENT_DATE,
+      // que coincide con approved_at::date del pago en esta misma tx). Conserva
+      // original_due_date para auditar la fecha que tenían en el plan. No afecta
+      // el corrimiento de abajo (solo toca las cuotas PAID adelantadas).
+      await queries.setPrepaidInstallmentsDueDate(client, id, n);
 
       // Correr las fechas de las cuotas pendientes: la primera no-pagada toma
       // el lugar de la cuota 1 (first_payment_date), la siguiente la fecha de
