@@ -585,7 +585,7 @@ const findPaymentsByCredit = async (creditId) => {
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
             p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.is_reversal,
-            p.reversal_reason, p.admin_direct, p.notes,
+            p.reversal_reason, p.admin_direct, p.notes, p.generation_type,
             p.created_at, p.approved_at, p.approved_by,
             p.parent_payment_id, p.reversed_by_payment_id,
             i.installment_number, i.amount_due::float8, i.due_date,
