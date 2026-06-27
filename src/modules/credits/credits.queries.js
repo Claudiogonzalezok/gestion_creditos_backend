@@ -292,6 +292,26 @@ const generateInstallments = async (
 };
 
 /**
+ * Reasigna el vendedor (created_by) de un crédito SOLO si sigue PENDING_APPROVAL.
+ * El guard de status en el WHERE es el candado final contra cambios post-aprobación
+ * (defensa ante carreras). created_by sigue siendo la única fuente de verdad del
+ * vendedor; comisiones y reportes derivan de él sin cambios.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} creditId
+ * @param {string} sellerId - Nuevo vendedor.
+ * @returns {Promise<number>} Filas afectadas (1 si se actualizó, 0 si ya no estaba pendiente).
+ */
+const updateCreditSeller = async (client, creditId, sellerId) => {
+  const r = await client.query(
+    `UPDATE credits
+       SET created_by = $1, updated_at = NOW()
+     WHERE id = $2 AND status = 'PENDING_APPROVAL'`,
+    [sellerId, creditId],
+  );
+  return r.rowCount;
+};
+
+/**
  * Fija el vencimiento de las primeras N cuotas (las adelantadas) al día real de
  * aprobación del crédito. Se usa solo al aprobar una venta con cuotas adelantadas:
  * esas cuotas se cancelan en el acto, así que vencen ese día. Usa CURRENT_DATE
@@ -940,6 +960,7 @@ module.exports = {
   approve,
   generateInstallments,
   setPrepaidInstallmentsDueDate,
+  updateCreditSeller,
   createCommission,
   createDownPayment,
   getPendingInstallments,
