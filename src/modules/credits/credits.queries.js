@@ -90,10 +90,28 @@ const findById = async (id) => {
     credit.units = units.rows;
   }
 
+  // La fecha de cobro NO se almacena en installments: se DERIVA del último pago
+  // aprobado de la cuota (única fuente de verdad = payments.approved_at). El
+  // LEFT JOIN LATERAL resuelve fecha, origen (generation_type) y forma de pago en
+  // UNA sola query (sin N+1 ni SELECT por cuota).
   const inst = await pool.query(
-    `SELECT id, installment_number, due_date, original_due_date,
-            amount_due::float8, amount_paid::float8, penalty_amount::float8, status
-     FROM installments WHERE credit_id = $1 ORDER BY installment_number`,
+    `SELECT i.id, i.installment_number, i.due_date, i.original_due_date,
+            i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
+            lp.approved_at  AS paid_at,
+            lp.generation_type,
+            lp.payment_method AS paid_method
+     FROM installments i
+     LEFT JOIN LATERAL (
+       SELECT p.approved_at, p.generation_type, p.payment_method
+       FROM payments p
+       WHERE p.installment_id = i.id
+         AND p.status = 'APPROVED'
+         AND p.is_reversal = FALSE
+       ORDER BY p.approved_at DESC
+       LIMIT 1
+     ) lp ON TRUE
+     WHERE i.credit_id = $1
+     ORDER BY i.installment_number`,
     [id],
   );
   credit.installments = inst.rows;
@@ -259,14 +277,41 @@ const generateInstallments = async (
   dueDates,
   paymentFrequency,
 ) => {
+  const rows = [];
   for (let i = 0; i < dueDates.length; i++) {
-    await client.query(
+    const r = await client.query(
       `INSERT INTO installments
          (credit_id, installment_number, due_date, amount_due, original_amount, payment_frequency)
-       VALUES ($1, $2, $3, $4, $4, $5)`,
+       VALUES ($1, $2, $3, $4, $4, $5)
+       RETURNING id, installment_number, amount_due::float8`,
       [creditId, i + 1, dueDates[i], installmentAmount, paymentFrequency],
     );
+    rows.push(r.rows[0]);
   }
+  return rows;
+};
+
+/**
+ * Fija el vencimiento de las primeras N cuotas (las adelantadas) al día real de
+ * aprobación del crédito. Se usa solo al aprobar una venta con cuotas adelantadas:
+ * esas cuotas se cancelan en el acto, así que vencen ese día. Usa CURRENT_DATE
+ * (NO la fecha de la jornada, que puede ir atrasada si la caja anterior sigue
+ * abierta): dentro de la misma transacción coincide con approved_at::date del
+ * pago, así vencimiento y fecha de cobro quedan en el mismo día. Preserva
+ * original_due_date (la fecha que tenían en el plan) para auditoría.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} creditId
+ * @param {number} count - Cantidad de cuotas adelantadas desde la número 1.
+ */
+const setPrepaidInstallmentsDueDate = async (client, creditId, count) => {
+  await client.query(
+    `UPDATE installments
+       SET original_due_date = COALESCE(original_due_date, due_date),
+           due_date          = CURRENT_DATE,
+           updated_at        = NOW()
+     WHERE credit_id = $1 AND installment_number <= $2`,
+    [creditId, count],
+  );
 };
 
 /**
@@ -371,25 +416,6 @@ const expireOldCredits = async (days) => {
     [days],
   );
   return r.rowCount;
-};
-
-/**
- * Marca las primeras N cuotas de un crédito como PAID al momento de la aprobación.
- * Se usa cuando el cliente adelantó cuotas al contratar; las cuotas restantes se corren en fecha.
- * @param {object} client - Cliente de transacción.
- * @param {string} creditId
- * @param {number} count - Cantidad de cuotas a marcar como pagadas desde la número 1.
- * @returns {Promise<number>} Suma total de amount_due de las cuotas marcadas.
- */
-const markPrepaidInstallments = async (client, creditId, count) => {
-  const r = await client.query(
-    `UPDATE installments
-     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
-     WHERE credit_id = $1 AND installment_number <= $2
-     RETURNING amount_due::float8`,
-    [creditId, count],
-  );
-  return r.rows.reduce((sum, row) => sum + row.amount_due, 0);
 };
 
 /**
@@ -913,9 +939,9 @@ module.exports = {
   saveHistoricalRate,
   approve,
   generateInstallments,
+  setPrepaidInstallmentsDueDate,
   createCommission,
   createDownPayment,
-  markPrepaidInstallments,
   getPendingInstallments,
   settleAllInstallments,
   settleCredit,

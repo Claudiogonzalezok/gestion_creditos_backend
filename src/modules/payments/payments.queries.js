@@ -401,12 +401,12 @@ const markInstallmentAsPrepaid = async (
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
         payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, parent_payment_id)
+        status, approved_by, approved_at, notes, parent_payment_id, generation_type)
      SELECT id, $1,
             (amount_due - amount_paid),
             ROUND((amount_due - amount_paid) * $7, 2),
             (amount_due - amount_paid) - ROUND((amount_due - amount_paid) * $7, 2),
-            $2, $3, 'APPROVED', $1, NOW(), $4, $6
+            $2, $3, 'APPROVED', $1, NOW(), $4, $6, 'ADVANCE_DISTRIBUTION'
       FROM installments WHERE id = $5`,
     [
       adminId,
@@ -422,6 +422,57 @@ const markInstallmentAsPrepaid = async (
   await client.query(
     `UPDATE installments
       SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
+     WHERE id = $1`,
+    [installmentId],
+  );
+};
+
+/**
+ * Registra un pago APROBADO por una cuota adelantada AL APROBAR la venta y deja
+ * la cuota en el mismo estado que un cobro normal (PAID, amount_paid = amount_due,
+ * penalty intacta). Recibe la cuota YA resuelta por el flujo de aprobación: no
+ * re-consulta ni lockea, porque la misma transacción que la creó ya la posee de
+ * forma exclusiva. Imputa a la caja activa vía cash_session_id (el dinero se
+ * recibe al aprobar) y agrupa la operación con batch_id para trazabilidad futura.
+ * @param {object} client - Cliente de transacción.
+ * @param {object} data - installmentId, amountReceived, amountCash, amountTransfer,
+ *   paymentMethod, transferReference, adminId, cashSessionId, batchId.
+ */
+const createApprovalPrepaymentPayment = async (
+  client,
+  {
+    installmentId,
+    amountReceived,
+    amountCash,
+    amountTransfer,
+    paymentMethod,
+    transferReference = null,
+    adminId,
+    cashSessionId = null,
+    batchId,
+  },
+) => {
+  await client.query(
+    `INSERT INTO payments
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+        payment_method, transfer_reference,
+        status, approved_by, approved_at, generation_type, cash_session_id, batch_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), 'APPROVAL_PREPAYMENT', $8, $9)`,
+    [
+      installmentId,
+      adminId,
+      amountReceived,
+      amountCash,
+      amountTransfer,
+      paymentMethod,
+      transferReference || null,
+      cashSessionId || null,
+      batchId,
+    ],
+  );
+  await client.query(
+    `UPDATE installments
+       SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
      WHERE id = $1`,
     [installmentId],
   );
@@ -534,7 +585,7 @@ const findPaymentsByCredit = async (creditId) => {
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
             p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.is_reversal,
-            p.reversal_reason, p.admin_direct, p.notes,
+            p.reversal_reason, p.admin_direct, p.notes, p.generation_type,
             p.created_at, p.approved_at, p.approved_by,
             p.parent_payment_id, p.reversed_by_payment_id,
             i.installment_number, i.amount_due::float8, i.due_date,
@@ -617,6 +668,7 @@ module.exports = {
   getPendingInstallmentsFrom,
   shiftInstallmentDates,
   markInstallmentAsPrepaid,
+  createApprovalPrepaymentPayment,
   createApproved,
   createReversal,
   findChildPayments,

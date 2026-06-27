@@ -932,6 +932,113 @@ const reverse = async (id, reason, adminId) => {
   return queries.findById(id);
 };
 
+/**
+ * Genera los pagos APROBADOS de las cuotas adelantadas de una venta AL APROBAR,
+ * dentro de la transacción que recibe. Es la pieza reutilizable de generación de
+ * pagos por adelanto: recibe las cuotas YA resueltas por el proceso llamador
+ * (no re-consulta ni lockea la base, porque la misma tx ya las posee) y deja cada
+ * cuota en el mismo estado que un cobro normal. Mantiene `payments` desacoplado de
+ * la lógica de `credits`: solo conoce cuotas (id + monto) y datos de pago.
+ *
+ * Valida, dentro de la misma tx, que la suma de los pagos generados coincida
+ * EXACTAMENTE con el monto total del adelanto; ante cualquier diferencia lanza
+ * para abortar toda la operación (rollback en el llamador).
+ *
+ * @param {object} client - Cliente de transacción (la tx la maneja el llamador).
+ * @param {object} params
+ * @param {Array<{id: string, amountDue: number}>} params.installments - Cuotas a prepagar, resueltas.
+ * @param {number} params.amountCash - Total en efectivo del adelanto.
+ * @param {number} params.amountTransfer - Total en transferencia del adelanto.
+ * @param {string|null} [params.transferReference] - Referencia de transferencia.
+ * @param {string} params.adminId - Admin que aprueba.
+ * @param {string|null} [params.cashSessionId] - Caja activa a la que se imputa.
+ * @param {string} params.batchId - Identificador de la operación (agrupa los pagos).
+ * @returns {Promise<{ total: number, count: number, batchId: string }>}
+ */
+const generatePrepaidInstallmentPayments = async (
+  client,
+  {
+    installments,
+    amountCash,
+    amountTransfer,
+    transferReference = null,
+    adminId,
+    cashSessionId = null,
+    batchId,
+  },
+) => {
+  if (!Array.isArray(installments) || installments.length === 0) {
+    throw { status: 400, message: "No hay cuotas adelantadas para registrar." };
+  }
+
+  const blockCash = _round2(amountCash || 0);
+  const blockTransfer = _round2(amountTransfer || 0);
+  const blockTotal = _round2(blockCash + blockTransfer);
+  const expectedTotal = _round2(
+    installments.reduce((sum, i) => sum + Number(i.amountDue), 0),
+  );
+
+  // El split de pago del adelanto debe coincidir con el total de las cuotas.
+  if (blockTotal !== expectedTotal) {
+    throw {
+      status: 409,
+      message:
+        "El monto del adelanto no coincide con el total de las cuotas adelantadas.",
+    };
+  }
+
+  const cashRatio = blockTotal > 0 ? blockCash / blockTotal : 0;
+
+  let assignedCash = 0;
+  let assignedReceived = 0;
+
+  for (let idx = 0; idx < installments.length; idx++) {
+    const inst = installments[idx];
+    const amountReceived = _round2(Number(inst.amountDue));
+    const isLast = idx === installments.length - 1;
+
+    // Prorrateo del medio por cuota; el resto de redondeo se asigna a la última
+    // para que la suma de efectivo/transferencia cuadre EXACTO con el bloque.
+    const instCash = isLast
+      ? _round2(blockCash - assignedCash)
+      : _round2(amountReceived * cashRatio);
+    const instTransfer = _round2(amountReceived - instCash);
+
+    assignedCash = _round2(assignedCash + instCash);
+    assignedReceived = _round2(assignedReceived + amountReceived);
+
+    const paymentMethod =
+      instCash > 0 && instTransfer > 0
+        ? "MIXED"
+        : instTransfer > 0
+          ? "TRANSFER"
+          : "CASH";
+
+    await queries.createApprovalPrepaymentPayment(client, {
+      installmentId: inst.id,
+      amountReceived,
+      amountCash: instCash,
+      amountTransfer: instTransfer,
+      paymentMethod,
+      transferReference,
+      adminId,
+      cashSessionId,
+      batchId,
+    });
+  }
+
+  // Validación transaccional final: la suma de los pagos generados === total.
+  if (assignedReceived !== expectedTotal) {
+    throw {
+      status: 409,
+      message:
+        "La suma de los pagos de cuotas adelantadas no coincide con el monto del adelanto.",
+    };
+  }
+
+  return { total: expectedTotal, count: installments.length, batchId };
+};
+
 module.exports = {
   getAll,
   getById,
@@ -941,6 +1048,7 @@ module.exports = {
   getByCredit,
   adminDirect,
   reverse,
+  generatePrepaidInstallmentPayments,
   // Núcleo exportado para reutilización en nuevos flujos
   _validateCajaOpen,
   _applyPaymentToInstallments,
