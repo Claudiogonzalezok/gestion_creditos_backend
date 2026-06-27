@@ -4,6 +4,7 @@ const queries = require("./credits.queries");
 const irQueries = require("../interestRates/interestRates.queries");
 const prQueries = require("../productRates/productRates.queries");
 const puQueries = require("../productUnits/productUnits.queries");
+const usersQueries = require("../users/users.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
 const { localDate } = require("../../utils/date");
@@ -1029,6 +1030,50 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   return sanitizeCredit(await queries.findById(id));
 };
 
+/**
+ * Reasigna el vendedor de un crédito ANTES de aprobarlo. El vendedor que figure
+ * al aprobar es el oficial (la comisión lee created_by en vivo). created_by es la
+ * única fuente de verdad: no se crea historial ni estructuras nuevas; comisiones,
+ * reportes y filtros derivan de él sin cambios.
+ * @param {string} creditId
+ * @param {string} sellerId - Nuevo vendedor (rol SELLER o SELLER_COLLECTOR).
+ * @param {string} adminId - Admin que ejecuta el cambio.
+ * @returns {Promise<object>} Crédito actualizado.
+ */
+const changeSeller = async (creditId, sellerId, adminId) => {
+  const credit = await queries.findById(creditId);
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (credit.status !== "PENDING_APPROVAL")
+    throw {
+      status: 409,
+      message: "Solo se puede cambiar el vendedor antes de aprobar el crédito.",
+    };
+  if (credit.created_by === sellerId)
+    throw { status: 409, message: "El crédito ya pertenece a ese vendedor." };
+
+  const seller = await usersQueries.findById(sellerId);
+  if (!seller || seller.status !== "ACTIVE")
+    throw { status: 404, message: "El vendedor no existe o está inactivo." };
+  if (!["SELLER", "SELLER_COLLECTOR"].includes(seller.role))
+    throw {
+      status: 400,
+      message: "El usuario seleccionado no tiene rol de vendedor.",
+    };
+
+  await withTransaction(async (client) => {
+    const updated = await queries.updateCreditSeller(client, creditId, sellerId);
+    // Guard final contra carreras: si dejó de estar PENDING_APPROVAL, no se tocó.
+    if (updated === 0)
+      throw {
+        status: 409,
+        message:
+          "Solo se puede cambiar el vendedor antes de aprobar el crédito.",
+      };
+  });
+
+  return sanitizeCredit(await queries.findById(creditId));
+};
+
 const reject = async (id, rejectionReason, adminId) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: "Crédito no encontrado." };
@@ -1760,6 +1805,7 @@ module.exports = {
   simulate,
   simulateAll,
   approve,
+  changeSeller,
   reject,
   earlySettlement,
   refinance,

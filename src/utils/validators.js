@@ -584,6 +584,12 @@ const credits = {
       .isLength({ min: 5, max: 500 })
       .withMessage("El motivo debe tener entre 5 y 500 caracteres."),
   ],
+  changeSeller: [
+    isUUIDParam("id", "El ID de crédito"),
+    body("seller_id")
+      .isUUID()
+      .withMessage("El ID de vendedor debe ser un UUID válido."),
+  ],
   earlySettlement: [
     isUUIDParam("id", "El ID de crédito"),
     body("amount_cash")

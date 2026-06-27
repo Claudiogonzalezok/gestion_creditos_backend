@@ -171,6 +171,22 @@ const approve = async (req, res) => {
   }
 };
 
+const changeSeller = async (req, res) => {
+  try {
+    const credit = await service.changeSeller(
+      req.params.id,
+      req.body.seller_id,
+      req.user.id,
+    );
+    return response.success(res, credit, "Vendedor actualizado.");
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 400) return response.badRequest(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const reject = async (req, res) => {
   try {
     await service.reject(req.params.id, req.body.rejection_reason, req.user.id);
@@ -282,6 +298,7 @@ module.exports = {
   simulate,
   simulateAll,
   approve,
+  changeSeller,
   reject,
   earlySettlement,
   refinance,

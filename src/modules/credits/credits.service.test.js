@@ -10,6 +10,11 @@ jest.mock("./credits.queries", () => ({
   saveHistoricalRate: jest.fn(),
   createDownPayment: jest.fn(),
   createCommission: jest.fn(),
+  updateCreditSeller: jest.fn(),
+}));
+
+jest.mock("../users/users.queries", () => ({
+  findById: jest.fn(),
 }));
 
 jest.mock("../interestRates/interestRates.queries", () => ({
@@ -58,6 +63,7 @@ const queries = require("./credits.queries");
 const irQueries = require("../interestRates/interestRates.queries");
 const prQueries = require("../productRates/productRates.queries");
 const puQueries = require("../productUnits/productUnits.queries");
+const usersQueries = require("../users/users.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
 const businessDaysQueries = require("../businessDays/businessDays.queries");
@@ -255,5 +261,89 @@ describe("credits.service holiday integration", () => {
         cashSessionId: "cash-session-1",
       }),
     );
+  });
+});
+
+describe("credits.service changeSeller", () => {
+  const client = { query: jest.fn() };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    withTransaction.mockImplementation(async (callback) => callback(client));
+  });
+
+  const pendingCredit = {
+    id: "credit-1",
+    status: "PENDING_APPROVAL",
+    created_by: "seller-old",
+  };
+  const validSeller = { id: "seller-new", role: "SELLER", status: "ACTIVE" };
+
+  it("reasigna created_by cuando todo es válido y el crédito está pendiente", async () => {
+    queries.findById
+      .mockResolvedValueOnce(pendingCredit) // lectura inicial
+      .mockResolvedValueOnce({ ...pendingCredit, created_by: "seller-new" }); // retorno final
+    usersQueries.findById.mockResolvedValue(validSeller);
+    queries.updateCreditSeller.mockResolvedValue(1);
+
+    await service.changeSeller("credit-1", "seller-new", "admin-1");
+
+    expect(queries.updateCreditSeller).toHaveBeenCalledWith(
+      client,
+      "credit-1",
+      "seller-new",
+    );
+  });
+
+  it("rechaza (404) si el crédito no existe", async () => {
+    queries.findById.mockResolvedValue(null);
+    await expect(
+      service.changeSeller("x", "seller-new", "admin-1"),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(queries.updateCreditSeller).not.toHaveBeenCalled();
+  });
+
+  it("rechaza (409) si el crédito no está PENDING_APPROVAL", async () => {
+    queries.findById.mockResolvedValue({ ...pendingCredit, status: "ACTIVE" });
+    await expect(
+      service.changeSeller("credit-1", "seller-new", "admin-1"),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(queries.updateCreditSeller).not.toHaveBeenCalled();
+  });
+
+  it("rechaza (409) si el vendedor elegido es el mismo", async () => {
+    queries.findById.mockResolvedValue(pendingCredit);
+    await expect(
+      service.changeSeller("credit-1", "seller-old", "admin-1"),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(usersQueries.findById).not.toHaveBeenCalled();
+    expect(queries.updateCreditSeller).not.toHaveBeenCalled();
+  });
+
+  it("rechaza (404) si el vendedor no existe o está inactivo", async () => {
+    queries.findById.mockResolvedValue(pendingCredit);
+    usersQueries.findById.mockResolvedValue({ ...validSeller, status: "INACTIVE" });
+    await expect(
+      service.changeSeller("credit-1", "seller-new", "admin-1"),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(queries.updateCreditSeller).not.toHaveBeenCalled();
+  });
+
+  it("rechaza (400) si el usuario no tiene rol de vendedor", async () => {
+    queries.findById.mockResolvedValue(pendingCredit);
+    usersQueries.findById.mockResolvedValue({ ...validSeller, role: "COLLECTOR" });
+    await expect(
+      service.changeSeller("credit-1", "seller-new", "admin-1"),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(queries.updateCreditSeller).not.toHaveBeenCalled();
+  });
+
+  it("rechaza (409) si el UPDATE no afecta filas (dejó de estar pendiente bajo carrera)", async () => {
+    queries.findById.mockResolvedValue(pendingCredit);
+    usersQueries.findById.mockResolvedValue(validSeller);
+    queries.updateCreditSeller.mockResolvedValue(0);
+    await expect(
+      service.changeSeller("credit-1", "seller-new", "admin-1"),
+    ).rejects.toMatchObject({ status: 409 });
   });
 });
