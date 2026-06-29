@@ -7,7 +7,7 @@ const pool = require("../../config/db");
  */
 const findAll = async ({ status, type, customer_id, created_by } = {}) => {
   let q = `
-    SELECT c.id, c.type, c.total_amount::float8, c.installments_count::int, c.payment_frequency,
+    SELECT c.id, c.type, c.payment_condition, c.total_amount::float8, c.installments_count::int, c.payment_frequency,
            c.interest_rate::float8, c.status, c.created_at, c.approved_at,
            cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
            u.id  AS created_by_id, u.full_name AS created_by_name
@@ -45,7 +45,7 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
  */
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT c.id, c.type, c.total_amount::float8, c.down_payment::float8,
+    `SELECT c.id, c.type, c.payment_condition, c.total_amount::float8, c.down_payment::float8,
             c.down_payment_method, c.down_payment_cash::float8, c.down_payment_transfer::float8,
             c.down_payment_transfer_reference,
             c.prepaid_installments::int, c.prepaid_installments_method,
@@ -152,6 +152,7 @@ const create = async (
     customer_id,
     created_by,
     type,
+    payment_condition,
     total_amount,
     down_payment,
     down_payment_method,
@@ -171,12 +172,12 @@ const create = async (
 ) => {
   const r = await client.query(
     `INSERT INTO credits
-       (customer_id, created_by, type, total_amount,
+       (customer_id, created_by, type, payment_condition, total_amount,
          down_payment, down_payment_method, down_payment_cash, down_payment_transfer, down_payment_transfer_reference,
          prepaid_installments, prepaid_installments_method, prepaid_installments_cash, prepaid_installments_transfer, prepaid_installments_transfer_reference,
          installments_count, payment_frequency, first_payment_date, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-       RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING id, type, payment_condition, total_amount::float8, down_payment::float8, down_payment_method,
                  down_payment_cash::float8, down_payment_transfer::float8,
                  down_payment_transfer_reference,
                  prepaid_installments::int, prepaid_installments_method,
@@ -189,6 +190,7 @@ const create = async (
       customer_id,
       created_by,
       type,
+      payment_condition || "FINANCED",
       total_amount,
       down_payment || 0,
       down_payment_method || null,
