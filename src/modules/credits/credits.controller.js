@@ -29,6 +29,7 @@ const create = async (req, res) => {
     const {
       customer_id,
       type,
+      payment_condition,
       total_amount,
       installments_count,
       payment_frequency,
@@ -45,11 +46,18 @@ const create = async (req, res) => {
       prepaid_installments_method,
       prepaid_installments_transfer_reference,
       first_payment_date,
+      // Venta de contado: pago del total declarado al crear.
+      payment_amount,
+      payment_cash,
+      payment_transfer,
+      payment_method,
+      transfer_reference,
     } = req.body;
     const credit = await service.create(
       {
         customer_id,
         type,
+        payment_condition,
         total_amount,
         installments_count,
         payment_frequency,
@@ -66,6 +74,11 @@ const create = async (req, res) => {
         prepaid_installments_method,
         prepaid_installments_transfer_reference,
         first_payment_date,
+        payment_amount,
+        payment_cash,
+        payment_transfer,
+        payment_method,
+        transfer_reference,
       },
       req.user,
     );
