@@ -270,6 +270,9 @@ const customers = {
       max: 150,
       required: false,
     }),
+    // El DNI es editable solo por Admin (la ruta PUT ya es ADMIN-only). Opcional:
+    // si no viene, no se modifica.
+    isDni("dni", false),
     isPhone(false),
     isEmail(false),
     body("address")
