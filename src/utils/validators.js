@@ -319,6 +319,10 @@ const credits = {
   create: [
     isUUID("customer_id", "El cliente"),
     isEnum("type", "El tipo de crédito", ["SALE", "LOAN"]),
+    body("payment_condition")
+      .optional()
+      .isIn(["FINANCED", "CASH"])
+      .withMessage("La condición de pago debe ser FINANCED o CASH."),
     // LOAN requiere total_amount; para SALE se calcula de los productos
     body("total_amount")
       .if(body("type").equals("LOAN"))
@@ -332,14 +336,16 @@ const credits = {
           );
         return true;
       }),
+    // En contado no hay cuotas ni frecuencia: el servicio fuerza 1 cuota y una
+    // frecuencia sentinel. Por eso ambos son obligatorios solo si NO es contado.
     body("installments_count")
+      .if((val, { req }) => req.body.payment_condition !== "CASH")
       .isInt({ min: 1, max: 120 })
       .withMessage("La cantidad de cuotas debe ser un número entre 1 y 120."),
-    isEnum("payment_frequency", "La frecuencia de pago", [
-      "WEEKLY",
-      "BIWEEKLY",
-      "MONTHLY",
-    ]),
+    body("payment_frequency")
+      .if((val, { req }) => req.body.payment_condition !== "CASH")
+      .isIn(["WEEKLY", "BIWEEKLY", "MONTHLY"])
+      .withMessage("La frecuencia de pago debe ser WEEKLY, BIWEEKLY o MONTHLY."),
     body("unit_ids")
       .if(body("type").equals("SALE"))
       .isArray({ min: 1 })
@@ -436,6 +442,49 @@ const credits = {
       .withMessage(
         "La referencia del adelanto no puede superar los 100 caracteres.",
       ),
+    // ── Venta de contado: pago del total al aprobar (split declarado al crear) ──
+    body("payment_amount")
+      .optional({ nullable: true })
+      .custom((val) => {
+        if (val == null) return true;
+        const n = parseFloat(val);
+        if (isNaN(n) || n <= 0)
+          throw new Error("El pago de contado debe ser un número mayor a 0.");
+        return true;
+      }),
+    body("payment_cash")
+      .optional({ nullable: true })
+      .custom((val) => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0)
+          throw new Error(
+            "El pago en efectivo debe ser un número mayor o igual a 0.",
+          );
+        return true;
+      }),
+    body("payment_transfer")
+      .optional({ nullable: true })
+      .custom((val) => {
+        const n = parseFloat(val);
+        if (isNaN(n) || n < 0)
+          throw new Error(
+            "El pago por transferencia debe ser un número mayor o igual a 0.",
+          );
+        return true;
+      }),
+    body("payment_method")
+      .optional()
+      .isIn(["CASH", "TRANSFER", "MIXED"])
+      .withMessage(
+        "El método de pago de contado debe ser CASH, TRANSFER o MIXED.",
+      ),
+    body("transfer_reference")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ max: 100 })
+      .withMessage(
+        "La referencia de transferencia no puede superar los 100 caracteres.",
+      ),
     body("notes")
       .optional({ nullable: true, checkFalsy: true })
       .trim()
@@ -444,6 +493,30 @@ const credits = {
     body().custom((b) => {
       const has = (v) =>
         v !== undefined && v !== null && String(v).trim() !== "";
+
+      // ── Venta de contado ──────────────────────────────────────
+      // Solo aplica a SALE y exige el pago del total (efectivo y/o
+      // transferencia). No usa enganche ni cuotas adelantadas.
+      if (b.payment_condition === "CASH") {
+        if (b.type !== "SALE")
+          throw new Error(
+            "La venta de contado solo aplica a operaciones de tipo SALE.",
+          );
+        const payCash = parseFloat(b.payment_cash || 0);
+        const payTransfer = parseFloat(b.payment_transfer || 0);
+        const payAmount = parseFloat(b.payment_amount || 0);
+        const declaredSplit = payCash + payTransfer;
+        if (!(declaredSplit > 0) && !(payAmount > 0))
+          throw new Error(
+            "Debés indicar el pago de la venta de contado (efectivo y/o transferencia).",
+          );
+        if (declaredSplit <= 0 && payAmount > 0 && !has(b.payment_method))
+          throw new Error(
+            "El método de pago de la venta de contado es obligatorio.",
+          );
+        return true;
+      }
+
       const downCash = parseFloat(b.down_payment_cash || 0);
       const downTransfer = parseFloat(b.down_payment_transfer || 0);
       const downSplitTotal = downCash + downTransfer;
