@@ -17,11 +17,21 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
              c.interest_rate,
              (SELECT MAX(cp.historical_rate) FROM credit_products cp WHERE cp.credit_id = c.id)
            )::float8 AS effective_rate,
+           -- Total a devolver = plan contractual (suma de original_amount, sin
+           -- punitorios), excluyendo cuotas anuladas por cambio de plan. Si la
+           -- operación no tiene cuotas (pendiente de aprobación) queda NULL → el
+           -- front muestra "—".
+           (SELECT SUM(i.original_amount)
+              FROM installments i
+             WHERE i.credit_id = c.id
+               AND i.status <> 'PLAN_CHANGE_CANCELLED')::float8 AS total_to_return,
            cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
-           u.id  AS created_by_id, u.full_name AS created_by_name
+           u.id   AS created_by_id,  u.full_name   AS created_by_name,
+           col.id AS collector_id,   col.full_name AS collector_name
     FROM credits c
     JOIN customers cu ON cu.id = c.customer_id
-    LEFT JOIN users u ON u.id = c.created_by
+    LEFT JOIN users u   ON u.id   = c.created_by
+    LEFT JOIN users col ON col.id = cu.assigned_collector_id
     WHERE 1=1`;
   const params = [];
   if (status) {
