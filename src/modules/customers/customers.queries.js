@@ -239,19 +239,20 @@ const create = async ({ full_name, dni, address, phone, email, assigned_collecto
   return result.rows[0];
 };
 
-const update = async (id, { full_name, address, phone, email, assigned_collector_id }) => {
+const update = async (id, { full_name, dni, address, phone, email, assigned_collector_id }) => {
   const result = await pool.query(
     `UPDATE customers
      SET full_name             = COALESCE($1, full_name),
-         address               = COALESCE($2, address),
-         phone                 = COALESCE($3, phone),
-         email                 = COALESCE($4, email),
-         assigned_collector_id = COALESCE($5, assigned_collector_id),
+         dni                   = COALESCE($2, dni),
+         address               = COALESCE($3, address),
+         phone                 = COALESCE($4, phone),
+         email                 = COALESCE($5, email),
+         assigned_collector_id = COALESCE($6, assigned_collector_id),
          updated_at            = NOW()
-     WHERE id = $6
+     WHERE id = $7
      RETURNING id, full_name, dni, address, phone, email,
                status, assigned_collector_id, updated_at`,
-    [full_name, address, phone, email, assigned_collector_id, id]
+    [full_name, dni, address, phone, email, assigned_collector_id, id]
   );
   return result.rows[0] || null;
 };
