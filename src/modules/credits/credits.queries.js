@@ -7,13 +7,31 @@ const pool = require("../../config/db");
  */
 const findAll = async ({ status, type, customer_id, created_by } = {}) => {
   let q = `
-    SELECT c.id, c.type, c.total_amount::float8, c.installments_count::int, c.payment_frequency,
+    SELECT c.id, c.type, c.payment_condition, c.total_amount::float8, c.installments_count::int, c.payment_frequency,
            c.interest_rate::float8, c.status, c.created_at, c.approved_at,
+           -- Tasa efectiva para listados: LOAN la tiene en credits.interest_rate;
+           -- en SALE financiada queda NULL ahí y se congela por producto en
+           -- credit_products.historical_rate (SALE = 1 producto → MAX representa el valor).
+           -- Contado y operaciones sin aprobar quedan NULL (no tienen tasa aún).
+           COALESCE(
+             c.interest_rate,
+             (SELECT MAX(cp.historical_rate) FROM credit_products cp WHERE cp.credit_id = c.id)
+           )::float8 AS effective_rate,
+           -- Total a devolver = plan contractual (suma de original_amount, sin
+           -- punitorios), excluyendo cuotas anuladas por cambio de plan. Si la
+           -- operación no tiene cuotas (pendiente de aprobación) queda NULL → el
+           -- front muestra "—".
+           (SELECT SUM(i.original_amount)
+              FROM installments i
+             WHERE i.credit_id = c.id
+               AND i.status <> 'PLAN_CHANGE_CANCELLED')::float8 AS total_to_return,
            cu.id AS customer_id, cu.full_name AS customer_name, cu.dni AS customer_dni,
-           u.id  AS created_by_id, u.full_name AS created_by_name
+           u.id   AS created_by_id,  u.full_name   AS created_by_name,
+           col.id AS collector_id,   col.full_name AS collector_name
     FROM credits c
     JOIN customers cu ON cu.id = c.customer_id
-    LEFT JOIN users u ON u.id = c.created_by
+    LEFT JOIN users u   ON u.id   = c.created_by
+    LEFT JOIN users col ON col.id = cu.assigned_collector_id
     WHERE 1=1`;
   const params = [];
   if (status) {
@@ -45,7 +63,7 @@ const findAll = async ({ status, type, customer_id, created_by } = {}) => {
  */
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT c.id, c.type, c.total_amount::float8, c.down_payment::float8,
+    `SELECT c.id, c.type, c.payment_condition, c.total_amount::float8, c.down_payment::float8,
             c.down_payment_method, c.down_payment_cash::float8, c.down_payment_transfer::float8,
             c.down_payment_transfer_reference,
             c.prepaid_installments::int, c.prepaid_installments_method,
@@ -90,10 +108,28 @@ const findById = async (id) => {
     credit.units = units.rows;
   }
 
+  // La fecha de cobro NO se almacena en installments: se DERIVA del último pago
+  // aprobado de la cuota (única fuente de verdad = payments.approved_at). El
+  // LEFT JOIN LATERAL resuelve fecha, origen (generation_type) y forma de pago en
+  // UNA sola query (sin N+1 ni SELECT por cuota).
   const inst = await pool.query(
-    `SELECT id, installment_number, due_date, original_due_date,
-            amount_due::float8, amount_paid::float8, penalty_amount::float8, status
-     FROM installments WHERE credit_id = $1 ORDER BY installment_number`,
+    `SELECT i.id, i.installment_number, i.due_date, i.original_due_date,
+            i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
+            lp.approved_at  AS paid_at,
+            lp.generation_type,
+            lp.payment_method AS paid_method
+     FROM installments i
+     LEFT JOIN LATERAL (
+       SELECT p.approved_at, p.generation_type, p.payment_method
+       FROM payments p
+       WHERE p.installment_id = i.id
+         AND p.status = 'APPROVED'
+         AND p.is_reversal = FALSE
+       ORDER BY p.approved_at DESC
+       LIMIT 1
+     ) lp ON TRUE
+     WHERE i.credit_id = $1
+     ORDER BY i.installment_number`,
     [id],
   );
   credit.installments = inst.rows;
@@ -134,6 +170,7 @@ const create = async (
     customer_id,
     created_by,
     type,
+    payment_condition,
     total_amount,
     down_payment,
     down_payment_method,
@@ -153,12 +190,12 @@ const create = async (
 ) => {
   const r = await client.query(
     `INSERT INTO credits
-       (customer_id, created_by, type, total_amount,
+       (customer_id, created_by, type, payment_condition, total_amount,
          down_payment, down_payment_method, down_payment_cash, down_payment_transfer, down_payment_transfer_reference,
          prepaid_installments, prepaid_installments_method, prepaid_installments_cash, prepaid_installments_transfer, prepaid_installments_transfer_reference,
          installments_count, payment_frequency, first_payment_date, notes)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-       RETURNING id, type, total_amount::float8, down_payment::float8, down_payment_method,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+       RETURNING id, type, payment_condition, total_amount::float8, down_payment::float8, down_payment_method,
                  down_payment_cash::float8, down_payment_transfer::float8,
                  down_payment_transfer_reference,
                  prepaid_installments::int, prepaid_installments_method,
@@ -171,6 +208,7 @@ const create = async (
       customer_id,
       created_by,
       type,
+      payment_condition || "FINANCED",
       total_amount,
       down_payment || 0,
       down_payment_method || null,
@@ -259,14 +297,61 @@ const generateInstallments = async (
   dueDates,
   paymentFrequency,
 ) => {
+  const rows = [];
   for (let i = 0; i < dueDates.length; i++) {
-    await client.query(
+    const r = await client.query(
       `INSERT INTO installments
          (credit_id, installment_number, due_date, amount_due, original_amount, payment_frequency)
-       VALUES ($1, $2, $3, $4, $4, $5)`,
+       VALUES ($1, $2, $3, $4, $4, $5)
+       RETURNING id, installment_number, amount_due::float8`,
       [creditId, i + 1, dueDates[i], installmentAmount, paymentFrequency],
     );
+    rows.push(r.rows[0]);
   }
+  return rows;
+};
+
+/**
+ * Reasigna el vendedor (created_by) de un crédito SOLO si sigue PENDING_APPROVAL.
+ * El guard de status en el WHERE es el candado final contra cambios post-aprobación
+ * (defensa ante carreras). created_by sigue siendo la única fuente de verdad del
+ * vendedor; comisiones y reportes derivan de él sin cambios.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} creditId
+ * @param {string} sellerId - Nuevo vendedor.
+ * @returns {Promise<number>} Filas afectadas (1 si se actualizó, 0 si ya no estaba pendiente).
+ */
+const updateCreditSeller = async (client, creditId, sellerId) => {
+  const r = await client.query(
+    `UPDATE credits
+       SET created_by = $1, updated_at = NOW()
+     WHERE id = $2 AND status = 'PENDING_APPROVAL'`,
+    [sellerId, creditId],
+  );
+  return r.rowCount;
+};
+
+/**
+ * Fija el vencimiento de las primeras N cuotas (las adelantadas) al día real de
+ * aprobación del crédito. Se usa solo al aprobar una venta con cuotas adelantadas:
+ * esas cuotas se cancelan en el acto, así que vencen ese día. Usa CURRENT_DATE
+ * (NO la fecha de la jornada, que puede ir atrasada si la caja anterior sigue
+ * abierta): dentro de la misma transacción coincide con approved_at::date del
+ * pago, así vencimiento y fecha de cobro quedan en el mismo día. Preserva
+ * original_due_date (la fecha que tenían en el plan) para auditoría.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} creditId
+ * @param {number} count - Cantidad de cuotas adelantadas desde la número 1.
+ */
+const setPrepaidInstallmentsDueDate = async (client, creditId, count) => {
+  await client.query(
+    `UPDATE installments
+       SET original_due_date = COALESCE(original_due_date, due_date),
+           due_date          = CURRENT_DATE,
+           updated_at        = NOW()
+     WHERE credit_id = $1 AND installment_number <= $2`,
+    [creditId, count],
+  );
 };
 
 /**
@@ -371,25 +456,6 @@ const expireOldCredits = async (days) => {
     [days],
   );
   return r.rowCount;
-};
-
-/**
- * Marca las primeras N cuotas de un crédito como PAID al momento de la aprobación.
- * Se usa cuando el cliente adelantó cuotas al contratar; las cuotas restantes se corren en fecha.
- * @param {object} client - Cliente de transacción.
- * @param {string} creditId
- * @param {number} count - Cantidad de cuotas a marcar como pagadas desde la número 1.
- * @returns {Promise<number>} Suma total de amount_due de las cuotas marcadas.
- */
-const markPrepaidInstallments = async (client, creditId, count) => {
-  const r = await client.query(
-    `UPDATE installments
-     SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
-     WHERE credit_id = $1 AND installment_number <= $2
-     RETURNING amount_due::float8`,
-    [creditId, count],
-  );
-  return r.rows.reduce((sum, row) => sum + row.amount_due, 0);
 };
 
 /**
@@ -913,9 +979,10 @@ module.exports = {
   saveHistoricalRate,
   approve,
   generateInstallments,
+  setPrepaidInstallmentsDueDate,
+  updateCreditSeller,
   createCommission,
   createDownPayment,
-  markPrepaidInstallments,
   getPendingInstallments,
   settleAllInstallments,
   settleCredit,

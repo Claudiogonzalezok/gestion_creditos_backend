@@ -16,7 +16,36 @@ const parseLocalDateInput = (value) => {
 };
 
 /**
+ * Suma meses calendario conservando el día del mes del ancla.
+ * Si el mes destino es más corto que el día ancla (ej. 31 sobre febrero), se
+ * recorta al último día de ese mes (clamp), igual que `date + interval '1 month'`
+ * en PostgreSQL. Así el cálculo en JS y el de SQL (shiftInstallmentDates)
+ * coinciden exactamente.
+ * @param {Date} baseDate - Fecha ancla.
+ * @param {number} periods - Cantidad de meses a sumar.
+ * @returns {Date} Fecha desplazada con día ancla preservado o recortado.
+ */
+const addMonthsClamped = (baseDate, periods) => {
+  const day = baseDate.getDate();
+  const due = new Date(
+    baseDate.getFullYear(),
+    baseDate.getMonth() + periods,
+    1,
+    12,
+    0,
+    0,
+    0,
+  );
+  // 0 días del mes siguiente = último día del mes destino.
+  const lastDay = new Date(due.getFullYear(), due.getMonth() + 1, 0).getDate();
+  due.setDate(Math.min(day, lastDay));
+  return due;
+};
+
+/**
  * Aplica el avance de período para una frecuencia de pago sobre una fecha base.
+ * MENSUAL avanza por mes calendario (mismo día de cada mes), no por 30 días
+ * corridos: si se ancla un día 24, todas las cuotas vencen el 24.
  * @param {Date} baseDate - Fecha desde la cual se aplica el desplazamiento.
  * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
  * @param {number} periods - Cantidad de períodos a mover.
@@ -32,8 +61,7 @@ const addFrequencyPeriods = (baseDate, frequency, periods) => {
     due.setDate(baseDate.getDate() + 14 * periods);
     return due;
   }
-  due.setDate(baseDate.getDate() + 30 * periods);
-  return due;
+  return addMonthsClamped(baseDate, periods);
 };
 
 /**

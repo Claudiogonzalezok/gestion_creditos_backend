@@ -50,8 +50,8 @@ const create = async (req, res) => {
 // PUT /api/customers/:id
 const update = async (req, res) => {
   try {
-    const { full_name, address, phone, email, assigned_collector_id } = req.body;
-    const customer = await service.update(req.params.id, { full_name, address, phone, email, assigned_collector_id });
+    const { full_name, dni, address, phone, email, assigned_collector_id } = req.body;
+    const customer = await service.update(req.params.id, { full_name, dni, address, phone, email, assigned_collector_id });
     return response.success(res, customer, 'Cliente actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

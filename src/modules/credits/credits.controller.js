@@ -29,6 +29,7 @@ const create = async (req, res) => {
     const {
       customer_id,
       type,
+      payment_condition,
       total_amount,
       installments_count,
       payment_frequency,
@@ -45,11 +46,18 @@ const create = async (req, res) => {
       prepaid_installments_method,
       prepaid_installments_transfer_reference,
       first_payment_date,
+      // Venta de contado: pago del total declarado al crear.
+      payment_amount,
+      payment_cash,
+      payment_transfer,
+      payment_method,
+      transfer_reference,
     } = req.body;
     const credit = await service.create(
       {
         customer_id,
         type,
+        payment_condition,
         total_amount,
         installments_count,
         payment_frequency,
@@ -66,6 +74,11 @@ const create = async (req, res) => {
         prepaid_installments_method,
         prepaid_installments_transfer_reference,
         first_payment_date,
+        payment_amount,
+        payment_cash,
+        payment_transfer,
+        payment_method,
+        transfer_reference,
       },
       req.user,
     );
@@ -167,6 +180,22 @@ const approve = async (req, res) => {
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const changeSeller = async (req, res) => {
+  try {
+    const credit = await service.changeSeller(
+      req.params.id,
+      req.body.seller_id,
+      req.user.id,
+    );
+    return response.success(res, credit, "Vendedor actualizado.");
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 400) return response.badRequest(res, err.message);
     return response.serverError(res, err);
   }
 };
@@ -282,6 +311,7 @@ module.exports = {
   simulate,
   simulateAll,
   approve,
+  changeSeller,
   reject,
   earlySettlement,
   refinance,

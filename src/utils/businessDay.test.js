@@ -21,11 +21,12 @@ describe('businessDay utils', () => {
     expect(toDateKey(new Date(2026, 0, 5, 10, 30))).toBe('2026-01-05');
   });
 
-  it('detecta solo el domingo como dia de la semana no laborable', () => {
-    // Decision de negocio (2026-06): sabado opera con normalidad, solo
-    // domingo se considera no laborable a efectos de correr vencimientos.
+  it('no considera ningun dia de la semana como no laborable', () => {
+    // Decision de negocio (2026-06): ningun dia de semana corre el vencimiento;
+    // la cuota vence el dia que le toca aunque caiga domingo. Solo los feriados
+    // declarados pueden correr una fecha.
     expect(isWeekend(new Date(2026, 0, 10))).toBe(false); // sabado → habil
-    expect(isWeekend(new Date(2026, 0, 11))).toBe(true);  // domingo → no habil
+    expect(isWeekend(new Date(2026, 0, 11))).toBe(false); // domingo → habil
     expect(isWeekend(new Date(2026, 0, 12))).toBe(false); // lunes  → habil
   });
 
@@ -39,31 +40,31 @@ describe('businessDay utils', () => {
     expect(toDateKey(result)).toBe('2026-05-05');
   });
 
-  it('salta domingo y feriados encadenados hasta el próximo día hábil', () => {
-    // 2026-05-01 (vie, feriado) → 2026-05-02 sabado HABIL ahora → 2026-05-02
-    const holidayKeys = new Set(['2026-05-01']);
-    const result = moveToNextBusinessDay(new Date(2026, 4, 1), holidayKeys);
-    expect(toDateKey(result)).toBe('2026-05-02');
+  it('corre un feriado al próximo día no feriado (aunque sea domingo)', () => {
+    // 2026-05-02 (sabado, feriado) → 2026-05-03 (domingo, NO feriado → habil)
+    const holidayKeys = new Set(['2026-05-02']);
+    const result = moveToNextBusinessDay(new Date(2026, 4, 2), holidayKeys);
+    expect(toDateKey(result)).toBe('2026-05-03');
   });
 
-  it('salta domingo + feriado del lunes al martes habil', () => {
-    // 2026-05-03 (dom, no habil) → 2026-05-04 (lun, feriado) → 2026-05-05 (mar)
-    const holidayKeys = new Set(['2026-05-04']);
-    const result = moveToNextBusinessDay(new Date(2026, 4, 3), holidayKeys);
-    expect(toDateKey(result)).toBe('2026-05-05');
+  it('encadena feriados consecutivos hasta el primer día no feriado', () => {
+    // 2026-05-04 (feriado) → 2026-05-05 (feriado) → 2026-05-06 (no feriado)
+    const holidayKeys = new Set(['2026-05-04', '2026-05-05']);
+    const result = moveToNextBusinessDay(new Date(2026, 4, 4), holidayKeys);
+    expect(toDateKey(result)).toBe('2026-05-06');
   });
 
-  it('ajusta en lote varias fechas al próximo día hábil', () => {
-    // Con sabado habil:
-    //   · 1/5 vie feriado    → 2/5 sabado habil
-    //   · 2/5 sabado          → 2/5 sigue habil
-    //   · 5/5 mar             → 5/5 sigue habil
+  it('ajusta en lote solo las fechas que caen en feriado', () => {
+    // Sin corrimiento por fin de semana, solo feriados mueven:
+    //   · 1/5 feriado → 2/5 (no feriado)
+    //   · 3/5 domingo, no feriado → 3/5 (intacto)
+    //   · 4/5 feriado → 5/5 (no feriado)
     const result = adjustDueDatesToBusinessDays(
-      [new Date(2026, 4, 1), new Date(2026, 4, 2), new Date(2026, 4, 5)],
+      [new Date(2026, 4, 1), new Date(2026, 4, 3), new Date(2026, 4, 4)],
       new Set(['2026-05-01', '2026-05-04']),
     ).map(toDateKey);
 
-    expect(result).toEqual(['2026-05-02', '2026-05-02', '2026-05-05']);
+    expect(result).toEqual(['2026-05-02', '2026-05-03', '2026-05-05']);
   });
 
   it('consulta feriados activos del rango y devuelve claves normalizadas', async () => {

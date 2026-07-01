@@ -40,6 +40,9 @@ router.patch('/:id/approve',
 router.patch('/:id/reject',
   authorize('ADMIN'), v.credits.reject, validate, controller.reject
 );
+router.patch('/:id/seller',
+  authorize('ADMIN'), v.credits.changeSeller, validate, controller.changeSeller
+);
 router.patch('/:id/early-settlement',
   authorize('ADMIN'), v.credits.earlySettlement, validate, controller.earlySettlement
 );

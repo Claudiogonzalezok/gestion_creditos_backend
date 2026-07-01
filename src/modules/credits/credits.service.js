@@ -1,8 +1,10 @@
+const { randomUUID } = require("crypto");
 const pool = require("../../config/db");
 const queries = require("./credits.queries");
 const irQueries = require("../interestRates/interestRates.queries");
 const prQueries = require("../productRates/productRates.queries");
 const puQueries = require("../productUnits/productUnits.queries");
+const usersQueries = require("../users/users.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
 const { localDate } = require("../../utils/date");
@@ -434,83 +436,131 @@ const create = async (data, requestingUser) => {
           message: `La unidad "${unit.title}" (ID: ${unitId}) no está disponible (estado: ${unit.status}).`,
         };
 
-      // Verificar tasa para el producto padre de esta variante
-      const rateRecord = await prQueries.findActiveRate(
-        unit.product_id,
-        data.payment_frequency,
-        data.installments_count,
-        client,
-      );
-      if (!rateRecord)
-        throw {
-          status: 409,
-          message: `No existe tasa configurada para "${unit.title}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
-        };
+      // Verificar tasa para el producto padre de esta variante. La venta de
+      // contado no se financia (no hay interés), así que NO requiere tasa.
+      if (data.payment_condition !== "CASH") {
+        const rateRecord = await prQueries.findActiveRate(
+          unit.product_id,
+          data.payment_frequency,
+          data.installments_count,
+          client,
+        );
+        if (!rateRecord)
+          throw {
+            status: 409,
+            message: `No existe tasa configurada para "${unit.title}" con ${data.installments_count} cuotas ${data.payment_frequency}.`,
+          };
+      }
 
       totalAmount += unit.current_price;
       priceByUnit.set(unitId, unit.current_price);
       titleByUnit.set(unitId, unit.title);
     }
 
-    const downPaymentSplit = normalizeCreditIntake({
-      total: data.down_payment,
-      cash: data.down_payment_cash,
-      transfer: data.down_payment_transfer,
-      method: data.down_payment_method,
-    });
-    const downPayment = downPaymentSplit.amount;
-    const prepaidSplit = normalizeCreditIntake({
-      total: 0,
-      cash: data.prepaid_installments_cash,
-      transfer: data.prepaid_installments_transfer,
-      method: data.prepaid_installments_method,
-    });
-    const prepaidInstallments = parseInt(data.prepaid_installments || 0, 10);
-    // El monto adelantado se conoce solo al aprobar (depende de la tasa), por eso
-    // normalizeCreditIntake recibe total:0 acá — pero eso anula el método elegido
-    // porque su rama "sin split" descarta method cuando amount es 0. Forzamos a
-    // persistir el método declarado en el alta para no perderlo antes de aprobar.
-    const prepaidPaymentMethod =
-      prepaidInstallments > 0
-        ? prepaidSplit.paymentMethod ||
-          data.prepaid_installments_method ||
-          "CASH"
-        : prepaidSplit.paymentMethod;
-    if (downPayment >= totalAmount)
-      throw {
-        status: 400,
-        message:
-          "El enganche no puede ser igual o mayor al monto total del crédito.",
-      };
-    if (prepaidInstallments >= data.installments_count)
-      throw {
-        status: 400,
-        message:
-          "Las cuotas adelantadas deben ser menores a la cantidad total de cuotas.",
-      };
+    let creditData;
+    if (data.payment_condition === "CASH") {
+      // ── Venta de CONTADO ─────────────────────────────────────────
+      // El precio total se cobra de una vez al aprobar. El vendedor declara el
+      // split (efectivo/transferencia/mixto) al crear, igual que en la venta
+      // financiada. Se persiste en prepaid_installments_* porque el cobro lo
+      // procesa el mecanismo de cuotas prepagas al aprobar; prepaid_installments
+      // queda en 0 (respeta su CHECK < installments_count). El marcador real es
+      // payment_condition='CASH'. No se usa tasa, frecuencia ni cronograma:
+      // installments_count=1 y la frecuencia es un sentinel inerte.
+      const saleSplit = normalizeCreditIntake({
+        total: data.payment_amount,
+        cash: data.payment_cash,
+        transfer: data.payment_transfer,
+        method: data.payment_method,
+      });
+      if (saleSplit.amount !== round2(totalAmount))
+        throw {
+          status: 400,
+          message:
+            "El detalle de pago (efectivo/transferencia) no coincide con el total de la venta de contado.",
+        };
 
-    const credit = await queries.create(client, {
-      customer_id: data.customer_id,
-      created_by: requestingUser.id,
-      type: "SALE",
-      total_amount: totalAmount,
-      down_payment: downPayment,
-      down_payment_method: downPaymentSplit.paymentMethod,
-      down_payment_cash: downPaymentSplit.amountCash,
-      down_payment_transfer: downPaymentSplit.amountTransfer,
-      down_payment_transfer_reference:
-        data.down_payment_transfer_reference || null,
-      prepaid_installments: prepaidInstallments,
-      prepaid_installments_method: prepaidPaymentMethod,
-      prepaid_installments_cash: prepaidSplit.amountCash,
-      prepaid_installments_transfer: prepaidSplit.amountTransfer,
-      prepaid_installments_transfer_reference:
-        data.prepaid_installments_transfer_reference || null,
-      installments_count: data.installments_count,
-      payment_frequency: data.payment_frequency,
-      first_payment_date: data.first_payment_date,
-      notes: data.notes,
-    });
+      creditData = {
+        customer_id: data.customer_id,
+        created_by: requestingUser.id,
+        type: "SALE",
+        payment_condition: "CASH",
+        total_amount: totalAmount,
+        down_payment: 0,
+        prepaid_installments: 0,
+        prepaid_installments_method: saleSplit.paymentMethod,
+        prepaid_installments_cash: saleSplit.amountCash,
+        prepaid_installments_transfer: saleSplit.amountTransfer,
+        prepaid_installments_transfer_reference: data.transfer_reference || null,
+        installments_count: 1,
+        payment_frequency: "WEEKLY",
+        first_payment_date: localDate(new Date()),
+        notes: data.notes,
+      };
+    } else {
+      // ── Venta FINANCIADA ─────────────────────────────────────────
+      const downPaymentSplit = normalizeCreditIntake({
+        total: data.down_payment,
+        cash: data.down_payment_cash,
+        transfer: data.down_payment_transfer,
+        method: data.down_payment_method,
+      });
+      const downPayment = downPaymentSplit.amount;
+      const prepaidSplit = normalizeCreditIntake({
+        total: 0,
+        cash: data.prepaid_installments_cash,
+        transfer: data.prepaid_installments_transfer,
+        method: data.prepaid_installments_method,
+      });
+      const prepaidInstallments = parseInt(data.prepaid_installments || 0, 10);
+      // El monto adelantado se conoce solo al aprobar (depende de la tasa), por eso
+      // normalizeCreditIntake recibe total:0 acá — pero eso anula el método elegido
+      // porque su rama "sin split" descarta method cuando amount es 0. Forzamos a
+      // persistir el método declarado en el alta para no perderlo antes de aprobar.
+      const prepaidPaymentMethod =
+        prepaidInstallments > 0
+          ? prepaidSplit.paymentMethod ||
+            data.prepaid_installments_method ||
+            "CASH"
+          : prepaidSplit.paymentMethod;
+      if (downPayment >= totalAmount)
+        throw {
+          status: 400,
+          message:
+            "El enganche no puede ser igual o mayor al monto total del crédito.",
+        };
+      if (prepaidInstallments >= data.installments_count)
+        throw {
+          status: 400,
+          message:
+            "Las cuotas adelantadas deben ser menores a la cantidad total de cuotas.",
+        };
+
+      creditData = {
+        customer_id: data.customer_id,
+        created_by: requestingUser.id,
+        type: "SALE",
+        total_amount: totalAmount,
+        down_payment: downPayment,
+        down_payment_method: downPaymentSplit.paymentMethod,
+        down_payment_cash: downPaymentSplit.amountCash,
+        down_payment_transfer: downPaymentSplit.amountTransfer,
+        down_payment_transfer_reference:
+          data.down_payment_transfer_reference || null,
+        prepaid_installments: prepaidInstallments,
+        prepaid_installments_method: prepaidPaymentMethod,
+        prepaid_installments_cash: prepaidSplit.amountCash,
+        prepaid_installments_transfer: prepaidSplit.amountTransfer,
+        prepaid_installments_transfer_reference:
+          data.prepaid_installments_transfer_reference || null,
+        installments_count: data.installments_count,
+        payment_frequency: data.payment_frequency,
+        first_payment_date: data.first_payment_date,
+        notes: data.notes,
+      };
+    }
+
+    const credit = await queries.create(client, creditData);
 
     // Vincular unidades al crédito (precio congelado del SELECT bajo lock) y
     // hacer la transición AVAILABLE → RESERVED con guard SQL: si por alguna
@@ -818,6 +868,102 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     return sanitizeCredit(await queries.findById(id));
   }
 
+  // ── SALE de CONTADO ──────────────────────────────────────────
+  // No se financia: nace SETTLED con una sola cuota cobrada al instante. El
+  // cobro se registra como pago APROBADO imputado a la caja activa, reusando el
+  // mecanismo de cuotas prepagas. Stock y comisión idénticos a la venta
+  // financiada. El resto del flujo financiero (cuotas reales, cobranzas, mora,
+  // tasas) queda fuera por el estado SETTLED + cuota PAID, sin tocarse.
+  if (credit.payment_condition === "CASH") {
+    const creditUnits = await queries.findCreditUnits(id);
+    if (!creditUnits.length)
+      throw { status: 409, message: "El crédito no tiene unidades asociadas." };
+    for (const u of creditUnits) {
+      if (u.unit_status !== "RESERVED")
+        throw {
+          status: 409,
+          message: `La unidad del producto "${u.title}" ya no está disponible (estado: ${u.unit_status}).`,
+        };
+    }
+
+    const totalBase = parseFloat(credit.total_amount);
+    // Split declarado al crear (guardado en prepaid_installments_*). Se valida
+    // que sume exactamente el total de la venta o se aborta la aprobación.
+    const saleSplit = resolveStoredSplitForFinalAmount({
+      amount: totalBase,
+      cash: credit.prepaid_installments_cash,
+      transfer: credit.prepaid_installments_transfer,
+      method: credit.prepaid_installments_method,
+    });
+
+    await withTransaction(async (client) => {
+      const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+      const activeSession =
+        await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+      if (!activeSession)
+        throw {
+          status: 409,
+          message:
+            "No hay caja operativa abierta. Abrí una caja para aprobar una venta de contado.",
+          code: "NO_ACTIVE_SESSION",
+        };
+
+      // Aprobar sin tasa, con una única cuota.
+      await queries.approve(client, id, adminId, null, 1);
+
+      // La única cuota vale el precio total (sin interés). Se fija su
+      // vencimiento a CURRENT_DATE (coincide con approved_at::date del pago en
+      // esta misma tx).
+      const generated = await queries.generateInstallments(
+        client,
+        id,
+        totalBase,
+        [new Date()],
+        credit.payment_frequency,
+      );
+      await queries.setPrepaidInstallmentsDueDate(client, id, 1);
+
+      // Cobro de la cuota: pago APROBADO imputado a la caja activa (mismo
+      // mecanismo que las cuotas adelantadas), agrupado por batch_id.
+      const batchId = randomUUID();
+      await paymentsService.generatePrepaidInstallmentPayments(client, {
+        installments: generated.map((i) => ({
+          id: i.id,
+          amountDue: i.amount_due,
+        })),
+        amountCash: saleSplit.amountCash,
+        amountTransfer: saleSplit.amountTransfer,
+        transferReference:
+          credit.prepaid_installments_transfer_reference || null,
+        adminId,
+        cashSessionId: activeSession.id,
+        batchId,
+      });
+
+      // Unidades vendidas.
+      const unitIds = creditUnits.map((u) => u.unit_id);
+      await puQueries.updateStatusBulk(client, unitIds, "SOLD");
+
+      // Comisión: igual que la venta financiada (total × tasa de comisión).
+      if (credit.created_by) {
+        const commissionAmount = totalBase * commissionRate;
+        await queries.createCommission(
+          client,
+          credit.created_by,
+          id,
+          commissionAmount,
+          week_start,
+          week_end,
+        );
+      }
+
+      // Saldada en el acto: la única cuota quedó PAID.
+      await queries.settleCredit(client, id);
+    });
+
+    return sanitizeCredit(await queries.findById(id));
+  }
+
   // ── SALE ─────────────────────────────────────────────────────
   const creditUnits = await queries.findCreditUnits(id);
   if (!creditUnits.length)
@@ -911,7 +1057,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       }
     }
 
-    await queries.generateInstallments(
+    const generatedInstallments = await queries.generateInstallments(
       client,
       id,
       totalInstallment,
@@ -921,26 +1067,45 @@ const approve = async (id, adminId, newInstallmentsCount) => {
 
     if (credit.prepaid_installments > 0) {
       const n = credit.prepaid_installments;
-      const prepaidTotal = await queries.markPrepaidInstallments(client, id, n);
-      const prepaidPayment = resolveStoredSplitForFinalAmount({
+      // Cuotas adelantadas YA resueltas (recién creadas en esta misma tx): se
+      // pasan al servicio de payments sin re-consultar ni lockear la base.
+      const prepaidInstallments = generatedInstallments
+        .filter((i) => i.installment_number <= n)
+        .map((i) => ({ id: i.id, amountDue: i.amount_due }));
+      const prepaidTotal = round2(
+        prepaidInstallments.reduce((sum, i) => sum + i.amountDue, 0),
+      );
+      const prepaidSplit = resolveStoredSplitForFinalAmount({
         amount: prepaidTotal,
         cash: credit.prepaid_installments_cash,
         transfer: credit.prepaid_installments_transfer,
         method: credit.prepaid_installments_method,
       });
-      await queries.createDownPayment(client, {
-        creditId: id,
-        amount: prepaidTotal,
-        amountCash: prepaidPayment.amountCash,
-        amountTransfer: prepaidPayment.amountTransfer,
-        paymentMethod: prepaidPayment.paymentMethod,
+
+      // Unificación de trazabilidad: cada cuota adelantada se registra como un
+      // cobro APROBADO en `payments` (única fuente de verdad de la fecha de
+      // cobro = approved_at), imputado a la caja activa y agrupado por batch_id.
+      // Ya NO se crea un credit_down_payments PREPAID_INSTALLMENT — los registros
+      // históricos siguen funcionando igual (caja y reportes). El servicio valida
+      // que la suma de los pagos coincida con el adelanto o aborta la tx.
+      const batchId = randomUUID();
+      await paymentsService.generatePrepaidInstallmentPayments(client, {
+        installments: prepaidInstallments,
+        amountCash: prepaidSplit.amountCash,
+        amountTransfer: prepaidSplit.amountTransfer,
         transferReference:
           credit.prepaid_installments_transfer_reference || null,
-        approvedBy: adminId,
-        paymentType: "PREPAID_INSTALLMENT",
-        registerDate,
+        adminId,
         cashSessionId: activeCashSessionId,
+        batchId,
       });
+
+      // Las cuotas adelantadas vencen el día real de la aprobación (CURRENT_DATE,
+      // que coincide con approved_at::date del pago en esta misma tx). Conserva
+      // original_due_date para auditar la fecha que tenían en el plan. No afecta
+      // el corrimiento de abajo (solo toca las cuotas PAID adelantadas).
+      await queries.setPrepaidInstallmentsDueDate(client, id, n);
+
       // Correr las fechas de las cuotas pendientes: la primera no-pagada toma
       // el lugar de la cuota 1 (first_payment_date), la siguiente la fecha de
       // la cuota 2, etc. Reusa el helper de payments.queries que ya se usa
@@ -1007,6 +1172,50 @@ const approve = async (id, adminId, newInstallmentsCount) => {
   });
 
   return sanitizeCredit(await queries.findById(id));
+};
+
+/**
+ * Reasigna el vendedor de un crédito ANTES de aprobarlo. El vendedor que figure
+ * al aprobar es el oficial (la comisión lee created_by en vivo). created_by es la
+ * única fuente de verdad: no se crea historial ni estructuras nuevas; comisiones,
+ * reportes y filtros derivan de él sin cambios.
+ * @param {string} creditId
+ * @param {string} sellerId - Nuevo vendedor (rol SELLER o SELLER_COLLECTOR).
+ * @param {string} adminId - Admin que ejecuta el cambio.
+ * @returns {Promise<object>} Crédito actualizado.
+ */
+const changeSeller = async (creditId, sellerId, adminId) => {
+  const credit = await queries.findById(creditId);
+  if (!credit) throw { status: 404, message: "Crédito no encontrado." };
+  if (credit.status !== "PENDING_APPROVAL")
+    throw {
+      status: 409,
+      message: "Solo se puede cambiar el vendedor antes de aprobar el crédito.",
+    };
+  if (credit.created_by === sellerId)
+    throw { status: 409, message: "El crédito ya pertenece a ese vendedor." };
+
+  const seller = await usersQueries.findById(sellerId);
+  if (!seller || seller.status !== "ACTIVE")
+    throw { status: 404, message: "El vendedor no existe o está inactivo." };
+  if (!["SELLER", "SELLER_COLLECTOR"].includes(seller.role))
+    throw {
+      status: 400,
+      message: "El usuario seleccionado no tiene rol de vendedor.",
+    };
+
+  await withTransaction(async (client) => {
+    const updated = await queries.updateCreditSeller(client, creditId, sellerId);
+    // Guard final contra carreras: si dejó de estar PENDING_APPROVAL, no se tocó.
+    if (updated === 0)
+      throw {
+        status: 409,
+        message:
+          "Solo se puede cambiar el vendedor antes de aprobar el crédito.",
+      };
+  });
+
+  return sanitizeCredit(await queries.findById(creditId));
 };
 
 const reject = async (id, rejectionReason, adminId) => {
@@ -1740,6 +1949,7 @@ module.exports = {
   simulate,
   simulateAll,
   approve,
+  changeSeller,
   reject,
   earlySettlement,
   refinance,

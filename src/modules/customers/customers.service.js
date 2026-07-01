@@ -151,6 +151,18 @@ const update = async (id, data) => {
   const existing = await queries.findById(id);
   if (!existing) throw { status: 404, message: "Cliente no encontrado." };
 
+  // DNI editable solo por Admin (la ruta PUT ya es ADMIN-only). Si cambia, debe
+  // seguir siendo único entre clientes. OJO: el DNI es el usuario de acceso al
+  // portal; el front avisa al Admin cuando el cliente tiene portal habilitado.
+  if (data.dni && data.dni !== existing.dni) {
+    const other = await queries.findByDni(data.dni);
+    if (other && other.id !== id)
+      throw {
+        status: 409,
+        message: "Ya existe un cliente registrado con ese DNI.",
+      };
+  }
+
   // Validar que el nuevo cobrador asignado tenga rol COLLECTOR
   if (
     data.assigned_collector_id &&
@@ -167,7 +179,6 @@ const update = async (id, data) => {
       };
   }
 
-  // DNI no se puede modificar
   return queries.update(id, data);
 };
 

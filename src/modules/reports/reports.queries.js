@@ -549,7 +549,11 @@ const getCashMovementsReport = async (cashSessionId) => {
        SELECT p.id, 'COBRO' AS type, p.approved_at AS occurred_at,
                p.cash_session_id, p.amount_received::float8 AS amount,
                p.payment_method,
-               'Cobro cuota #' || i.installment_number || ' · ' || c.full_name AS description,
+               CASE
+                 WHEN p.generation_type = 'APPROVAL_PREPAYMENT'
+                 THEN 'Cobro (Cuota adelantada) #' || i.installment_number || ' · ' || c.full_name
+                 ELSE 'Cobro cuota #' || i.installment_number || ' · ' || c.full_name
+               END AS description,
                u.full_name AS performed_by_name,
                p.transfer_reference,
                c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,

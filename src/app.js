@@ -191,6 +191,10 @@ app.use(
 );
 app.use("/api/reports", require("./modules/reports/reports.routes"));
 app.use("/api/portal", require("./modules/portal/portal.routes"));
+app.use(
+  "/api/notifications",
+  require("./modules/notifications/notifications.routes"),
+);
 app.use("/api/admin/cron-logs", require("./modules/cronLogs/cronLogs.routes"));
 
 // ── Rutas de testing (solo E2E, ver guarda en test.routes.js) ──
