@@ -36,7 +36,6 @@ describe("cashRegisterReminder.job", () => {
       expect.objectContaining({
         type: "CASH_REGISTER",
         targetUserIds: ["admin-1"],
-        channels: ["push", "email"],
         entityType: "business_day",
         entityId: "bd-1",
       }),

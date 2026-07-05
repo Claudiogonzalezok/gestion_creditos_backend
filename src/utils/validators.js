@@ -1007,6 +1007,22 @@ const collections = {
     ),
     isBool("skip_if_exists", "La opción de no regenerar si ya existe", false),
   ],
+  generateBatch: [
+    body("collector_ids")
+      .isArray({ min: 1 })
+      .withMessage("collector_ids debe ser un array con al menos un cobrador."),
+    body("collector_ids.*")
+      .isUUID()
+      .withMessage("Cada collector_id debe ser un UUID válido."),
+    isDate("date", "La fecha de cobro"),
+    isEnum(
+      "filter",
+      "El filtro de cuotas",
+      ["TODAY", "OVERDUE", "TODAY_AND_OVERDUE", "ALL_PENDING"],
+      false,
+    ),
+    isBool("skip_if_exists", "La opción de no regenerar si ya existe", false),
+  ],
   id: [isUUIDParam("id", "El ID de planilla")],
 };
 
@@ -1187,7 +1203,6 @@ const NOTIFICATION_TYPE_VALUES = [
   "APPROVAL_REQUEST",
   "CASH_REGISTER",
   "NEW_CUSTOMER",
-  "WEEKLY_REPORT",
 ];
 const notifications = {
   updatePreference: [
@@ -1200,10 +1215,6 @@ const notifications = {
       .optional()
       .isBoolean()
       .withMessage("enabled debe ser booleano."),
-    body("email_enabled")
-      .optional()
-      .isBoolean()
-      .withMessage("email_enabled debe ser booleano."),
     body("frequency")
       .optional()
       .isIn(["INSTANT", "DAILY", "WEEKLY"])

@@ -6,16 +6,15 @@ const NOTIFICATION_TYPES = [
   "APPROVAL_REQUEST",
   "CASH_REGISTER",
   "NEW_CUSTOMER",
-  "WEEKLY_REPORT",
 ];
 
 /**
- * Devuelve las 6 filas de preferencias de notificación (config global V1).
+ * Devuelve las filas de preferencias de notificación (config global V1).
  * @returns {Promise<object[]>}
  */
 const getPreferences = async () => {
   const r = await pool.query(
-    `SELECT type, enabled, email_enabled, frequency, updated_at
+    `SELECT type, enabled, frequency, updated_at
      FROM notification_preferences
      ORDER BY type ASC`,
   );
@@ -30,7 +29,7 @@ const getPreferences = async () => {
  */
 const getPreferenceByType = async (type) => {
   const r = await pool.query(
-    `SELECT type, enabled, email_enabled, frequency, updated_at
+    `SELECT type, enabled, frequency, updated_at
      FROM notification_preferences
      WHERE type = $1`,
     [type],
@@ -41,23 +40,19 @@ const getPreferenceByType = async (type) => {
 /**
  * Actualiza (upsert) la preferencia de un tipo de notificación.
  * @param {string} type
- * @param {{enabled?: boolean, email_enabled?: boolean, frequency?: string}} data
+ * @param {{enabled?: boolean, frequency?: string}} data
  * @returns {Promise<object>} fila actualizada
  */
-const updatePreference = async (
-  type,
-  { enabled, email_enabled, frequency },
-) => {
+const updatePreference = async (type, { enabled, frequency }) => {
   const r = await pool.query(
-    `INSERT INTO notification_preferences (type, enabled, email_enabled, frequency)
-     VALUES ($1, COALESCE($2, TRUE), COALESCE($3, FALSE), COALESCE($4, 'INSTANT'))
+    `INSERT INTO notification_preferences (type, enabled, frequency)
+     VALUES ($1, COALESCE($2, TRUE), COALESCE($3, 'INSTANT'))
      ON CONFLICT (type) DO UPDATE SET
-       enabled       = COALESCE($2, notification_preferences.enabled),
-       email_enabled = COALESCE($3, notification_preferences.email_enabled),
-       frequency     = COALESCE($4, notification_preferences.frequency),
-       updated_at    = NOW()
-     RETURNING type, enabled, email_enabled, frequency, updated_at`,
-    [type, enabled, email_enabled, frequency],
+       enabled    = COALESCE($2, notification_preferences.enabled),
+       frequency  = COALESCE($3, notification_preferences.frequency),
+       updated_at = NOW()
+     RETURNING type, enabled, frequency, updated_at`,
+    [type, enabled, frequency],
   );
   return r.rows[0];
 };
@@ -206,16 +201,6 @@ const getActiveAdminUserIds = async () => {
   return r.rows.map((row) => row.id);
 };
 
-/**
- * Devuelve el email de un usuario por ID, o null si no tiene email registrado.
- * @param {string} userId
- * @returns {Promise<string|null>}
- */
-const getUserEmail = async (userId) => {
-  const r = await pool.query(`SELECT email FROM users WHERE id = $1`, [userId]);
-  return r.rows[0]?.email || null;
-};
-
 module.exports = {
   NOTIFICATION_TYPES,
   getPreferences,
@@ -229,5 +214,4 @@ module.exports = {
   deleteById,
   deleteAllByUser,
   getActiveAdminUserIds,
-  getUserEmail,
 };

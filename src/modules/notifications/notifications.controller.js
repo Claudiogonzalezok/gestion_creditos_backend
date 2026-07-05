@@ -13,7 +13,6 @@ const updatePreference = async (req, res) => {
   try {
     const updated = await service.updatePreference(req.params.type, {
       enabled: req.body.enabled,
-      email_enabled: req.body.email_enabled,
       frequency: req.body.frequency,
     });
     return response.success(

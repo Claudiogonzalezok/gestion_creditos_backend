@@ -11,6 +11,11 @@ const swaggerSpec = require("./config/swagger");
 
 const app = express();
 
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:4200")
+  .split(",")
+  .map((origin) => origin.trim().replace(/\/+$/, ""))
+  .filter(Boolean);
+
 /**
  * Interpreta flags booleanos de entorno con tolerancia a formatos comunes.
  * @param {string | undefined} value Valor crudo de variable de entorno.
@@ -49,7 +54,7 @@ app.use(
 app.use(helmet());
 app.use(
   cors({
-    origin: (process.env.ALLOWED_ORIGINS || "http://localhost:4200").split(","),
+    origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
@@ -189,6 +194,10 @@ app.use(
   "/api/product-categories",
   require("./modules/productCategories/productCategories.routes"),
 );
+app.use(
+  "/api/notifications",
+  require("./modules/notifications/notifications.routes"),
+);
 app.use("/api/reports", require("./modules/reports/reports.routes"));
 app.use("/api/portal", require("./modules/portal/portal.routes"));
 app.use(
@@ -243,6 +252,8 @@ if (require.main === module) {
       require("./jobs/creditExpiry.job").start();
       require("./jobs/weeklyCommissionCycle.job").start();
       require("./jobs/tokenCleanup.job").start();
+      require("./jobs/installmentDueSoon.job").start();
+      require("./jobs/cashRegisterReminder.job").start();
     }
   });
 }

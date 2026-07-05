@@ -1,7 +1,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // Job diario: recordatorio de cierre de caja.
 // Busca business_days con status OPEN a la hora configurada y notifica
-// (push + email best-effort) a los admins activos para que cierren la jornada.
+// (push, best-effort) a los admins activos para que cierren la jornada.
 // ══════════════════════════════════════════════════════════════════════════════
 
 const cron = require("node-cron");
@@ -29,7 +29,6 @@ const checkOpenCashRegisters = () =>
         title: "Recordatorio de cierre de caja",
         message: `La jornada del ${row.business_date} sigue abierta. Recordá cerrar la caja al finalizar el día.`,
         targetUserIds: adminIds,
-        channels: ["push", "email"],
         entityType: "business_day",
         entityId: row.id,
       });

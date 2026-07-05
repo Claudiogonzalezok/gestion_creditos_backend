@@ -42,16 +42,17 @@ describe('L — Cajas (cash_sessions)', () => {
         .rejects.toMatchObject({ status: 409 });
     });
 
-    it('PENDING_RECONCILIATION no bloquea abrir una nueva OPEN del mismo owner', async () => {
+    it('PENDING_RECONCILIATION también bloquea abrir una nueva caja en la misma jornada (V4.6)', async () => {
+      // V4.6 (migración 037): una jornada tiene una sola caja, siempre, sin
+      // importar su status. PENDING_RECONCILIATION ya no es una excepción.
       const u = await createUserFixture({ role: 'ADMIN' });
       const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u));
       await cashSessions.markPending(s1.id, { reason: 'olvido' }, asUser(u));
-      const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u));
-      expect(s2.status).toBe('OPEN');
-      expect(s2.id).not.toBe(s1.id);
+      await expect(cashSessions.open({ opening_amount: 0 }, asUser(u)))
+        .rejects.toMatchObject({ status: 409, code: 'ACTIVE_SESSION_IN_BUSINESS_DAY' });
     });
 
-    it('V4: dos cajas OPEN en paralelo en la misma jornada → 409 (una OPEN por jornada)', async () => {
+    it('V4: dos cajas OPEN en paralelo en la misma jornada → 409 (una sola caja por jornada)', async () => {
       const u1 = await createUserFixture({ role: 'ADMIN' });
       const u2 = await createUserFixture({ role: 'ADMIN' });
       await cashSessions.open({ opening_amount: 0 }, asUser(u1));
@@ -59,22 +60,23 @@ describe('L — Cajas (cash_sessions)', () => {
         .rejects.toMatchObject({ status: 409, code: 'ACTIVE_SESSION_IN_BUSINESS_DAY' });
     });
 
-    it('V4: turnos múltiples secuenciales en la misma jornada', async () => {
-      // Caja A: usuario 1, abre y cierra.
+    it('V4.6: no hay turnos secuenciales — abrir tras cerrar la única caja de la jornada es rechazado', async () => {
+      // Migración 037 reemplazó el índice parcial (027, solo bloqueaba OPEN)
+      // por uno total: una jornada cerrada (su única caja CLOSED) no vuelve
+      // a aceptar aperturas nuevas.
       const u1 = await createUserFixture({ role: 'ADMIN' });
       const s1 = await cashSessions.open({ opening_amount: 0 }, asUser(u1));
       await cashSessions.close(s1.id, {
         declared: [{ payment_method: 'CASH', declared_amount: 0 }],
       }, asUser(u1));
 
-      // Caja B: usuario 2, abre nueva caja DESPUÉS del cierre de A en la misma jornada.
       const u2 = await createUserFixture({ role: 'ADMIN' });
-      const s2 = await cashSessions.open({ opening_amount: 0 }, asUser(u2));
-      expect(s2.business_day_id).toBe(s1.business_day_id);
-      expect(s2.id).not.toBe(s1.id);
-
-      // La jornada estaba en READY_TO_CLOSE tras cerrar s1; al abrir s2 vuelve a OPEN.
-      expect(s2.business_day.status).toBe('OPEN');
+      await expect(cashSessions.open({ opening_amount: 0 }, asUser(u2)))
+        .rejects.toMatchObject({
+          status: 409,
+          code: 'ACTIVE_SESSION_IN_BUSINESS_DAY',
+          existing_session_id: s1.id,
+        });
     });
   });
 

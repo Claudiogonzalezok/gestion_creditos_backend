@@ -1,7 +1,7 @@
 # Sistema de Gestión de Préstamos y Ventas a Crédito
 
 API REST desarrollada con **Node.js + Express + PostgreSQL**.  
-Gestiona el ciclo completo de préstamos en efectivo y ventas de productos a crédito, con flujo de doble control de cobros, liquidación de comisiones, caja diaria y portal público para clientes.
+Gestiona el ciclo completo de préstamos en efectivo y ventas de productos a crédito, con flujo de doble control de cobros, liquidación de comisiones, modelo de caja V4 (jornada + caja operativa + tesorería), y portal público para clientes.
 
 ---
 
@@ -11,7 +11,7 @@ Gestiona el ciclo completo de préstamos en efectivo y ventas de productos a cr�
 | ------------- | -------------------------------- |
 | Runtime       | Node.js 20+                      |
 | Framework     | Express 5                        |
-| Base de datos | PostgreSQL 18                    |
+| Base de datos | PostgreSQL                       |
 | Driver        | pg (sin ORM)                     |
 | Autenticación | JWT (jsonwebtoken)               |
 | Hashing       | bcryptjs                         |
@@ -56,14 +56,19 @@ src/
 │   ├── collections/
 │   ├── collectionAttempts/              # Intentos de cobro fallidos
 │   ├── commissions/
-│   ├── cashRegister/
+│   ├── businessDays/                    # Jornadas contables (Caja V4)
+│   ├── cashSessions/                    # Cajas operativas + drops + ingresos manuales (Caja V4)
+│   ├── cashAccounts/                    # Tesorería / Caja General (Caja V4)
+│   ├── cashRegister/                    # [LEGACY] — no agregar lógica nueva
 │   ├── expenses/
 │   ├── expenseCategories/               # Categorías de gastos
 │   ├── holidays/                        # Feriados y días no hábiles
+│   ├── notifications/                   # Notificaciones in-app + preferencias
 │   ├── reports/
 │   ├── systemConfig/
 │   ├── cronLogs/                        # Log de ejecución de cron jobs
-│   └── portal/
+│   ├── portal/
+│   └── test/                            # Rutas de test (solo activas con ENABLE_TEST_ROUTES=true)
 ├── scripts/
 │   ├── migration.run.js                 # Setup seguro: crea BD si no existe + migraciones pendientes
 │   ├── db.reset.js                      # Reset destructivo: borra, recrea y migra desde cero
@@ -117,15 +122,18 @@ Cache con TTL sin dependencias externas (no requiere Redis). Vive en el proceso 
 | `SELLER`           | Crea clientes y pre-operaciones. Ve sus propios créditos y comisiones.       |
 | `COLLECTOR`        | Registra cobros. Ve sus planillas y clientes asignados (sin ver domicilios). |
 | `SELLER_COLLECTOR` | Puede vender Y cobrar. Tiene sueldo fijo + comisiones.                       |
+| `CASHIER`          | Administra cajas operativas (Caja V4). Sin acceso a aprobaciones.            |
 | `CLIENT`           | Acceso al portal público (cronograma de cuotas, deuda).                      |
 
 ---
 
 ## Base de datos
 
+### Tablas núcleo
+
 | #   | Tabla                      | Descripción                                                 |
 | --- | -------------------------- | ----------------------------------------------------------- |
-| 1   | `users`                    | Usuarios internos                                           |
+| 1   | `users`                    | Usuarios internos (con `phone` desde migración 040)         |
 | 2   | `customers`                | Clientes del negocio                                        |
 | 3   | `products`                 | Catálogo de productos                                       |
 | 4   | `product_brands`           | Marcas de producto                                          |
@@ -140,19 +148,39 @@ Cache con TTL sin dependencias externas (no requiere Redis). Vive en el proceso 
 | 13  | `installments`             | Cuotas del cronograma                                       |
 | 14  | `payments`                 | Pre-cargas de cobro (doble control)                         |
 | 15  | `credit_down_payments`     | Enganches y cuotas prepagadas al aprobar (impactan en caja) |
-| 16  | `cash_registers`           | Cierres de caja diarios                                     |
-| 17  | `collection_sheets`        | Planillas de cobro                                          |
-| 18  | `collection_sheet_details` | Detalle de cuotas por planilla                              |
-| 19  | `collection_attempts`      | Intentos de cobro registrados por el cobrador               |
-| 20  | `token_blacklist`          | Tokens JWT revocados                                        |
-| 21  | `salaries`                 | Sueldos fijos semanales                                     |
-| 22  | `commissions`              | Comisiones por ventas SALE                                  |
-| 23  | `commission_liquidations`  | Liquidaciones semanales                                     |
-| 24  | `expenses`                 | Gastos operativos del negocio                               |
-| 25  | `expense_categories`       | Categorías de gastos                                        |
-| 26  | `system_config`            | Parámetros configurables                                    |
-| 27  | `holidays`                 | Feriados y días no hábiles                                  |
-| 28  | `cron_execution_log`       | Log de ejecuciones de cron jobs                             |
+| 16  | `collection_sheets`        | Planillas de cobro                                          |
+| 17  | `collection_sheet_details` | Detalle de cuotas por planilla                              |
+| 18  | `collection_attempts`      | Intentos de cobro registrados por el cobrador               |
+| 19  | `token_blacklist`          | Tokens JWT revocados                                        |
+| 20  | `salaries`                 | Sueldos fijos semanales                                     |
+| 21  | `commissions`              | Comisiones por ventas SALE                                  |
+| 22  | `commission_liquidations`  | Liquidaciones semanales                                     |
+| 23  | `expenses`                 | Gastos operativos del negocio                               |
+| 24  | `expense_categories`       | Categorías de gastos                                        |
+| 25  | `system_config`            | Parámetros configurables                                    |
+| 26  | `holidays`                 | Feriados y días no hábiles                                  |
+| 27  | `cron_execution_log`       | Log de ejecuciones de cron jobs                             |
+| 28  | `notifications`            | Notificaciones in-app por usuario                           |
+| 29  | `notification_preferences` | Preferencias globales de notificación por tipo              |
+
+### Tablas Caja V4
+
+| Tabla                          | Descripción                                                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `branches`                     | Sucursales/canales (preparado para multi-tenant)                                                                                      |
+| `business_days`                | Jornada contable diaria por sucursal. Estados: `OPEN → READY_TO_CLOSE → CLOSED → AUDITED`                                             |
+| `cash_sessions`                | Caja operativa por jornada (una por jornada, índice único total). Estados: `OPEN → CLOSED` o `OPEN → PENDING_RECONCILIATION → CLOSED` |
+| `cash_session_drops`           | Retiros parciales de efectivo durante la sesión. `ACTIVE/REVERSED`                                                                    |
+| `cash_session_closure_details` | Una fila por método de pago al cerrar (normaliza reconciliación)                                                                      |
+| `cash_accounts`                | Cuentas de tesorería / Caja General. Balance cacheado con CHECK >= 0                                                                  |
+| `cash_account_movements`       | Movimientos de tesorería: `DROP_IN`, `SALARY_PAYMENT`, `SUPPLIER_PAYMENT`, `EXPENSE`, `ADJUSTMENT`, `MANUAL_INCOME`                   |
+
+### Tablas legacy (deprecated)
+
+| Tabla            | Estado                                             |
+| ---------------- | -------------------------------------------------- |
+| `cash_registers` | Deprecated — no agregar lógica nueva. Ver Caja V4. |
+| `cash_movements` | Deprecated — no agregar lógica nueva. Ver Caja V4. |
 
 ### Campos clave en `credits`
 
@@ -164,6 +192,8 @@ Cache con TTL sin dependencias externas (no requiere Redis). Vive en el proceso 
 | `prepaid_installments`            | SMALLINT | Cuotas pagadas por adelantado al momento de la venta |
 | `prepaid_installments_method`     | VARCHAR  | CASH o TRANSFER                                      |
 | `interest_rate`                   | NUMERIC  | Coeficiente LOAN (NULL para SALE)                    |
+| `first_payment_date`              | DATE     | Fecha de la primera cuota (desde migración 028)      |
+| `payment_condition`               | VARCHAR  | Condición de pago (desde migración 043)              |
 
 ### `credit_down_payments` — separado de `payments`
 
@@ -198,20 +228,16 @@ Para SALE con múltiples productos, la cuota se calcula por producto de forma pr
 ## Instalación
 
 ```bash
-# 1. Clonar
-git clone https://github.com/Claudiogonzalezok/gestion_creditos_backend.git
-cd gestion-creditos-backend
-
-# 2. Instalar dependencias
+# 1. Instalar dependencias
 npm install
 
-# 3. Configurar variables de entorno
+# 2. Configurar variables de entorno
 cp .env.example .env
 
-# 4. Crear la base de datos, aplicar migraciones y cargar datos iniciales
+# 3. Crear la base de datos, aplicar migraciones y cargar datos iniciales
 npm run db:setup
 
-# 5. Iniciar
+# 4. Iniciar
 npm run dev
 ```
 
@@ -237,28 +263,30 @@ ALLOWED_ORIGINS=http://localhost:4200
 BCRYPT_SALT_ROUNDS=10
 
 DISABLE_LOGIN_RATE_LIMIT=false   # Poner true en entorno e2e
+ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 ```
 
 > `JWT_EXPIRY_INTERNAL` y `JWT_EXPIRY_PORTAL` son valores por defecto. Los valores reales se leen dinámicamente de `system_config` en cada login.
 
 ### Scripts npm
 
-| Comando                    | Descripción                                                |
-| -------------------------- | ---------------------------------------------------------- |
-| `npm run db:setup`         | Primer setup: crea la BD si no existe + migraciones + seed |
-| `npm run db:reset`         | ⚠️ Reset total: borra todo, recrea, migra y seedea         |
-| `npm run migration:run`    | Solo aplica migraciones nuevas (no destructivo)            |
-| `npm run seed`             | Solo ejecuta el seed                                       |
-| `npm run dev`              | Servidor en modo desarrollo con hot reload                 |
-| `npm run dev:e2e`          | Servidor sin rate limit en login (para tests e2e)          |
-| `npm start`                | Servidor en modo producción                                |
-| `npm run test:unit`        | Tests unitarios con Jest (mock de BD)                      |
-| `npm run test:integration` | Tests de integración con BD real (Docker)                  |
-| `npm run test:all`         | Unit + integration en secuencia                            |
-| `npm run test:db:up`       | Levanta BD PostgreSQL de test en Docker                    |
-| `npm run test:db:down`     | Baja y elimina el contenedor de test                       |
-| `npm run cron:run`         | Ejecuta un cron job manualmente                            |
-| `npm run db:studio`        | Explorador de BD liviano en consola                        |
+| Comando                          | Descripción                                                |
+| -------------------------------- | ---------------------------------------------------------- |
+| `npm run db:setup`               | Primer setup: crea la BD si no existe + migraciones + seed |
+| `npm run db:reset`               | ⚠️ Reset total: borra todo, recrea, migra y seedea         |
+| `npm run migration:run`          | Solo aplica migraciones nuevas (no destructivo)            |
+| `npm run seed`                   | Solo ejecuta el seed                                       |
+| `npm run dev`                    | Servidor en modo desarrollo con hot reload                 |
+| `npm run dev:e2e`                | Servidor sin rate limit en login + test routes activas     |
+| `npm start`                      | Servidor en modo producción                                |
+| `npm run test:unit`              | Tests unitarios con Jest (mock de BD)                      |
+| `npm run test:integration`       | Tests de integración con BD real (Docker)                  |
+| `npm run test:integration:local` | Tests de integración con BD local (sin Docker)             |
+| `npm run test:all`               | Unit + integration en secuencia                            |
+| `npm run test:db:up`             | Levanta BD PostgreSQL de test en Docker                    |
+| `npm run test:db:down`           | Baja y elimina el contenedor de test                       |
+| `npm run cron:run`               | Ejecuta un cron job manualmente                            |
+| `npm run db:studio`              | Explorador de BD liviano en consola                        |
 
 ### Migration runner
 
@@ -340,54 +368,53 @@ PATCH  /api/products/:id/deactivate | activate
 ### Marcas de producto
 
 ```
-GET    /api/product-brands                 → ADMIN, SELLER, SELLER_COLLECTOR
+GET    /api/product-brands
 GET    /api/product-brands/:id
-POST   /api/product-brands                 → ADMIN
-PUT    /api/product-brands/:id             → ADMIN
-PATCH  /api/product-brands/:id/deactivate  → ADMIN
-PATCH  /api/product-brands/:id/activate    → ADMIN
+POST   /api/product-brands                  → ADMIN
+PUT    /api/product-brands/:id              → ADMIN
+PATCH  /api/product-brands/:id/deactivate   → ADMIN
+PATCH  /api/product-brands/:id/activate     → ADMIN
 ```
 
 ### Categorías de producto
 
 ```
-GET    /api/product-categories             → ADMIN, SELLER, SELLER_COLLECTOR
-POST   /api/product-categories             → ADMIN
-PUT    /api/product-categories/:id         → ADMIN
+GET    /api/product-categories
+POST   /api/product-categories              → ADMIN
+PUT    /api/product-categories/:id          → ADMIN
 PATCH  /api/product-categories/:id/deactivate | activate → ADMIN
 ```
 
 ### Variantes de producto
 
 ```
-GET    /api/product-variants?product_id=uuid&status=ACTIVE   → ADMIN, SELLER, SELLER_COLLECTOR
+GET    /api/product-variants?product_id=uuid&status=ACTIVE
 GET    /api/product-variants/:id
-POST   /api/product-variants               → ADMIN
-POST   /api/product-variants/bulk          → ADMIN (creación masiva)
-PUT    /api/product-variants/:id           → ADMIN
+POST   /api/product-variants                → ADMIN
+POST   /api/product-variants/bulk           → ADMIN (creación masiva)
+PUT    /api/product-variants/:id            → ADMIN
 PATCH  /api/product-variants/:id/deactivate | activate → ADMIN
 ```
 
 ### Unidades de producto
 
 ```
-GET    /api/product-units?variant_id=uuid&product_id=uuid&status=AVAILABLE   → ADMIN, SELLER, SELLER_COLLECTOR
+GET    /api/product-units?variant_id=uuid&product_id=uuid&status=AVAILABLE
 GET    /api/product-units/:id
-POST   /api/product-units                  → ADMIN
-POST   /api/product-units/bulk             → ADMIN (creación masiva)
-PATCH  /api/product-units/:id              → ADMIN (actualiza unit_code / notes)
+POST   /api/product-units                   → ADMIN
+POST   /api/product-units/bulk              → ADMIN (creación masiva)
+PATCH  /api/product-units/:id               → ADMIN (unit_code / notes)
 PATCH  /api/product-units/:id/deactivate | activate → ADMIN
 ```
 
 ### Tasas por producto
 
 ```
-GET    /api/product-rates?product_id=uuid   → Todas (o filtradas por producto)
+GET    /api/product-rates?product_id=uuid
 GET    /api/product-rates/:id
-POST   /api/product-rates                   → Body: product_id, payment_frequency, installments_count, rate
-PUT    /api/product-rates/:id               → Actualizar rate o active
-PATCH  /api/product-rates/:id/deactivate
-PATCH  /api/product-rates/:id/activate
+POST   /api/product-rates
+PUT    /api/product-rates/:id
+PATCH  /api/product-rates/:id/deactivate | activate
 ```
 
 ### Tasas de interés (LOAN)
@@ -410,6 +437,8 @@ POST   /api/credits
 PATCH  /api/credits/:id/approve
 PATCH  /api/credits/:id/reject
 PATCH  /api/credits/:id/early-settlement
+PATCH  /api/credits/:id/write-off     → Castigo de crédito irrecuperable (ADMIN)
+PATCH  /api/credits/:id/plan-change   → Modificación de plan de pago (ADMIN)
 ```
 
 **Body crear SALE:**
@@ -428,20 +457,6 @@ PATCH  /api/credits/:id/early-settlement
   "prepaid_installments_transfer_reference": "TRF-001"
 }
 ```
-
-**Body cotizador SALE:**
-
-```json
-{
-  "type": "SALE",
-  "installments_count": 3,
-  "payment_frequency": "MONTHLY",
-  "products": [{ "product_id": "uuid", "quantity": 1 }],
-  "down_payment": 30000
-}
-```
-
-El cotizador SALE devuelve el desglose por producto con `installment_contribution` de cada ítem.
 
 ### Cuotas
 
@@ -463,6 +478,8 @@ PATCH  /api/payments/:id/approve      → Aprueba y aplica adelanto automático 
 PATCH  /api/payments/:id/reject
 ```
 
+Soporta cobros con método mixto (efectivo + transferencia): campos `amount_cash` / `amount_transfer` opcionales.
+
 El endpoint `approve` detecta automáticamente si `amount_received` supera el saldo de la cuota actual y aplica el excedente a las siguientes cuotas en orden. Si se pagan cuotas adicionales completas, sus fechas se recorren con `shiftInstallmentDates`.
 
 ### Planillas
@@ -476,10 +493,10 @@ POST   /api/collections
 ### Intentos de cobro
 
 ```
-GET    /api/collection-attempts?collector_id=uuid&installment_id=uuid   → ADMIN, COLLECTOR, SELLER_COLLECTOR
+GET    /api/collection-attempts?collector_id=uuid&installment_id=uuid
 GET    /api/collection-attempts/:id
-POST   /api/collection-attempts        → Registra intento (con resultado, notas, etc.)
-PATCH  /api/collection-attempts/:id/void → Anula un intento
+POST   /api/collection-attempts
+PATCH  /api/collection-attempts/:id/void
 ```
 
 ### Comisiones
@@ -496,51 +513,88 @@ PUT    /api/commissions/salary/:userId
 ### Gastos
 
 ```
-GET    /api/expenses                  → Listado paginado con filtro por fecha
+GET    /api/expenses
 GET    /api/expenses/:id
-POST   /api/expenses                  → Body: amount, description, payment_method, category_id
+POST   /api/expenses                  → category_id UUID obligatorio
 DELETE /api/expenses/:id              → Solo si no está en un cierre de caja
 ```
 
 ### Categorías de gastos
 
 ```
-GET    /api/expense-categories        → ADMIN
-POST   /api/expense-categories        → ADMIN
-PATCH  /api/expense-categories/:id/activate | deactivate → ADMIN
+GET    /api/expense-categories
+POST   /api/expense-categories
+PATCH  /api/expense-categories/:id/activate | deactivate
 ```
 
 ### Feriados
 
 ```
-GET    /api/holidays?type=NATIONAL&active=true&affects_due_dates=true   → ADMIN
-GET    /api/holidays/:id              → ADMIN
-POST   /api/holidays                  → ADMIN
-POST   /api/holidays/duplicate-year/preview → Vista previa de duplicación anual
-POST   /api/holidays/duplicate-year         → Duplica feriados al año siguiente
-PUT    /api/holidays/:id              → ADMIN
+GET    /api/holidays?type=NATIONAL&active=true&affects_due_dates=true
+GET    /api/holidays/:id
+POST   /api/holidays
+POST   /api/holidays/duplicate-year/preview
+POST   /api/holidays/duplicate-year
+PUT    /api/holidays/:id
 ```
 
-Tipos válidos: `EXTRAORDINARY`, `NATIONAL`, `LOCAL`, `BANKING`.
-
-### Caja diaria
+### Jornadas contables (Caja V4)
 
 ```
-GET    /api/cash-register/dashboard
-GET    /api/cash-register
-GET    /api/cash-register/:id         → Incluye desglose: payments, down_payments, liquidations, expenses
-POST   /api/cash-register/close       → Body: declared_cash, observations, force (opcional)
+GET    /api/business-days?status=OPEN&branch_id=uuid&date_from=&date_to=   → ADMIN
+GET    /api/business-days/active?branch_id=uuid                            → ADMIN
+GET    /api/business-days/:id                                              → ADMIN
+POST   /api/business-days/:id/close                                        → ADMIN
+POST   /api/business-days/:id/force-close   → body: reason (obligatorio)  → ADMIN
+POST   /api/business-days/:id/audit                                        → ADMIN
 ```
 
-El campo `force: true` permite cerrar aunque haya pre-cargas PENDING del día. Sin `force`, el sistema avisa cuántas pre-cargas quedan pendientes.
+### Cajas operativas (Caja V4)
 
-El dashboard incluye:
+```
+POST   /api/cash-sessions              → Abrir caja de jornada. body: opening_amount, owner_user_id, branch_id
+GET    /api/cash-sessions/active       → Caja activa del momento
+GET    /api/cash-sessions?status=&owner_user_id=&business_day_id=&business_date=&branch_id=
+GET    /api/cash-sessions/:id
+GET    /api/cash-sessions/:id/snapshot → Snapshot completo de la caja (movimientos, balance)
 
-- Cobros aprobados (payments APPROVED)
-- Enganches y cuotas prepagadas (credit_down_payments)
-- Gastos del día (expenses)
-- Cobros pendientes de aprobación
-- Balance neto del día
+POST   /api/cash-sessions/:id/close         → Cierre formal. body: declared[] [{payment_method, declared_amount}]
+POST   /api/cash-sessions/:id/mark-pending  → Marcar pendiente de reconciliación. body: reason
+POST   /api/cash-sessions/:id/reconcile     → Reconciliar. body: declared[]
+
+POST   /api/cash-sessions/:id/drops                       → Registrar retiro parcial
+POST   /api/cash-sessions/:id/drops/:dropId/reverse       → Revertir retiro. body: reason
+
+POST   /api/cash-sessions/:id/manual-incomes              → Ingreso manual a caja (amount o amount_cash/amount_transfer)
+```
+
+### Tesorería / Caja General (Caja V4)
+
+```
+GET    /api/cash-accounts                   → ADMIN
+GET    /api/cash-accounts/:id               → ADMIN
+GET    /api/cash-accounts/:id/balance       → ADMIN
+GET    /api/cash-accounts/:id/audit-balance → ADMIN
+GET    /api/cash-accounts/:id/movements?movement_type=&direction=&from=&to=&page=&page_size=  → ADMIN
+POST   /api/cash-accounts/:id/movements    → ADMIN
+       movement_type: SUPPLIER_PAYMENT | EXPENSE | ADJUSTMENT | MANUAL_INCOME
+```
+
+### Notificaciones
+
+```
+GET    /api/notifications                         → Historial del usuario autenticado
+GET    /api/notifications/unread-count            → Badge de no leídas
+POST   /api/notifications/:id/read               → Marcar como leída
+POST   /api/notifications/read-all               → Marcar todas como leídas
+DELETE /api/notifications/:id
+DELETE /api/notifications                         → Eliminar todas las del usuario
+
+GET    /api/notifications/preferences             → ADMIN — preferencias globales
+PUT    /api/notifications/preferences/:type       → ADMIN — actualizar preferencia por tipo
+```
+
+Tipos de notificación: `MORA`, `INSTALLMENT_DUE`, `APPROVAL_REQUEST`, `CASH_REGISTER`, `NEW_CUSTOMER`.
 
 ### Reportes
 
@@ -569,8 +623,6 @@ GET    /api/system-config/:key
 PUT    /api/system-config/:key
 POST   /api/system-config/:key/reset
 ```
-
-Incluye validaciones cruzadas: `min_credit_amount` debe ser menor a `max_credit_amount`; `commission_week_close_day` y `commission_pay_day` no pueden ser iguales.
 
 ### Portal público
 
@@ -623,18 +675,26 @@ Admin aprueba (PATCH /payments/:id/approve):
   4. Verifica si el crédito quedó totalmente SETTLED
 ```
 
-### Cierre de caja
+### Modelo de Caja V4
 
 ```
-Total recaudado = cobros APPROVED + enganches + cuotas prepagadas
-Total egresos   = liquidaciones de comisiones + gastos del día
-Diferencia      = declared_cash - cash_amount (efectivo)
+Jornada (business_days):
+  └── OPEN → READY_TO_CLOSE → CLOSED → AUDITED
+  └── Una jornada por sucursal por día
 
-Si hay pre-cargas PENDING → devuelve 409 con detalle
-Usar force: true para cerrar igual
+Caja operativa (cash_sessions):
+  └── Una por jornada (índice único total sobre business_day_id)
+  └── OPEN → CLOSED  |  OPEN → PENDING_RECONCILIATION → CLOSED
+  └── Todos los cobros aprobados, gastos, drops y reversiones se imputan aquí
+  └── Sin caja activa → 409 NO_ACTIVE_SESSION
 
-El cierre vincula automáticamente las liquidaciones del día como egresos.
+Tesorería (cash_accounts):
+  └── Recibe drops de caja, paga sueldos/comisiones/proveedores
+  └── SALARY_PAYMENT solo disponible vía commissions.liquidate (no por endpoint público)
+  └── current_balance con CHECK >= 0 en BD
 ```
+
+> Referencia completa en `docs/cash-model-v4.md` (fuente de verdad arquitectónica).
 
 ---
 

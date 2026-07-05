@@ -21,6 +21,16 @@ const generate = async (req, res) => {
   }
 };
 
+const generateBatch = async (req, res) => {
+  try {
+    const result = await service.generateBatch(req.body, req.user.id);
+    return res.status(200).json({ ok: true, message: 'Lote de planillas procesado.', data: result });
+  } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const getAll = async (req, res) => {
   try {
     const { collector_id, date, include_regenerated } = req.query;
@@ -75,4 +85,4 @@ const send = async (req, res) => {
   }
 };
 
-module.exports = { generate, getAll, getById, close, cancel, send };
+module.exports = { generate, generateBatch, getAll, getById, close, cancel, send };
