@@ -117,10 +117,11 @@ const findById = async (id) => {
             i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
             lp.approved_at  AS paid_at,
             lp.generation_type,
-            lp.payment_method AS paid_method
+            lp.payment_method AS paid_method,
+            cu.full_name AS paid_by_name
      FROM installments i
      LEFT JOIN LATERAL (
-       SELECT p.approved_at, p.generation_type, p.payment_method
+       SELECT p.approved_at, p.generation_type, p.payment_method, p.collector_id
        FROM payments p
        WHERE p.installment_id = i.id
          AND p.status = 'APPROVED'
@@ -128,6 +129,7 @@ const findById = async (id) => {
        ORDER BY p.approved_at DESC
        LIMIT 1
      ) lp ON TRUE
+     LEFT JOIN users cu ON cu.id = lp.collector_id
      WHERE i.credit_id = $1
      ORDER BY i.installment_number`,
     [id],
