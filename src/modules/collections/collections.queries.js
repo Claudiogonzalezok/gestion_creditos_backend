@@ -62,21 +62,29 @@ const SELECT_COLLECTION_REFERENCE = `
 // PENDING, al aprobar el pago la cuota perdería su agenda y volvería a "vencidas"
 // antes de la fecha acordada. Los REJECTED quedan fuera (no agendan nada).
 //
-// Resultado por cuota: installment_id, next_visit_date más reciente.
+// Resultado por cuota: installment_id, next_visit_date más reciente y el
+// usuario que registró esa agenda (scheduled_by_user_id). El autor sale de
+// cada origen: en payments es el cobrador del cobro; en collection_attempts es
+// quien creó la gestión (admin para SCHEDULED_VISIT, cobrador para NO_PAYMENT).
+// La columna extra es aditiva: los consumidores que solo leen next_visit_date
+// no se ven afectados.
 // =============================================================================
 const CTE_LATEST_NEXT_VISIT = `
   latest_next_visit AS (
     SELECT DISTINCT ON (installment_id)
       installment_id,
-      next_visit_date
+      next_visit_date,
+      scheduled_by_user_id
     FROM (
-      SELECT installment_id, next_visit_date, created_at
+      SELECT installment_id, next_visit_date, created_at,
+             collector_id AS scheduled_by_user_id
       FROM payments
       WHERE status IN ('PENDING','APPROVED')
         AND next_visit_date IS NOT NULL
         AND is_reversal = FALSE
       UNION ALL
-      SELECT installment_id, next_visit_date, created_at
+      SELECT installment_id, next_visit_date, created_at,
+             created_by AS scheduled_by_user_id
       FROM collection_attempts
       WHERE next_visit_date IS NOT NULL
         AND voided_at IS NULL
@@ -958,6 +966,7 @@ const recalcManagementStatusForActiveTodaySheet = async (
 };
 
 module.exports = {
+  CTE_LATEST_NEXT_VISIT,
   findInstallmentsForSheet,
   create,
   createDetails,
