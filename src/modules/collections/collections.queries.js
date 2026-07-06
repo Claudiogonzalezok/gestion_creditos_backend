@@ -274,6 +274,18 @@ const findInstallmentsForSheet = async (
         WHERE c.due_date::date < $2::date
           AND (lnv.next_visit_date IS NULL OR lnv.next_visit_date::date < $2::date)
       ),
+      -- visit_lapsed: visita agendada que YA venció (next_visit_date < target),
+      -- para CUALQUIER vencimiento. Cubre el caso borde de una cuota que todavía
+      -- no vence pero cuya visita comprometida se pasó (una visita perdida). Ni
+      -- overdue (exige vencida) ni due_today (exige vence hoy) la alcanzan, así
+      -- que sin esto quedaría fuera del Trabajo Diario. Una visita vencida volvió
+      -- a mora (regla 2) → reason OVERDUE.
+      visit_lapsed AS (
+        SELECT c.installment_id
+        FROM candidates c
+        JOIN latest_next_visit lnv ON lnv.installment_id = c.installment_id
+        WHERE lnv.next_visit_date::date < $2::date
+      ),
 
       -- Composición por filter — incl_prio define qué razón gana en caso de
       -- overlap (regla 5).
@@ -290,8 +302,13 @@ const findInstallmentsForSheet = async (
         UNION ALL
         SELECT installment_id, 'SCHEDULED_VISIT'     AS reason, 3 AS incl_prio FROM scheduled_today
       ),
+      -- TODAY_AND_OVERDUE = "Trabajo Diario": todo lo accionable hoy sin importar
+      -- el origen (mora + vence hoy + visita hoy + visita vencida). visit_lapsed
+      -- cierra el hueco del estado 6 (vence a futuro con visita perdida).
       filter_today_overdue AS (
         SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM overdue
+        UNION ALL
+        SELECT installment_id, 'OVERDUE'         AS reason, 1 AS incl_prio FROM visit_lapsed
         UNION ALL
         SELECT installment_id, 'DUE_TODAY'       AS reason, 2 AS incl_prio FROM due_today
         UNION ALL

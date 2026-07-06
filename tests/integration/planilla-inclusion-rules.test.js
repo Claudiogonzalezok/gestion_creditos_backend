@@ -170,6 +170,41 @@ describe("J — Reglas de inclusión en planilla", () => {
     });
   });
 
+  describe("Visita vencida en cuota aún no vencida — estado 6 (visit_lapsed)", () => {
+    it("Trabajo Diario incluye la cuota; Solo hoy no", async () => {
+      const collector = await createUserFixture({ role: "COLLECTOR" });
+      const { inst } = await seedAssignedInstallment(collector, {
+        due_date: daysFromNow(10), // todavía no vence
+        original_amount: 1000,
+        amount_paid: 0,
+        status: "PENDING",
+      });
+      // Visita programada que YA se pasó (compromiso perdido).
+      await pool.query(
+        `INSERT INTO collection_attempts
+           (installment_id, collector_id, created_by, attempt_type, next_visit_date, notes)
+         VALUES ($1, $2, $2, 'SCHEDULED_VISIT', $3, 'visita que se paso')`,
+        [inst.id, collector.id, daysAgo(2)],
+      );
+
+      const trabajoDiario = await collectionsQueries.findInstallmentsForSheet(
+        collector.id,
+        today(),
+        "TODAY_AND_OVERDUE",
+      );
+      const soloHoy = await collectionsQueries.findInstallmentsForSheet(
+        collector.id,
+        today(),
+        "TODAY",
+      );
+
+      // Antes quedaba fuera de todo filtro diario; ahora el Trabajo Diario la agarra.
+      expect(includes(trabajoDiario, inst.id)).toBe(true);
+      // "Solo hoy" no la incluye: ni vence hoy ni tiene visita hoy.
+      expect(includes(soloHoy, inst.id)).toBe(false);
+    });
+  });
+
   describe('Visita pactada para hoy y filtro "solo vencidas" (regla 10)', () => {
     const seedWithVisitToday = async (collector) => {
       const { inst } = await seedAssignedInstallment(collector, {
