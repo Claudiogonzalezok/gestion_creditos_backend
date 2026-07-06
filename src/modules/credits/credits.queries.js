@@ -1,4 +1,5 @@
 const pool = require("../../config/db");
+const { CTE_LATEST_NEXT_VISIT } = require("../collections/collections.queries");
 
 /**
  * Lista créditos con filtros opcionales, incluyendo datos del cliente y creador.
@@ -112,13 +113,20 @@ const findById = async (id) => {
   // aprobado de la cuota (única fuente de verdad = payments.approved_at). El
   // LEFT JOIN LATERAL resuelve fecha, origen (generation_type) y forma de pago en
   // UNA sola query (sin N+1 ni SELECT por cuota).
+  // Próxima visita: se DERIVA de la agenda vigente (última gestión con fecha
+  // futura) reutilizando el CTE latest_next_visit de collections, única fuente
+  // de verdad. sched.full_name es quien la programó (admin o cobrador). Se usa
+  // to_char para devolver la fecha como 'YYYY-MM-DD' sin sesgo de zona horaria.
   const inst = await pool.query(
-    `SELECT i.id, i.installment_number, i.due_date, i.original_due_date,
+    `WITH ${CTE_LATEST_NEXT_VISIT}
+     SELECT i.id, i.installment_number, i.due_date, i.original_due_date,
             i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8, i.status,
             lp.approved_at  AS paid_at,
             lp.generation_type,
             lp.payment_method AS paid_method,
-            cu.full_name AS paid_by_name
+            cu.full_name AS paid_by_name,
+            to_char(lnv.next_visit_date, 'YYYY-MM-DD') AS next_visit_date,
+            sched.full_name AS next_visit_scheduled_by_name
      FROM installments i
      LEFT JOIN LATERAL (
        SELECT p.approved_at, p.generation_type, p.payment_method, p.collector_id
@@ -130,6 +138,8 @@ const findById = async (id) => {
        LIMIT 1
      ) lp ON TRUE
      LEFT JOIN users cu ON cu.id = lp.collector_id
+     LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
+     LEFT JOIN users sched ON sched.id = lnv.scheduled_by_user_id
      WHERE i.credit_id = $1
      ORDER BY i.installment_number`,
     [id],
