@@ -13,12 +13,17 @@ const { IS_OVERDUE_DERIVED } = require("../../utils/installmentSql");
 const getCollectionReport = async (dateFrom, dateTo) => {
   const result = await pool.query(
     `WITH collection_data AS (
+       -- Neteo de reversiones (RESTAN, como en la caja) y desglose por
+       -- amount_cash/amount_transfer en vez de FILTER por payment_method: así los
+       -- cobros MIXTOS reparten bien su efectivo/transferencia (antes, con
+       -- payment_method='MIXED', quedaban fuera de ambos y el desglose no sumaba
+       -- el total). El conteo excluye reversiones.
        SELECT
          COALESCE(bd.business_date, p.approved_at::date)                               AS day,
-         COALESCE(SUM(p.amount_received), 0)                                           AS total,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
-         COUNT(*)::int                                                                  AS installments_count,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_received ELSE p.amount_received END), 0) AS total,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_cash     ELSE p.amount_cash     END), 0) AS total_cash,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_transfer ELSE p.amount_transfer END), 0) AS total_transfer,
+         COUNT(*) FILTER (WHERE NOT p.is_reversal)::int                                AS installments_count,
          0::numeric                                                                     AS down_payments_total,
          0::int                                                                         AS down_payments_count
        FROM payments p
@@ -30,17 +35,19 @@ const getCollectionReport = async (dateFrom, dateTo) => {
 
        UNION ALL
 
+       -- Enganche + cuotas adelantadas históricas (PREPAID_INSTALLMENT), igual que
+       -- la caja. Desglose por amount_cash/amount_transfer para soportar mixto.
        SELECT
          cdp.register_date                                                             AS day,
          COALESCE(SUM(cdp.amount), 0)                                                  AS total,
-         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0)   AS total_cash,
-         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0)   AS total_transfer,
+         COALESCE(SUM(cdp.amount_cash),     0)                                         AS total_cash,
+         COALESCE(SUM(cdp.amount_transfer), 0)                                         AS total_transfer,
          0::int                                                                         AS installments_count,
          COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
          COUNT(*)::int                                                                  AS down_payments_count
        FROM credit_down_payments cdp
        WHERE cdp.register_date BETWEEN $1 AND $2
-         AND cdp.payment_type = 'DOWN_PAYMENT'
+         AND cdp.payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')
        GROUP BY cdp.register_date
      ),
      daily_aggregated AS (
@@ -337,17 +344,26 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
   const r = await pool.query(
     `WITH
      today_payments AS (
+       -- Neteo de reversiones: un cobro reversado (is_reversal=TRUE) es dinero que
+       -- salió de la caja, por lo que RESTA de lo recaudado — misma lógica que
+       -- computeSessionTotals. Sin esto, una reversión se sumaba como si fuera un
+       -- ingreso y "Recaudado hoy" quedaba inflado. El conteo de cobros excluye las
+       -- reversiones (no son cobros nuevos).
        SELECT
-         COALESCE(SUM(p.amount_received), 0)::float8                                     AS collected,
-         COALESCE(SUM(p.amount_cash),     0)::float8                                     AS cash,
-         COALESCE(SUM(p.amount_transfer), 0)::float8                                     AS transfer,
-         COUNT(*)::int                                                                    AS count
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_received ELSE p.amount_received END), 0)::float8 AS collected,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_cash     ELSE p.amount_cash     END), 0)::float8 AS cash,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_transfer ELSE p.amount_transfer END), 0)::float8 AS transfer,
+         COUNT(*) FILTER (WHERE NOT p.is_reversal)::int                                  AS count
        FROM payments p
        LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
        LEFT JOIN business_days bd ON bd.id = cs.business_day_id
        WHERE p.status = 'APPROVED'
          AND COALESCE(bd.business_date, p.approved_at::date) = $2
      ),
+      -- Incluye PREPAID_INSTALLMENT además de DOWN_PAYMENT, igual que la caja
+      -- (computeSessionTotals). Las cuotas adelantadas NUEVAS ya no generan filas
+      -- en credit_down_payments (van a payments), así que esto solo recupera los
+      -- registros históricos y no hay doble conteo.
       today_down_payments AS (
         SELECT
           COALESCE(SUM(amount), 0)::float8 AS total,
@@ -356,7 +372,7 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
           COUNT(*)::int                    AS count
         FROM credit_down_payments
         WHERE register_date = $2
-          AND payment_type = 'DOWN_PAYMENT'
+          AND payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')
       ),
      pending_payments AS (
        SELECT COUNT(*)::int AS count FROM payments WHERE status = 'PENDING'
