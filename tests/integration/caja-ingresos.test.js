@@ -17,6 +17,7 @@ const cashSessionsService = require("../../src/modules/cashSessions/cashSessions
 const cashSessionsQueries = require("../../src/modules/cashSessions/cashSessions.queries");
 const installmentsService = require("../../src/modules/installments/installments.service");
 const reportsQueries = require("../../src/modules/reports/reports.queries");
+const reportsService = require("../../src/modules/reports/reports.service");
 const { today } = require("./helpers/dates");
 
 setupTestSuite();
@@ -245,5 +246,42 @@ describe("Dashboard — 'Recaudado hoy' cuadra con la caja", () => {
       caja.collections_down_payments_cash +
       caja.collections_down_payments_transfer;
     expect(summary.today_total).toBe(cajaColeccion);
+  });
+
+  it("recaudación atada a la caja: total con caja abierta, 0 al cerrarla", async () => {
+    const admin = await createUserFixture({ role: "ADMIN" });
+    const credit = await createCreditFixture({ status: "ACTIVE" });
+    const inst = await createInstallmentFixture({
+      credit_id: credit.id,
+      due_date: today(),
+      original_amount: 1500,
+      amount_paid: 0,
+      status: "PENDING",
+    });
+    const session = await cashSessionsService.open(
+      { opening_amount: 0 },
+      asUser(admin),
+    );
+    await pool.query(
+      `INSERT INTO payments
+         (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+          payment_method, status, is_reversal, approved_by, approved_at, cash_session_id)
+       VALUES ($1, $2, 1500, 1500, 0, 'CASH', 'APPROVED', FALSE, $2, $3, $4)`,
+      [inst.id, admin.id, today(), session.id],
+    );
+
+    // Con la caja ABIERTA, el service reporta la recaudación de la jornada.
+    const abierta = await reportsService.getSummaryReport();
+    expect(abierta.today_total).toBe(1500);
+
+    // Al CERRAR la caja, la recaudación vuelve a 0 (no queda "colgada" ni se
+    // resetea por día calendario: depende de que haya una caja abierta).
+    await cashSessionsService.close(
+      session.id,
+      { declared: [{ payment_method: "CASH", declared_amount: 1500 }] },
+      asUser(admin),
+    );
+    const cerrada = await reportsService.getSummaryReport();
+    expect(cerrada.today_total).toBe(0);
   });
 });
