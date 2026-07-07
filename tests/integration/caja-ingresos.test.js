@@ -16,6 +16,7 @@ const {
 const cashSessionsService = require("../../src/modules/cashSessions/cashSessions.service");
 const cashSessionsQueries = require("../../src/modules/cashSessions/cashSessions.queries");
 const installmentsService = require("../../src/modules/installments/installments.service");
+const reportsQueries = require("../../src/modules/reports/reports.queries");
 const { today } = require("./helpers/dates");
 
 setupTestSuite();
@@ -179,5 +180,70 @@ describe("Caja — pago anticipado de cuota (GAP #2)", () => {
       businessDayId: session.business_day_id,
     });
     expect(rows[0].summary.difference).toBe(0);
+  });
+});
+
+describe("Dashboard — 'Recaudado hoy' cuadra con la caja", () => {
+  it("netea reversiones e incluye cuotas pre-pagadas (getSummaryReport == caja)", async () => {
+    const admin = await createUserFixture({ role: "ADMIN" });
+    const credit = await createCreditFixture({
+      total_amount: 10000,
+      status: "ACTIVE",
+    });
+    const inst = await createInstallmentFixture({
+      credit_id: credit.id,
+      due_date: today(),
+      original_amount: 1000,
+      amount_paid: 0,
+      status: "PENDING",
+    });
+    const session = await cashSessionsService.open(
+      { opening_amount: 0 },
+      asUser(admin),
+    );
+
+    // Ingresos por adelantado: enganche 2000 + cuota pre-pagada histórica 3000.
+    await insertCreditUpfront({
+      creditId: credit.id,
+      adminId: admin.id,
+      amount: 2000,
+      paymentType: "DOWN_PAYMENT",
+      sessionId: session.id,
+    });
+    await insertCreditUpfront({
+      creditId: credit.id,
+      adminId: admin.id,
+      amount: 3000,
+      paymentType: "PREPAID_INSTALLMENT",
+      sessionId: session.id,
+    });
+
+    // Cobro 1000 y su reversión el mismo día → neto 0.
+    const insertPayment = (isReversal) =>
+      pool.query(
+        `INSERT INTO payments
+           (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+            payment_method, status, is_reversal, approved_by, approved_at, cash_session_id)
+         VALUES ($1, $2, 1000, 1000, 0, 'CASH', 'APPROVED', $3, $2, $4, $5)`,
+        [inst.id, admin.id, isReversal, today(), session.id],
+      );
+    await insertPayment(false);
+    await insertPayment(true);
+
+    const summary = await reportsQueries.getSummaryReport(3, today());
+    const caja = await cashSessionsQueries.computeSessionTotals(session.id);
+
+    // Recaudado hoy = cobros neteados (0) + enganche 2000 + prepaid 3000.
+    expect(summary.today_total).toBe(5000);
+    expect(summary.today_collected).toBe(0); // la reversión netea al cobro
+    expect(summary.today_payments_count).toBe(1); // la reversión no es un cobro
+
+    // Y cuadra con la caja (payments neto + down_payments con prepaid).
+    const cajaColeccion =
+      caja.collections_payments_cash +
+      caja.collections_payments_transfer +
+      caja.collections_down_payments_cash +
+      caja.collections_down_payments_transfer;
+    expect(summary.today_total).toBe(cajaColeccion);
   });
 });
