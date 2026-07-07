@@ -3,6 +3,8 @@ const { getValue } = require("../systemConfig/systemConfig.queries");
 const {
   getActiveJornadaDate,
 } = require("../businessDays/businessDays.service");
+const bdQueries = require("../businessDays/businessDays.queries");
+const csQueries = require("../cashSessions/cashSessions.queries");
 
 /**
  * Devuelve los días de gracia para considerar una cuota vencida en queries
@@ -32,8 +34,23 @@ const getProductsReport = (stockThreshold) =>
 
 const getUpcomingReport = (days) => queries.getUpcomingReport(days);
 
-const getSummaryReport = async () =>
-  queries.getSummaryReport(await getGraceDays(), await getActiveJornadaDate());
+/**
+ * Resumen del dashboard. La recaudación se ata a la CAJA ABIERTA de la jornada
+ * (misma fuente que el gate de caja del dashboard): mientras la caja esté
+ * abierta, se acumula en la fecha de su jornada (no se resetea al cambiar el día
+ * calendario); si la caja está cerrada, no hay jornada activa a reportar y la
+ * recaudación vuelve a 0 (jornadaDate = null → la query no suma nada).
+ * @returns {Promise<object>}
+ */
+const getSummaryReport = async () => {
+  const branch = await bdQueries.findDefaultBranch();
+  const day = branch ? await bdQueries.findActiveBusinessDay(branch.id) : null;
+  const openSession = day
+    ? await csQueries.findActiveSessionByBusinessDay(day.id)
+    : null;
+  const jornadaDate = openSession ? await getActiveJornadaDate() : null;
+  return queries.getSummaryReport(await getGraceDays(), jornadaDate);
+};
 
 const getPaymentsOverdue48h = () => queries.getPaymentsOverdue48h();
 
