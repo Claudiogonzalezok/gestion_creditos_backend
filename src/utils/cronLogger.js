@@ -20,6 +20,13 @@
 
 const pool = require('../config/db');
 
+/**
+ * Timestamp ISO para prefijar logs de consola de los jobs — permite ubicar
+ * una corrida en ~/.pm2/logs/*.log sin depender de la config de PM2.
+ * @returns {string}
+ */
+const ts = () => new Date().toISOString();
+
 const normalizeResult = (result) => {
   if (typeof result === 'number') return { affectedRows: result, metadata: null };
   if (result && typeof result === 'object') {
@@ -50,7 +57,7 @@ const runWithLogging = async (jobName, fn) => {
     );
     logId = ins.rows[0].id;
   } catch (err) {
-    console.error(`[CronLogger] No se pudo registrar inicio de ${jobName}: ${err.message}`);
+    console.error(`[${ts()}] [CronLogger] No se pudo registrar inicio de ${jobName}: ${err.message}`);
   }
 
   try {
@@ -65,13 +72,13 @@ const runWithLogging = async (jobName, fn) => {
          WHERE id = $3`,
         [affectedRows, metadata ? JSON.stringify(metadata) : null, logId]
       ).catch((err) => {
-        console.error(`[CronLogger] No se pudo cerrar log #${logId} (${jobName}): ${err.message}`);
+        console.error(`[${ts()}] [CronLogger] No se pudo cerrar log #${logId} (${jobName}): ${err.message}`);
       });
     }
     return result;
   } catch (err) {
     const msg = err && err.message ? err.message : String(err);
-    console.error(`[${jobName}] Error:`, msg);
+    console.error(`[${ts()}] [${jobName}] Error:`, msg);
 
     if (logId !== null) {
       await pool.query(
@@ -80,11 +87,11 @@ const runWithLogging = async (jobName, fn) => {
          WHERE id = $2`,
         [msg, logId]
       ).catch((logErr) => {
-        console.error(`[CronLogger] No se pudo registrar fallo de ${jobName}: ${logErr.message}`);
+        console.error(`[${ts()}] [CronLogger] No se pudo registrar fallo de ${jobName}: ${logErr.message}`);
       });
     }
     // Intencionalmente no se re-propaga: los crons no deben tirar el servidor.
   }
 };
 
-module.exports = { runWithLogging };
+module.exports = { runWithLogging, ts };

@@ -3,14 +3,14 @@
 
 const cron = require('node-cron');
 const { cleanExpiredTokens, cleanExpiredRefreshTokens } = require('../modules/auth/auth.queries');
-const { runWithLogging } = require('../utils/cronLogger');
+const { runWithLogging, ts } = require('../utils/cronLogger');
 
 const runCleanup = () => runWithLogging('tokenCleanup', async () => {
   const [deletedBl, deletedRt] = await Promise.all([
     cleanExpiredTokens(),
     cleanExpiredRefreshTokens(),
   ]);
-  console.log(`[JOB tokenCleanup] Blacklist: ${deletedBl} eliminado(s). RefreshTokens: ${deletedRt} eliminado(s).`);
+  console.log(`[${ts()}] [JOB tokenCleanup] Blacklist: ${deletedBl} eliminado(s). RefreshTokens: ${deletedRt} eliminado(s).`);
   return {
     affected_rows: deletedBl + deletedRt,
     metadata: { blacklist: deletedBl, refresh_tokens: deletedRt },
@@ -21,7 +21,7 @@ const start = () => {
   cron.schedule('0 4 * * *', runCleanup, {
     timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
   });
-  console.log('[JOB tokenCleanup] Programado — todos los días a las 04:00.');
+  console.log(`[${ts()}] [JOB tokenCleanup] Programado — todos los días a las 04:00.`);
 };
 
 module.exports = { start, runCleanup };

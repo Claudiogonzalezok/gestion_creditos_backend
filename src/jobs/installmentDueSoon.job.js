@@ -10,7 +10,7 @@
 
 const cron = require("node-cron");
 const pool = require("../config/db");
-const { runWithLogging } = require("../utils/cronLogger");
+const { runWithLogging, ts } = require("../utils/cronLogger");
 const notificationsService = require("../modules/notifications/notifications.service");
 const notificationsQueries = require("../modules/notifications/notifications.queries");
 
@@ -27,7 +27,7 @@ const checkInstallmentsDueSoon = () =>
     );
 
     if (result.rows.length === 0) {
-      console.log("[JOB installmentDueSoon] Sin cuotas a vencer en 3 días.");
+      console.log(`[${ts()}] [JOB installmentDueSoon] Sin cuotas a vencer en 3 días.`);
       return { affected_rows: 0 };
     }
 
@@ -45,7 +45,7 @@ const checkInstallmentsDueSoon = () =>
     }
 
     console.log(
-      `[JOB installmentDueSoon] ${result.rows.length} cuota(s) notificada(s).`,
+      `[${ts()}] [JOB installmentDueSoon] ${result.rows.length} cuota(s) notificada(s).`,
     );
     return { affected_rows: result.rows.length };
   });
@@ -57,7 +57,7 @@ const start = () => {
     timezone: process.env.TZ || "America/Argentina/Buenos_Aires",
   });
   console.log(
-    "[JOB installmentDueSoon] Programado — todos los días a las 08:00.",
+    `[${ts()}] [JOB installmentDueSoon] Programado — todos los días a las 08:00.`,
   );
 };
 
