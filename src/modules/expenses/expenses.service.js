@@ -1,5 +1,8 @@
 const queries = require("./expenses.queries");
 const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+const {
+  computeAvailableCash,
+} = require("../cashSessions/cashSessions.calculations");
 const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 const cashAccountsService = require("../cashAccounts/cashAccounts.service");
 const {
@@ -15,24 +18,6 @@ const getById = async (id) => {
   if (!expense) throw { status: 404, message: "Gasto no encontrado." };
   return expense;
 };
-
-/**
- * Calcula el efectivo disponible en la caja activa replicando la fórmula de
- * `expectedCash` usada en el cierre (buildClosureSnapshot), pero a partir de
- * los totales acumulados hasta el momento (antes de imputar el nuevo gasto).
- * @param {object} session - Sesión activa (incluye opening_amount).
- * @param {object} totals - Resultado de computeSessionTotals.
- * @returns {number} Efectivo disponible.
- */
-const computeAvailableCash = (session, totals) =>
-  session.opening_amount +
-  totals.collections_payments_cash +
-  totals.collections_down_payments_cash +
-  totals.collections_manual_incomes_cash -
-  totals.outflows_expenses_cash -
-  totals.outflows_commissions_cash +
-  totals.conversions_cash_delta -
-  totals.drops_cash;
 
 const create = async (data, requestingUser) => {
   if (data.category_id) {

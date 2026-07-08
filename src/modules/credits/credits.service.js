@@ -849,12 +849,45 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
 
     await withTransaction(async (client) => {
+      const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+      const {
+        computeAvailableCash,
+      } = require("../cashSessions/cashSessions.calculations");
+
+      // El préstamo se entrega en efectivo al cliente al aprobarlo: requiere
+      // caja operativa activa de la jornada (rama DAILY — la única implementada
+      // por ahora; ver disbursement_source en migración 044).
+      const activeSession =
+        await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+      if (!activeSession)
+        throw {
+          status: 409,
+          message:
+            "No hay caja operativa abierta. Abrí una caja para aprobar un préstamo.",
+          code: "NO_ACTIVE_SESSION",
+        };
+
+      const totals = await cashSessionsQueries.computeSessionTotals(
+        activeSession.id,
+        client,
+      );
+      const availableCash = computeAvailableCash(activeSession, totals);
+      const loanAmount = parseFloat(credit.total_amount);
+      if (loanAmount > availableCash) {
+        throw {
+          status: 409,
+          message: `El monto del préstamo supera el efectivo disponible en caja ($${availableCash.toFixed(2)}).`,
+          code: "INSUFFICIENT_CASH",
+        };
+      }
+
       await queries.approve(
         client,
         id,
         adminId,
         rateRecord.rate,
         installmentsCount,
+        activeSession.id,
       );
       await queries.generateInstallments(
         client,

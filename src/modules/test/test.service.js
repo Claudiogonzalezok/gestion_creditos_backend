@@ -10,7 +10,8 @@ const { localDate } = require("../../utils/date");
  * ingresos manuales, detalle de cierre) de la fecha actual, y desvincula
  * (sin eliminar) los movimientos de negocio que apuntaban a esas cajas
  * (`payments`, `expenses`, `credit_down_payments`, `cash_conversions`,
- * `commission_liquidations`) dejando `cash_session_id = NULL`.
+ * `commission_liquidations`) dejando `cash_session_id = NULL`, y los
+ * créditos LOAN cuyo desembolso apuntaba a esas cajas (`disbursement_cash_session_id`).
  *
  * Idempotente: si no existe jornada hoy, no hace nada.
  *
@@ -36,6 +37,7 @@ const resetToday = async () =>
     );
 
     await queries.unlinkMovements(client, sessionIds);
+    await queries.unlinkCreditDisbursements(client, sessionIds);
     await queries.deleteSessionChildren(client, sessionIds);
     await queries.deleteCashSessions(client, businessDay.id);
     await queries.deleteBusinessDay(client, businessDay.id);

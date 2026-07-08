@@ -276,6 +276,7 @@ const saveHistoricalRate = async (client, creditProductId, rate) => {
  * @param {string} adminId - Usuario que aprueba.
  * @param {number|null} interestRate - Tasa aplicada (null para LOAN sin tasa fija).
  * @param {number} installmentsCount - Cantidad de cuotas definitiva.
+ * @param {string} [disbursementCashSessionId] - Caja operativa que entregó el efectivo (solo LOAN, rama DAILY).
  */
 const approve = async (
   client,
@@ -283,13 +284,16 @@ const approve = async (
   adminId,
   interestRate,
   installmentsCount,
+  disbursementCashSessionId,
 ) => {
   await client.query(
     `UPDATE credits
      SET status = 'ACTIVE', approved_by = $1, approved_at = NOW(),
-         interest_rate = $2, installments_count = $3, updated_at = NOW()
+         interest_rate = $2, installments_count = $3,
+         disbursement_cash_session_id = $5,
+         updated_at = NOW()
      WHERE id = $4`,
-    [adminId, interestRate ?? null, installmentsCount, id],
+    [adminId, interestRate ?? null, installmentsCount, id, disbursementCashSessionId ?? null],
   );
 };
 

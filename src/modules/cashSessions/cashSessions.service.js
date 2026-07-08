@@ -1,4 +1,5 @@
 const queries = require("./cashSessions.queries");
+const { computeAvailableCash } = require("./cashSessions.calculations");
 const bdQueries = require("../businessDays/businessDays.queries");
 const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 const cashAccountsService = require("../cashAccounts/cashAccounts.service");
@@ -46,6 +47,10 @@ const buildClosureSnapshot = ({
       cash: totals.outflows_commissions_cash,
       transfer: totals.outflows_commissions_transfer,
     },
+    loans: {
+      cash: totals.outflows_loans_cash,
+      transfer: totals.outflows_loans_transfer,
+    },
   };
   const conversions = {
     cash_delta: totals.conversions_cash_delta,
@@ -70,7 +75,8 @@ const buildClosureSnapshot = ({
     collections.down_payments.cash +
     collections.manual_incomes.cash -
     outflows.expenses.cash -
-    outflows.commissions.cash +
+    outflows.commissions.cash -
+    outflows.loans.cash +
     conversions.cash_delta -
     dropsBlock.cash;
   const expectedTransfer =
@@ -79,7 +85,8 @@ const buildClosureSnapshot = ({
     collections.down_payments.transfer +
     collections.manual_incomes.transfer -
     outflows.expenses.transfer -
-    outflows.commissions.transfer +
+    outflows.commissions.transfer -
+    outflows.loans.transfer +
     conversions.transfer_delta -
     dropsBlock.transfer;
 
@@ -261,7 +268,8 @@ const snapshot = async (id) => {
     totals.collections_down_payments_cash +
     totals.collections_manual_incomes_cash -
     totals.outflows_expenses_cash -
-    totals.outflows_commissions_cash +
+    totals.outflows_commissions_cash -
+    totals.outflows_loans_cash +
     totals.conversions_cash_delta -
     dropsBlock.cash;
   const expectedTransfer =
@@ -270,7 +278,8 @@ const snapshot = async (id) => {
     totals.collections_down_payments_transfer +
     totals.collections_manual_incomes_transfer -
     totals.outflows_expenses_transfer -
-    totals.outflows_commissions_transfer +
+    totals.outflows_commissions_transfer -
+    totals.outflows_loans_transfer +
     totals.conversions_transfer_delta -
     dropsBlock.transfer;
 
@@ -302,6 +311,10 @@ const snapshot = async (id) => {
       commissions: {
         cash: totals.outflows_commissions_cash,
         transfer: totals.outflows_commissions_transfer,
+      },
+      loans: {
+        cash: totals.outflows_loans_cash,
+        transfer: totals.outflows_loans_transfer,
       },
     },
     conversions: {
@@ -849,6 +862,7 @@ module.exports = {
   getActive,
   getById,
   getAll,
+  computeAvailableCash,
   // exportado para tests unitarios (cashSessions.service.test.js)
   transferDeclaredToGeneralCash,
 };

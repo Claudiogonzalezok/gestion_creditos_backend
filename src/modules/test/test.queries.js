@@ -38,6 +38,22 @@ const unlinkMovements = async (client, sessionIds) => {
 };
 
 /**
+ * Desvincula (sin borrar) los créditos LOAN cuyo desembolso apuntaba a las
+ * cajas a eliminar, dejando `disbursement_cash_session_id = NULL`. Columna
+ * distinta a `cash_session_id` (no entra en MOVEMENT_TABLES) — requiere su
+ * propio UPDATE antes de poder borrar las cajas (FK RESTRICT).
+ * @param {object} client Cliente PG dentro de transacción.
+ * @param {string[]} sessionIds Ids de cajas a desvincular.
+ */
+const unlinkCreditDisbursements = async (client, sessionIds) => {
+  if (sessionIds.length === 0) return;
+  await client.query(
+    `UPDATE credits SET disbursement_cash_session_id = NULL WHERE disbursement_cash_session_id = ANY($1::uuid[])`,
+    [sessionIds],
+  );
+};
+
+/**
  * Borra los registros de caja dependientes de las cajas indicadas
  * (drops, ingresos manuales, detalle de cierre).
  * @param {object} client Cliente PG dentro de transacción.
@@ -154,6 +170,7 @@ const forceTokensExpired = async (client, userId) => {
 module.exports = {
   findCashSessionIdsByBusinessDay,
   unlinkMovements,
+  unlinkCreditDisbursements,
   deleteSessionChildren,
   deleteCashSessions,
   deleteBusinessDay,

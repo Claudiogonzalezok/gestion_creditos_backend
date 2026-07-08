@@ -198,7 +198,9 @@ const findAll = async (filters = {}) => {
                 COALESCE((cs.closure_snapshot -> 'collections' -> 'manual_incomes' ->> 'transfer')::float8, 0),
              'expenses',
                COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'cash')::float8, 0) +
-               COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'transfer')::float8, 0),
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'expenses' ->> 'transfer')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'loans' ->> 'cash')::float8, 0) +
+               COALESCE((cs.closure_snapshot -> 'outflows' -> 'loans' ->> 'transfer')::float8, 0),
              'drops',
                COALESCE((cs.closure_snapshot -> 'drops' ->> 'cash')::float8, 0) +
                COALESCE((cs.closure_snapshot -> 'drops' ->> 'transfer')::float8, 0),
@@ -519,7 +521,7 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
   // keys outflows_commissions_* se mantienen en 0 para preservar el formato
   // v1 del closure_snapshot. Cuando se versione el snapshot a v2, estas keys
   // pueden eliminarse del retorno.
-  const [drops, payments, downPays, manualIncomes, expenses, conversions] =
+  const [drops, payments, downPays, manualIncomes, expenses, loans, conversions] =
     await Promise.all([
       db.query(
         `SELECT
@@ -575,6 +577,16 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
        WHERE cash_session_id = $1`,
         [cashSessionId],
       ),
+      // Egreso de préstamos (LOAN) desembolsados desde esta caja (rama DAILY).
+      // Por ahora el desembolso es 100% efectivo — no soporta split cash/transfer.
+      db.query(
+        `SELECT
+         COALESCE(SUM(total_amount), 0)::float8 AS loans_cash
+       FROM credits
+       WHERE disbursement_cash_session_id = $1
+         AND type = 'LOAN'`,
+        [cashSessionId],
+      ),
       db.query(
         `SELECT
          COALESCE(SUM(CASE WHEN source_method='CASH'     THEN -amount
@@ -605,6 +617,8 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
     outflows_expenses_transfer: expenses.rows[0].expenses_transfer,
     outflows_commissions_cash: 0, // DEPRECATED: ahora se imputa a Caja General
     outflows_commissions_transfer: 0, // DEPRECATED
+    outflows_loans_cash: loans.rows[0].loans_cash,
+    outflows_loans_transfer: 0, // sin soporte de split todavía
     conversions_cash_delta: conversions.rows[0].conversions_cash_delta,
     conversions_transfer_delta: conversions.rows[0].conversions_transfer_delta,
   };
