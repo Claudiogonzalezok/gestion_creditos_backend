@@ -4,7 +4,7 @@
 const cron = require('node-cron');
 const pool = require('../config/db');
 const { getValue } = require('../modules/systemConfig/systemConfig.queries');
-const { runWithLogging } = require('../utils/cronLogger');
+const { runWithLogging, ts } = require('../utils/cronLogger');
 
 const expireOldCredits = () => runWithLogging('creditExpiry', async () => {
   const client = await pool.connect();
@@ -41,11 +41,11 @@ const expireOldCredits = () => runWithLogging('creditExpiry', async () => {
       );
       freedCount = freed.rows.length;
       console.log(
-        `[JOB creditExpiry] ${expiredIds.length} crédito(s) expirado(s). ` +
+        `[${ts()}] [JOB creditExpiry] ${expiredIds.length} crédito(s) expirado(s). ` +
         `${freedCount} unidad(es) liberada(s).`
       );
     } else {
-      console.log('[JOB creditExpiry] Sin créditos a expirar.');
+      console.log(`[${ts()}] [JOB creditExpiry] Sin créditos a expirar.`);
     }
 
     await client.query('COMMIT');
@@ -67,7 +67,7 @@ const start = () => {
   cron.schedule('0 3 * * *', expireOldCredits, {
     timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
   });
-  console.log('[JOB creditExpiry] Programado — todos los días a las 03:00.');
+  console.log(`[${ts()}] [JOB creditExpiry] Programado — todos los días a las 03:00.`);
 };
 
 module.exports = { start, expireOldCredits };

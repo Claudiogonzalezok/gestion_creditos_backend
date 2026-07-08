@@ -6,7 +6,7 @@ const cron = require('node-cron');
 const pool = require('../config/db');
 const { getWeekBounds } = require('../utils/creditCalculator');
 const { getValue } = require('../modules/systemConfig/systemConfig.queries');
-const { runWithLogging } = require('../utils/cronLogger');
+const { runWithLogging, ts } = require('../utils/cronLogger');
 
 const closeWeeklyCycle = () => runWithLogging('weeklyCommissionCycle', async () => {
   // Leer el parámetro en cada ejecución para reflejar cambios del Admin sin reinicio
@@ -33,13 +33,13 @@ const closeWeeklyCycle = () => runWithLogging('weeklyCommissionCycle', async () 
   );
 
   if (r.rows.length === 0) {
-    console.log(`[JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end}: sin comisiones pendientes.`);
+    console.log(`[${ts()}] [JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end}: sin comisiones pendientes.`);
     return { affected_rows: 0, metadata: { week_start, week_end, employees: 0 } };
   }
 
   const totalEgress = r.rows.reduce((sum, row) => sum + parseFloat(row.pending_total), 0);
   const totalCount  = r.rows.reduce((sum, row) => sum + parseInt(row.pending_count), 0);
-  console.log(`[JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end} cerrado.`);
+  console.log(`[${ts()}] [JOB weeklyCommissionCycle] Ciclo ${week_start}→${week_end} cerrado.`);
   console.log(`  Empleados con pendientes: ${r.rows.length}`);
   console.log(`  Total a liquidar el lunes: $${totalEgress.toFixed(2)}`);
   r.rows.forEach(row =>
@@ -62,7 +62,7 @@ const start = () => {
   cron.schedule('59 23 * * *', closeWeeklyCycle, {
     timezone: process.env.TZ || 'America/Argentina/Buenos_Aires',
   });
-  console.log('[JOB weeklyCommissionCycle] Programado — todos los días a las 23:59.');
+  console.log(`[${ts()}] [JOB weeklyCommissionCycle] Programado — todos los días a las 23:59.`);
 };
 
 module.exports = { start, closeWeeklyCycle };

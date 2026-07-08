@@ -60,7 +60,7 @@
 const cron = require("node-cron");
 const pool = require("../config/db");
 const { getValue } = require("../modules/systemConfig/systemConfig.queries");
-const { runWithLogging } = require("../utils/cronLogger");
+const { runWithLogging, ts } = require("../utils/cronLogger");
 const notificationsService = require("../modules/notifications/notifications.service");
 const notificationsQueries = require("../modules/notifications/notifications.queries");
 
@@ -95,7 +95,7 @@ const _notifyOverdueInstallments = async (updatedRows) => {
     }
   } catch (err) {
     console.error(
-      "🔴  [notifications] Falló el hook de MORA (overdueInstallments):",
+      `[${ts()}] 🔴  [notifications] Falló el hook de MORA (overdueInstallments):`,
       err,
     );
   }
@@ -229,7 +229,7 @@ const markOverdueAndApplyPenalty = () =>
       const updatedCount = result.rows.length;
       const totalDays = result.rows.reduce((sum, r) => sum + r.days_applied, 0);
       console.log(
-        `[JOB overdueInstallments] ` +
+        `[${ts()}] [JOB overdueInstallments] ` +
           `${updatedCount} cuota(s) actualizada(s) — total ${totalDays} día(s) de mora aplicados ` +
           `(effective_today=${effectiveToday}, last_run=${lastRun || "NUNCA"}).`,
       );
@@ -258,7 +258,7 @@ const start = () => {
     timezone: process.env.TZ || "America/Argentina/Buenos_Aires",
   });
   console.log(
-    "[JOB overdueInstallments] Programado — todos los días a las 02:00.",
+    `[${ts()}] [JOB overdueInstallments] Programado — todos los días a las 02:00.`,
   );
 };
 

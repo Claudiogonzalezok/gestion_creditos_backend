@@ -6,7 +6,7 @@
 
 const cron = require("node-cron");
 const pool = require("../config/db");
-const { runWithLogging } = require("../utils/cronLogger");
+const { runWithLogging, ts } = require("../utils/cronLogger");
 const notificationsService = require("../modules/notifications/notifications.service");
 const notificationsQueries = require("../modules/notifications/notifications.queries");
 
@@ -17,7 +17,7 @@ const checkOpenCashRegisters = () =>
     );
 
     if (result.rows.length === 0) {
-      console.log("[JOB cashRegisterReminder] Sin jornadas abiertas.");
+      console.log(`[${ts()}] [JOB cashRegisterReminder] Sin jornadas abiertas.`);
       return { affected_rows: 0 };
     }
 
@@ -35,7 +35,7 @@ const checkOpenCashRegisters = () =>
     }
 
     console.log(
-      `[JOB cashRegisterReminder] ${result.rows.length} jornada(s) notificada(s).`,
+      `[${ts()}] [JOB cashRegisterReminder] ${result.rows.length} jornada(s) notificada(s).`,
     );
     return { affected_rows: result.rows.length };
   });
@@ -47,7 +47,7 @@ const start = () => {
     timezone: process.env.TZ || "America/Argentina/Buenos_Aires",
   });
   console.log(
-    "[JOB cashRegisterReminder] Programado — todos los días a las 21:00.",
+    `[${ts()}] [JOB cashRegisterReminder] Programado — todos los días a las 21:00.`,
   );
 };
 
