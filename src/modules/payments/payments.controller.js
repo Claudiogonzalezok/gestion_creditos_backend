@@ -3,8 +3,8 @@ const response = require('../../utils/response');
 
 const getAll = async (req, res) => {
   try {
-    const { status, collector_id, installment_id } = req.query;
-    return response.success(res, await service.getAll({ status, collector_id, installment_id }, req.user));
+    const { status, collector_id, installment_id, date_from, date_to } = req.query;
+    return response.success(res, await service.getAll({ status, collector_id, installment_id, date_from, date_to }, req.user));
   } catch (err) { return response.serverError(res, err); }
 };
 

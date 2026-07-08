@@ -21,7 +21,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const pool = require("../../config/db");
-const { MOVEMENT_CONCEPT_CASE } = require("../../utils/movementConcept");
+const { movementConceptCase } = require("../../utils/movementConcept");
 
 // ── Dashboard del día — única query con CTEs ──────────────────
 /**
@@ -551,7 +551,7 @@ const findMovementsBySessionId = async (cashSessionId) => {
      FROM (
        SELECT
          p.id,
-         ${MOVEMENT_CONCEPT_CASE} AS concepto,
+         ${movementConceptCase("p", "cr")} AS concepto,
          p.approved_at AS fecha_hora,
          COALESCE(approver.full_name, collector.full_name, 'Sistema') AS responsable,
          CASE WHEN COALESCE(p.is_reversal, FALSE) THEN 'EGRESO' ELSE 'INGRESO' END AS tipo,
