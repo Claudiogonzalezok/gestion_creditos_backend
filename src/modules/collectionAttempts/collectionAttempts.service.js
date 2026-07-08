@@ -30,7 +30,8 @@ const create = async (data, requestingUser) => {
     `SELECT i.id, i.status AS installment_status,
             c.id AS credit_id, c.status AS credit_status,
             cu.assigned_collector_id,
-            to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today_date
+            to_char(CURRENT_DATE, 'YYYY-MM-DD') AS today_date,
+            to_char(CURRENT_DATE + 1, 'YYYY-MM-DD') AS tomorrow_date
      FROM installments i
      JOIN credits c   ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
@@ -82,13 +83,21 @@ const create = async (data, requestingUser) => {
     ? inst.assigned_collector_id || requestingUser.id
     : requestingUser.id;
 
+  // Fecha de próxima visita según el tipo:
+  //   NOT_FOUND → se agenda automáticamente el día siguiente (el cobrador vuelve
+  //     mañana). Así la cuota entra en la planilla del día siguiente.
+  //   NO_PAYMENT / SCHEDULED_VISIT → la fecha indicada por el cliente.
+  const nextVisitDate = data.attempt_type === 'NOT_FOUND'
+    ? inst.tomorrow_date
+    : data.next_visit_date;
+
   const attempt = await queries.create({
     installmentId:  data.installment_id,
     collectorId:    ownerCollectorId,
     createdBy:      requestingUser.id,
     attemptType:    data.attempt_type,
     reason:         data.reason,
-    nextVisitDate:  data.attempt_type === 'NOT_FOUND' ? null : data.next_visit_date,
+    nextVisitDate,
     notes:          data.notes,
   });
 

@@ -28,6 +28,7 @@ const mockInstallment = (overrides = {}) => {
         credit_status: "ACTIVE",
         assigned_collector_id: "col-1",
         today_date: "2026-06-23",
+        tomorrow_date: "2026-06-24",
         ...overrides,
       },
     ],
@@ -179,5 +180,28 @@ describe("collectionAttempts.create — compat flujo cobrador (NO_PAYMENT)", () 
     expect(
       collectionsQueries.updateManagementStatusForActiveTodaySheet,
     ).toHaveBeenCalledWith("col-1", "inst-1", "NO_PAYMENT");
+  });
+
+  it("NOT_FOUND agenda automáticamente la próxima visita para el día siguiente", async () => {
+    mockInstallment({ assigned_collector_id: "col-1" });
+    queries.create.mockResolvedValue({ id: "att-4" });
+
+    await service.create(
+      { installment_id: "inst-1", attempt_type: "NOT_FOUND" },
+      COLLECTOR,
+    );
+
+    // La fecha se fija automáticamente al día siguiente (tomorrow_date), sin que
+    // el cobrador la ingrese.
+    expect(queries.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptType: "NOT_FOUND",
+        nextVisitDate: "2026-06-24",
+      }),
+    );
+    // Sigue reflejando la gestión del día en la planilla.
+    expect(
+      collectionsQueries.updateManagementStatusForActiveTodaySheet,
+    ).toHaveBeenCalledWith("col-1", "inst-1", "NOT_FOUND");
   });
 });
