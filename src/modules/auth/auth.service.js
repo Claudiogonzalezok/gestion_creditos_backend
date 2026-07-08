@@ -25,7 +25,7 @@ const loginInternal = async (dni, password) => {
   const maxAttempts = parseInt(maxAttemptsStr || '3');
 
   if (!user) throw { status: 401, message: 'Credenciales incorrectas. Verificá tus datos e intentá nuevamente.' };
-  if (user.locked_at) throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
+  if (user.locked_at && user.role !== 'ADMIN') throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
   if (user.status !== 'ACTIVE') throw { status: 401, message: 'Tu cuenta no está activa. Comunicarte con el administrador del sistema.' };
 
   const valid = await bcrypt.compare(password, user.password_hash);
@@ -33,8 +33,10 @@ const loginInternal = async (dni, password) => {
     await queries.incrementFailedAttempts(user.id);
     const remaining = maxAttempts - (user.failed_attempts + 1);
     if (remaining <= 0) {
-      await queries.lockUser(user.id);
-      throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
+      if (user.role !== 'ADMIN') {
+        await queries.lockUser(user.id);
+        throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
+      }
     }
     throw { status: 401, message: 'Credenciales incorrectas. Verificá tus datos e intentá nuevamente.' };
   }
@@ -55,6 +57,8 @@ const loginInternal = async (dni, password) => {
     user: {
       id:               user.id,
       full_name:        user.full_name,
+      dni:              user.dni,
+      email:            user.email,
       role:             user.role,
       is_temp_password: user.is_temp_password,
     },

@@ -21,6 +21,16 @@ const generate = async (req, res) => {
   }
 };
 
+const generateBatch = async (req, res) => {
+  try {
+    const result = await service.generateBatch(req.body, req.user.id);
+    return res.status(200).json({ ok: true, message: 'Lote de planillas procesado.', data: result });
+  } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
 const getAll = async (req, res) => {
   try {
     const { collector_id, date, include_regenerated } = req.query;
@@ -42,4 +52,37 @@ const getById = async (req, res) => {
   }
 };
 
-module.exports = { generate, getAll, getById };
+const close = async (req, res) => {
+  try {
+    const result = await service.close(req.params.id, req.user.id);
+    return response.success(res, result, 'Planilla cerrada correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const cancel = async (req, res) => {
+  try {
+    const result = await service.cancel(req.params.id);
+    return response.success(res, result, 'Planilla cancelada correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const send = async (req, res) => {
+  try {
+    const result = await service.send(req.params.id, req.user);
+    return response.success(res, result, 'Planilla marcada como enviada.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+module.exports = { generate, generateBatch, getAll, getById, close, cancel, send };

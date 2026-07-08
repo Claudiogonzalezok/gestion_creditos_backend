@@ -1,9 +1,39 @@
-const pool = require('../../config/db');
+// ═══════════════════════════════════════════════════════════════════════════
+// @deprecated MÓDULO LEGACY (cash_registers + cash_movements + dashboard)
+// ═══════════════════════════════════════════════════════════════════════════
+// Post-Fase 1+2+3 + auditoría IMP-1/IMP-8 (Camino 2 — deprecación blanda):
+//
+//   La autoridad operativa pasó a:
+//     - business_days  (estado contable de la jornada)
+//     - cash_sessions  (caja física de cada usuario)
+//     - cash_account_movements (libro contable de Caja General y futuras cuentas)
+//
+//   Este módulo (cash_registers + cash_movements) se mantiene SOLO por
+//   compatibilidad temporal con consumers existentes (dashboard antiguo,
+//   reportes). NO se debe agregar lógica nueva ni nuevas dependencias acá.
+//
+//   La eliminación definitiva está planificada en la rama futura
+//   feat/cash-system-cleanup, una vez que el frontend y los procesos hayan
+//   migrado al nuevo modelo.
+//
+//   Ver auditoría completa en docs/audit-cash-2026-06-02.md (sección
+//   "Bloque D — IMP-1 + IMP-8") y reporte final tras este commit.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const pool = require("../../config/db");
+const { movementConceptCase } = require("../../utils/movementConcept");
 
 // ── Dashboard del día — única query con CTEs ──────────────────
 /**
  * Obtiene el dashboard diario de caja sumando cobros aprobados y enganches.
  * Solo incorpora movimientos tipo DOWN_PAYMENT dentro del bloque de ventas.
+ *
+ * NOTA Fase 3: las liquidaciones de comisiones dejaron de imputarse como egreso
+ * operativo del día. Ahora son operación de tesorería y descuentan de Caja
+ * General (cash_account_movements / SALARY_PAYMENT). Por eso este dashboard YA
+ * NO incluye commission_liquidations en total_outflows / net_balance — antes lo
+ * hacía y producía un doble-cómputo (egreso operativo + descuento de tesorería).
+ *
  * @param {string} date - Fecha local del día a consultar.
  * @returns {Promise<object>} Resumen consolidado de caja.
  */
@@ -22,36 +52,47 @@ const getDashboard = async (date) => {
        WHERE (status = 'APPROVED' AND approved_at::date = $1::date)
           OR  (status = 'PENDING'  AND created_at::date = $1::date)
      ),
-     down_payments_data AS (
+      down_payments_data AS (
         SELECT
           COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
           COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
           COALESCE(SUM(amount), 0)                                             AS total,
           COUNT(*)                                                              AS count
         FROM credit_down_payments
-        WHERE created_at::date = $1::date
+        WHERE register_date = $1::date
           AND payment_type = 'DOWN_PAYMENT'
+       ),
+       manual_incomes_data AS (
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+          COALESCE(SUM(amount), 0)                                             AS total,
+          COUNT(*)                                                              AS count
+        FROM cash_session_manual_incomes
+        WHERE created_at::date = $1::date
       ),
-     egreses_data AS (
-       SELECT COALESCE(SUM(total_paid), 0) AS total
-       FROM commission_liquidations
-       WHERE paid_at::date = $1::date
-     ),
-     expenses_data AS (
+       expenses_data AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
          COALESCE(SUM(amount), 0)                                             AS total,
          COUNT(*)                                                              AS count
-       FROM expenses
-       WHERE created_at::date = $1::date
-     )
-     SELECT
-       (p.cash_amount     + dp.cash_amount)::float8         AS cash_amount,
-       (p.transfer_amount + dp.transfer_amount)::float8     AS transfer_amount,
-       (p.total_collected + dp.total)::float8               AS total_collected,
-       (e.total + ex.total)::float8                         AS total_outflows,
-       (p.total_collected + dp.total - e.total - ex.total)::float8 AS net_balance,
+        FROM expenses
+        WHERE register_date = $1::date
+      ),
+      conversions_data AS (
+        SELECT
+          COALESCE(SUM(CASE WHEN source_method = 'CASH' THEN -amount WHEN target_method = 'CASH' THEN amount ELSE 0 END), 0) AS cash_delta,
+          COALESCE(SUM(CASE WHEN source_method = 'TRANSFER' THEN -amount WHEN target_method = 'TRANSFER' THEN amount ELSE 0 END), 0) AS transfer_delta
+        FROM cash_conversions
+        WHERE register_date = $1::date
+      )
+      SELECT
+        (p.cash_amount     + dp.cash_amount     + mi.cash_amount     + cv.cash_delta)::float8 AS cash_amount,
+        (p.transfer_amount + dp.transfer_amount + mi.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount,
+        (p.total_collected + dp.total + mi.total)::float8    AS total_collected,
+        ex.total::float8                                     AS total_outflows,
+        (p.total_collected + dp.total + mi.total - ex.total)::float8 AS net_balance,
        p.approved_count::int                                AS approved_count,
        p.pending_count::int                                 AS pending_count,
        p.pending_amount::float8                             AS pending_amount,
@@ -59,8 +100,8 @@ const getDashboard = async (date) => {
        dp.count::int                                        AS down_payments_count,
        ex.total::float8                                     AS expenses_total,
        ex.count::int                                        AS expenses_count
-     FROM payments_data p, down_payments_data dp, egreses_data e, expenses_data ex`,
-    [date]
+      FROM payments_data p, down_payments_data dp, manual_incomes_data mi, expenses_data ex, conversions_data cv`,
+    [date],
   );
   return r.rows[0];
 };
@@ -69,8 +110,14 @@ const getDashboard = async (date) => {
 /**
  * Calcula los totales diarios usados para el cierre de caja.
  * Devuelve ingresos brutos, egresos desglosados por método y saldos netos.
- * cash_amount_neto     = (cobros_efec + enganches_efec) - (gastos_efec + comisiones_efec)
- * transfer_amount_neto = (cobros_transf + enganches_transf) - (gastos_transf + comisiones_transf)
+ * cash_amount_neto     = (cobros_efec + enganches_efec) - gastos_efec + conv_delta
+ * transfer_amount_neto = (cobros_transf + enganches_transf) - gastos_transf + conv_delta
+ *
+ * NOTA Fase 3: las liquidaciones de comisiones dejaron de imputarse al cierre
+ * operativo del día (ahora son operación de tesorería contra Caja General).
+ * commissions_cash/transfer se devuelven en 0 para preservar el shape del
+ * response, pero los netos por método ya NO las restan.
+ *
  * @param {string} date - Fecha local del cierre.
  * @returns {Promise<object>} Totales brutos, egresos y netos de efectivo y transferencia.
  */
@@ -84,45 +131,53 @@ const getDailyTotals = async (date) => {
        FROM payments
        WHERE status = 'APPROVED' AND approved_at::date = $1::date
      ),
-     down_payment_totals AS (
+      down_payment_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM credit_down_payments
-       WHERE created_at::date = $1::date
-         AND payment_type = 'DOWN_PAYMENT'
-     ),
-     commissions_totals AS (
-       SELECT
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
-         COALESCE(SUM(total_paid), 0)                                             AS total
-       FROM commission_liquidations
-       WHERE paid_at::date = $1::date
-     ),
-     expenses_totals AS (
+       WHERE register_date = $1::date
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
+      manual_incomes_totals AS (
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
+          COALESCE(SUM(amount), 0)                                             AS total
+        FROM cash_session_manual_incomes
+        WHERE created_at::date = $1::date
+      ),
+      expenses_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount,
          COALESCE(SUM(amount), 0)                                             AS total
-       FROM expenses
-       WHERE created_at::date = $1::date
+        FROM expenses
+        WHERE register_date = $1::date
+     ),
+     conversions_totals AS (
+       SELECT
+         COALESCE(SUM(CASE WHEN source_method = 'CASH' THEN -amount WHEN target_method = 'CASH' THEN amount ELSE 0 END), 0) AS cash_delta,
+         COALESCE(SUM(CASE WHEN source_method = 'TRANSFER' THEN -amount WHEN target_method = 'TRANSFER' THEN amount ELSE 0 END), 0) AS transfer_delta
+       FROM cash_conversions
+       WHERE register_date = $1::date
      )
      SELECT
        -- Ingresos brutos por método
-       (p.cash_amount     + dp.cash_amount)::float8                                         AS gross_cash,
-       (p.transfer_amount + dp.transfer_amount)::float8                                     AS gross_transfer,
+        (p.cash_amount     + dp.cash_amount     + mi.cash_amount)::float8                    AS gross_cash,
+        (p.transfer_amount + dp.transfer_amount + mi.transfer_amount)::float8                AS gross_transfer,
        -- Egresos desglosados por método
        ex.cash_amount::float8                                                               AS expenses_cash,
        ex.transfer_amount::float8                                                           AS expenses_transfer,
-       c.cash_amount::float8                                                                AS commissions_cash,
-       c.transfer_amount::float8                                                            AS commissions_transfer,
-       (ex.total + c.total)::float8                                                         AS total_outflows,
+       -- DEPRECATED Fase 3: commissions ya no se imputan al día (van a Caja General).
+       0::float8                                                                            AS commissions_cash,
+       0::float8                                                                            AS commissions_transfer,
+       ex.total::float8                                                                     AS total_outflows,
        -- Saldos netos por método (ingresos - egresos del mismo método)
-       (p.cash_amount     + dp.cash_amount     - ex.cash_amount     - c.cash_amount)::float8     AS cash_amount,
-       (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount)::float8 AS transfer_amount
-     FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex`,
-    [date]
+         (p.cash_amount     + dp.cash_amount     + mi.cash_amount     - ex.cash_amount     + cv.cash_delta)::float8 AS cash_amount,
+         (p.transfer_amount + dp.transfer_amount + mi.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transfer_amount
+      FROM payments_totals p, down_payment_totals dp, manual_incomes_totals mi, expenses_totals ex, conversions_totals cv`,
+    [date],
   );
   return r.rows[0];
 };
@@ -136,7 +191,7 @@ const getPendingPaymentsToday = async (date) => {
      FROM payments
      WHERE status = 'PENDING'
        AND created_at::date = $1::date`,
-    [date]
+    [date],
   );
   return r.rows[0];
 };
@@ -149,6 +204,10 @@ const getPendingPaymentsToday = async (date) => {
  * @returns {Promise<object>} Desglose de ingresos, egresos, saldos netos y pendientes.
  */
 const getPreClose = async (date) => {
+  // NOTA Fase 3: las liquidaciones de comisiones ya no son egreso operativo del
+  // día (ahora son tesorería contra Caja General). Las keys comisiones_efectivo
+  // y comisiones_transferencia se devuelven en 0 para preservar el shape de la
+  // respuesta. Los totales y "esperados" por método ya NO restan commissions.
   const r = await pool.query(
     `WITH
      payments_totals AS (
@@ -158,62 +217,106 @@ const getPreClose = async (date) => {
        FROM payments
        WHERE status = 'APPROVED' AND approved_at::date = $1::date
      ),
-     down_payment_totals AS (
+      down_payment_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM credit_down_payments
-       WHERE created_at::date = $1::date
-         AND payment_type = 'DOWN_PAYMENT'
-     ),
-     commissions_totals AS (
-       SELECT
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
-         COALESCE(SUM(total_paid) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
-       FROM commission_liquidations
-       WHERE paid_at::date = $1::date
-     ),
-     expenses_totals AS (
+       WHERE register_date = $1::date
+          AND payment_type = 'DOWN_PAYMENT'
+      ),
+      manual_incomes_totals AS (
+        SELECT
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
+          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
+        FROM cash_session_manual_incomes
+        WHERE created_at::date = $1::date
+      ),
+      expenses_totals AS (
        SELECT
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0) AS cash_amount,
          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0) AS transfer_amount
        FROM expenses
-       WHERE created_at::date = $1::date
+       WHERE register_date = $1::date
      ),
-     pending_totals AS (
+      pending_totals AS (
        SELECT
          COUNT(*)::int                                   AS count,
          COALESCE(SUM(amount_received), 0)::float8       AS amount
-       FROM payments
-       WHERE status = 'PENDING'
-         AND created_at::date = $1::date
-     )
-     SELECT
+        FROM payments
+        WHERE status = 'PENDING'
+          AND created_at::date = $1::date
+      ),
+      conversions_totals AS (
+        SELECT
+          COALESCE(SUM(CASE WHEN source_method = 'CASH' THEN -amount WHEN target_method = 'CASH' THEN amount ELSE 0 END), 0) AS cash_delta,
+          COALESCE(SUM(CASE WHEN source_method = 'TRANSFER' THEN -amount WHEN target_method = 'TRANSFER' THEN amount ELSE 0 END), 0) AS transfer_delta
+        FROM cash_conversions
+        WHERE register_date = $1::date
+      )
+      SELECT
        p.cash_amount::float8                                                                     AS cobros_efectivo,
        p.transfer_amount::float8                                                                 AS cobros_transferencia,
        dp.cash_amount::float8                                                                    AS enganches_efectivo,
        dp.transfer_amount::float8                                                                AS enganches_transferencia,
-       (p.cash_amount + p.transfer_amount + dp.cash_amount + dp.transfer_amount)::float8         AS total_bruto,
+        (p.cash_amount + p.transfer_amount + dp.cash_amount + dp.transfer_amount + mi.cash_amount + mi.transfer_amount)::float8 AS total_bruto,
        ex.cash_amount::float8                                                                    AS gastos_efectivo,
        ex.transfer_amount::float8                                                                AS gastos_transferencia,
-       c.cash_amount::float8                                                                     AS comisiones_efectivo,
-       c.transfer_amount::float8                                                                 AS comisiones_transferencia,
-       (ex.cash_amount + ex.transfer_amount + c.cash_amount + c.transfer_amount)::float8         AS total_egresos,
-       (p.cash_amount + dp.cash_amount - ex.cash_amount - c.cash_amount)::float8                 AS efectivo_esperado,
-       (p.transfer_amount + dp.transfer_amount - ex.transfer_amount - c.transfer_amount)::float8 AS transferencia_esperada,
-       pt.count                                                                                  AS pendientes_count,
-       pt.amount                                                                                 AS pendientes_amount
-     FROM payments_totals p, down_payment_totals dp, commissions_totals c, expenses_totals ex, pending_totals pt`,
-    [date]
+       -- DEPRECATED Fase 3: commissions ya no se imputan al día.
+       0::float8                                                                                 AS comisiones_efectivo,
+       0::float8                                                                                 AS comisiones_transferencia,
+       (ex.cash_amount + ex.transfer_amount)::float8                                             AS total_egresos,
+         (p.cash_amount + dp.cash_amount + mi.cash_amount - ex.cash_amount + cv.cash_delta)::float8 AS efectivo_esperado,
+         (p.transfer_amount + dp.transfer_amount + mi.transfer_amount - ex.transfer_amount + cv.transfer_delta)::float8 AS transferencia_esperada,
+        pt.count                                                                                  AS pendientes_count,
+        pt.amount                                                                                 AS pendientes_amount
+      FROM payments_totals p, down_payment_totals dp, manual_incomes_totals mi, expenses_totals ex, pending_totals pt, conversions_totals cv`,
+    [date],
   );
   return r.rows[0];
+};
+
+// ── Jornada comercial activa ──────────────────────────────────
+/**
+ * Busca la fecha más reciente con actividad financiera que no tiene cierre de caja.
+ * Permite determinar la jornada comercial activa cuando se trabaja pasada la medianoche.
+ * Busca hasta 14 días atrás desde la fecha de referencia.
+ * @param {string} today - Fecha de referencia YYYY-MM-DD.
+ * @returns {Promise<string|null>} Fecha YYYY-MM-DD de la jornada activa, o null si no hay actividad abierta.
+ */
+const findUnclosedJornadaDate = async (today) => {
+  const r = await pool.query(
+    `SELECT MAX(activity_date)::text AS jornada_date
+     FROM (
+       SELECT created_at::date AS activity_date
+       FROM payments
+       WHERE status != 'REJECTED'
+         AND created_at::date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+       UNION ALL
+       SELECT register_date
+       FROM credit_down_payments
+       WHERE payment_type = 'DOWN_PAYMENT'
+         AND register_date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+       UNION ALL
+       SELECT register_date
+       FROM expenses
+       WHERE register_date BETWEEN ($1::date - INTERVAL '14 days') AND $1::date
+     ) t
+     WHERE activity_date NOT IN (
+       SELECT register_date::date
+       FROM cash_registers
+       WHERE register_date >= ($1::date - INTERVAL '14 days')
+     )`,
+    [today],
+  );
+  return r.rows[0]?.jornada_date || null;
 };
 
 // ── Verifica si ya existe un cierre para la fecha ─────────────
 const findByDate = async (date) => {
   const r = await pool.query(
     `SELECT id FROM cash_registers WHERE register_date = $1::date`,
-    [date]
+    [date],
   );
   return r.rows[0] || null;
 };
@@ -231,9 +334,18 @@ const findAll = async ({ dateFrom, dateTo, differenceStatus } = {}) => {
     JOIN users u ON u.id = cr.closed_by
     WHERE 1=1`;
   const params = [];
-  if (dateFrom)         { params.push(dateFrom);         q += ` AND cr.register_date >= $${params.length}`; }
-  if (dateTo)           { params.push(dateTo);           q += ` AND cr.register_date <= $${params.length}`; }
-  if (differenceStatus) { params.push(differenceStatus); q += ` AND cr.difference_status = $${params.length}`; }
+  if (dateFrom) {
+    params.push(dateFrom);
+    q += ` AND cr.register_date >= $${params.length}`;
+  }
+  if (dateTo) {
+    params.push(dateTo);
+    q += ` AND cr.register_date <= $${params.length}`;
+  }
+  if (differenceStatus) {
+    params.push(differenceStatus);
+    q += ` AND cr.difference_status = $${params.length}`;
+  }
   q += ` ORDER BY cr.register_date DESC`;
   return (await pool.query(q, params)).rows;
 };
@@ -250,13 +362,18 @@ const findById = async (id) => {
      FROM cash_registers cr
      JOIN users u ON u.id = cr.closed_by
      WHERE cr.id = $1`,
-    [id]
+    [id],
   );
 
   const register = registerResult.rows[0];
   if (!register) return null;
 
-  const [paymentsResult, downPaymentsResult, liquidationsResult, expensesResult] = await Promise.all([
+  const [
+    paymentsResult,
+    downPaymentsResult,
+    liquidationsResult,
+    expensesResult,
+  ] = await Promise.all([
     pool.query(
       `SELECT p.id, p.amount_received::float8, p.payment_method,
               p.transfer_reference, p.approved_at,
@@ -271,7 +388,7 @@ const findById = async (id) => {
        WHERE p.status = 'APPROVED'
          AND p.approved_at::date = $1::date
        ORDER BY p.approved_at`,
-      [register.register_date]
+      [register.register_date],
     ),
     pool.query(
       `SELECT cdp.id, cdp.amount::float8, cdp.payment_method,
@@ -282,10 +399,10 @@ const findById = async (id) => {
         JOIN credits c    ON c.id  = cdp.credit_id
         JOIN customers cu ON cu.id = c.customer_id
         JOIN users u      ON u.id  = cdp.approved_by
-        WHERE cdp.created_at::date = $1::date
+        WHERE cdp.register_date = $1::date
           AND cdp.payment_type = 'DOWN_PAYMENT'
         ORDER BY cdp.created_at`,
-      [register.register_date]
+      [register.register_date],
     ),
     pool.query(
       `SELECT cl.id, cl.total_paid::float8, cl.commissions_total::float8,
@@ -296,7 +413,7 @@ const findById = async (id) => {
        JOIN users u ON u.id = cl.user_id
        WHERE cl.cash_register_id = $1
        ORDER BY cl.paid_at`,
-      [id]
+      [id],
     ),
     pool.query(
       `SELECT e.id, e.amount::float8, e.description, e.payment_method,
@@ -304,28 +421,39 @@ const findById = async (id) => {
               u.full_name AS created_by_name
        FROM expenses e
        JOIN users u ON u.id = e.created_by
-       WHERE e.created_at::date = $1::date
+       WHERE e.register_date = $1::date
        ORDER BY e.created_at`,
-      [register.register_date]
+      [register.register_date],
     ),
   ]);
 
   return {
     ...register,
     breakdown: {
-      payments:      paymentsResult.rows,
+      payments: paymentsResult.rows,
       down_payments: downPaymentsResult.rows,
-      liquidations:  liquidationsResult.rows,
-      expenses:      expensesResult.rows,
+      liquidations: liquidationsResult.rows,
+      expenses: expensesResult.rows,
     },
   };
 };
 
 // ── Crear cierre ──────────────────────────────────────────────
-const create = async (client, {
-  registerDate, cashAmount, transferAmount, totalCollected,
-  totalOutflows, declaredCash, difference, differenceStatus, observations, closedBy,
-}) => {
+const create = async (
+  client,
+  {
+    registerDate,
+    cashAmount,
+    transferAmount,
+    totalCollected,
+    totalOutflows,
+    declaredCash,
+    difference,
+    differenceStatus,
+    observations,
+    closedBy,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO cash_registers
        (register_date, cash_amount, transfer_amount, total_collected,
@@ -337,22 +465,193 @@ const create = async (client, {
                declared_cash::float8, difference::float8,
                difference_status, observations, created_at`,
     [
-      registerDate, cashAmount, transferAmount, totalCollected,
-      totalOutflows, declaredCash, difference, differenceStatus, observations || null, closedBy,
-    ]
+      registerDate,
+      cashAmount,
+      transferAmount,
+      totalCollected,
+      totalOutflows,
+      declaredCash,
+      difference,
+      differenceStatus,
+      observations || null,
+      closedBy,
+    ],
   );
   return r.rows[0];
 };
 
 // ── Vincula liquidaciones del día al cierre recién creado ─────
-const linkLiquidations = async (client, cashRegisterId, date) => {
-  await client.query(
-    `UPDATE commission_liquidations
-     SET cash_register_id = $1
-     WHERE paid_at::date = $2::date
-       AND cash_register_id IS NULL`,
-    [cashRegisterId, date]
+/**
+ * @deprecated CRIT-2 (Fase 3): no se llama más desde cashRegister.service.close.
+ *   Post-Fase 3, commission_liquidations se imputa a Caja General vía
+ *   cash_account_movements/SALARY_PAYMENT (con reference_type=COMMISSION_LIQUIDATION).
+ *   Enlazar la liquidación al cierre legacy producía contradicciones: el cierre
+ *   "se apropiaba" de un movimiento que ya estaba en otro libro.
+ *   Se mantiene como no-op para no romper consumers/tests que la mockean.
+ */
+const linkLiquidations = async (/* client, cashRegisterId, date */) => {
+  // No-op intencional. Ver JSDoc.
+};
+
+/**
+ * Crea un movimiento de conversión entre efectivo y transferencia.
+ * @param {object} client - Cliente de transacción pg.
+ * @param {object} params - Datos de la conversión.
+ * @returns {Promise<object>} Conversión creada.
+ */
+const createConversion = async (
+  client,
+  {
+    registerDate,
+    criteria,
+    sourceMethod,
+    targetMethod,
+    amount,
+    notes,
+    createdBy,
+    cashSessionId,
+  },
+) => {
+  const r = await client.query(
+    `INSERT INTO cash_conversions
+       (register_date, criteria, source_method, target_method, amount, notes, created_by, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id,
+               register_date::text,
+               criteria,
+               source_method,
+               target_method,
+               amount::float8,
+               notes,
+               created_by,
+               cash_session_id,
+               created_at`,
+    [
+      registerDate,
+      criteria,
+      sourceMethod,
+      targetMethod,
+      amount,
+      notes || null,
+      createdBy,
+      cashSessionId || null,
+    ],
   );
+  return r.rows[0];
+};
+
+/**
+ * Lista los movimientos imputados a una caja operativa en una sola consulta.
+ * @param {string} cashSessionId - Caja operativa a consultar.
+ * @returns {Promise<object[]>} Movimientos normalizados para la vista de jornada.
+ */
+const findMovementsBySessionId = async (cashSessionId) => {
+  const r = await pool.query(
+    `SELECT id, concepto, fecha_hora, responsable, tipo, monto, metodo_pago
+     FROM (
+       SELECT
+         p.id,
+         ${movementConceptCase("p", "cr")} AS concepto,
+         p.approved_at AS fecha_hora,
+         COALESCE(approver.full_name, collector.full_name, 'Sistema') AS responsable,
+         CASE WHEN COALESCE(p.is_reversal, FALSE) THEN 'EGRESO' ELSE 'INGRESO' END AS tipo,
+         p.amount_received::float8 AS monto,
+         CASE p.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE p.payment_method
+         END AS metodo_pago
+       FROM payments p
+       LEFT JOIN users approver ON approver.id = p.approved_by
+       LEFT JOIN users collector ON collector.id = p.collector_id
+       LEFT JOIN installments i ON i.id = p.installment_id
+       LEFT JOIN credits cr ON cr.id = i.credit_id
+       WHERE p.cash_session_id = $1
+         AND p.status = 'APPROVED'
+
+       UNION ALL
+
+       SELECT
+         e.id,
+         e.description AS concepto,
+         e.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'EGRESO' AS tipo,
+         e.amount::float8 AS monto,
+         CASE e.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE e.payment_method
+         END AS metodo_pago
+       FROM expenses e
+       LEFT JOIN users u ON u.id = e.created_by
+       WHERE e.cash_session_id = $1
+
+       UNION ALL
+
+       SELECT
+         mi.id,
+         mi.description AS concepto,
+         mi.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'INGRESO' AS tipo,
+         mi.amount::float8 AS monto,
+         CASE mi.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE mi.payment_method
+         END AS metodo_pago
+       FROM cash_session_manual_incomes mi
+       LEFT JOIN users u ON u.id = mi.created_by
+       WHERE mi.cash_session_id = $1
+
+       UNION ALL
+
+       SELECT
+         cdp.id,
+         CASE cdp.payment_type
+           WHEN 'PREPAID_INSTALLMENT' THEN 'Anticipo de cuotas'
+           ELSE 'Anticipo / venta'
+         END AS concepto,
+         cdp.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'INGRESO' AS tipo,
+         cdp.amount::float8 AS monto,
+         CASE cdp.payment_method
+           WHEN 'CASH' THEN 'EFECTIVO'
+           WHEN 'TRANSFER' THEN 'TRANSFERENCIA'
+           ELSE cdp.payment_method
+         END AS metodo_pago
+       FROM credit_down_payments cdp
+       LEFT JOIN users u ON u.id = cdp.approved_by
+       WHERE cdp.cash_session_id = $1
+
+       UNION ALL
+
+       SELECT
+         cc.id,
+         CONCAT('Conversión ',
+           CASE cc.source_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END,
+           ' a ',
+           CASE cc.target_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END
+         ) AS concepto,
+         cc.created_at AS fecha_hora,
+         COALESCE(u.full_name, 'Sistema') AS responsable,
+         'CONVERSION' AS tipo,
+         cc.amount::float8 AS monto,
+         CONCAT(
+           CASE cc.source_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END,
+           ' → ',
+           CASE cc.target_method WHEN 'CASH' THEN 'EFECTIVO' ELSE 'TRANSFERENCIA' END
+         ) AS metodo_pago
+       FROM cash_conversions cc
+       LEFT JOIN users u ON u.id = cc.created_by
+       WHERE cc.cash_session_id = $1
+     ) movements
+     ORDER BY fecha_hora DESC`,
+    [cashSessionId],
+  );
+  return r.rows;
 };
 
 module.exports = {
@@ -361,8 +660,11 @@ module.exports = {
   getPreClose,
   getPendingPaymentsToday,
   findByDate,
+  findUnclosedJornadaDate,
   findAll,
   findById,
   create,
   linkLiquidations,
+  createConversion,
+  findMovementsBySessionId,
 };

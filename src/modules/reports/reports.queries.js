@@ -1,4 +1,6 @@
 const pool = require("../../config/db");
+const { IS_OVERDUE_DERIVED } = require("../../utils/installmentSql");
+const { movementConceptCase } = require("../../utils/movementConcept");
 
 // ── 1. Reporte de recaudación ─────────────────────────────────
 
@@ -12,33 +14,42 @@ const pool = require("../../config/db");
 const getCollectionReport = async (dateFrom, dateTo) => {
   const result = await pool.query(
     `WITH collection_data AS (
+       -- Neteo de reversiones (RESTAN, como en la caja) y desglose por
+       -- amount_cash/amount_transfer en vez de FILTER por payment_method: así los
+       -- cobros MIXTOS reparten bien su efectivo/transferencia (antes, con
+       -- payment_method='MIXED', quedaban fuera de ambos y el desglose no sumaba
+       -- el total). El conteo excluye reversiones.
        SELECT
-         p.approved_at::date                                                            AS day,
-         COALESCE(SUM(p.amount_received), 0)                                           AS total,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0) AS total_cash,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0) AS total_transfer,
-         COUNT(*)::int                                                                  AS installments_count,
+         COALESCE(bd.business_date, p.approved_at::date)                               AS day,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_received ELSE p.amount_received END), 0) AS total,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_cash     ELSE p.amount_cash     END), 0) AS total_cash,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_transfer ELSE p.amount_transfer END), 0) AS total_transfer,
+         COUNT(*) FILTER (WHERE NOT p.is_reversal)::int                                AS installments_count,
          0::numeric                                                                     AS down_payments_total,
          0::int                                                                         AS down_payments_count
        FROM payments p
+       LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
+       LEFT JOIN business_days bd ON bd.id = cs.business_day_id
        WHERE p.status = 'APPROVED'
-         AND p.approved_at::date BETWEEN $1 AND $2
-       GROUP BY p.approved_at::date
+         AND COALESCE(bd.business_date, p.approved_at::date) BETWEEN $1 AND $2
+       GROUP BY COALESCE(bd.business_date, p.approved_at::date)
 
        UNION ALL
 
+       -- Enganche + cuotas adelantadas históricas (PREPAID_INSTALLMENT), igual que
+       -- la caja. Desglose por amount_cash/amount_transfer para soportar mixto.
        SELECT
-         cdp.created_at::date                                                           AS day,
+         cdp.register_date                                                             AS day,
          COALESCE(SUM(cdp.amount), 0)                                                  AS total,
-         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'CASH'),     0)   AS total_cash,
-         COALESCE(SUM(cdp.amount) FILTER (WHERE cdp.payment_method = 'TRANSFER'), 0)   AS total_transfer,
+         COALESCE(SUM(cdp.amount_cash),     0)                                         AS total_cash,
+         COALESCE(SUM(cdp.amount_transfer), 0)                                         AS total_transfer,
          0::int                                                                         AS installments_count,
          COALESCE(SUM(cdp.amount), 0)                                                  AS down_payments_total,
          COUNT(*)::int                                                                  AS down_payments_count
        FROM credit_down_payments cdp
-       WHERE cdp.created_at::date BETWEEN $1 AND $2
-         AND cdp.payment_type = 'DOWN_PAYMENT'
-       GROUP BY cdp.created_at::date
+       WHERE cdp.register_date BETWEEN $1 AND $2
+         AND cdp.payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')
+       GROUP BY cdp.register_date
      ),
      daily_aggregated AS (
        SELECT
@@ -77,15 +88,17 @@ const getCollectionReport = async (dateFrom, dateTo) => {
   );
 
   const rows = result.rows;
-  const daily = rows.filter(r => r.result_type === 'daily').map(r => r.data);
-  const summary = rows.find(r => r.result_type === 'summary')?.data || {};
+  const daily = rows
+    .filter((r) => r.result_type === "daily")
+    .map((r) => r.data);
+  const summary = rows.find((r) => r.result_type === "summary")?.data || {};
 
   return { summary, daily };
 };
 
 // ── 2. Reporte de cartera ─────────────────────────────────────
 
-const getPortfolioReport = async () => {
+const getPortfolioReport = async (graceDays) => {
   const byStatusType = await pool.query(
     `SELECT
        c.status,
@@ -101,7 +114,7 @@ const getPortfolioReport = async () => {
     `SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS pending_balance
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
-     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID')`,
+     WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')`,
   );
 
   const topCustomers = await pool.query(
@@ -112,14 +125,15 @@ const getPortfolioReport = async () => {
        u.full_name                                                        AS assigned_collector,
        COUNT(DISTINCT c.id)::int                                          AS active_credits,
        COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8            AS pending_balance,
-       COUNT(i.id) FILTER (WHERE i.status = 'OVERDUE')::int              AS overdue_installments
+       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED("i", "$1")})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
-     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID')
+     JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      LEFT JOIN users u   ON u.id = cu.assigned_collector_id
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY pending_balance DESC
      LIMIT 10`,
+    [graceDays],
   );
 
   return {
@@ -131,7 +145,7 @@ const getPortfolioReport = async () => {
 
 // ── 3. Reporte de mora ────────────────────────────────────────
 
-const getOverdueReport = async () => {
+const getOverdueReport = async (graceDays) => {
   const summary = await pool.query(
     `SELECT
        COUNT(*)::int                                                                    AS overdue_installments,
@@ -151,7 +165,8 @@ const getOverdueReport = async () => {
        COALESCE(SUM(i.amount_due - i.amount_paid)
                       FILTER (WHERE (CURRENT_DATE - i.due_date) > 90), 0)::float8      AS bucket_90plus_amount
      FROM installments i
-     WHERE i.status = 'OVERDUE'`,
+     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}`,
+    [graceDays],
   );
 
   const byCustomer = await pool.query(
@@ -174,9 +189,10 @@ const getOverdueReport = async () => {
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
      LEFT JOIN users u ON u.id  = cu.assigned_collector_id
-     WHERE i.status = 'OVERDUE'
+     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY total_overdue DESC`,
+    [graceDays],
   );
 
   return { summary: summary.rows[0], by_customer: byCustomer.rows };
@@ -186,7 +202,15 @@ const getOverdueReport = async () => {
 
 const getCollectorsReport = async (dateFrom, dateTo) => {
   const r = await pool.query(
-    `SELECT
+    `WITH collector_payments AS (
+       SELECT
+         p.*,
+         COALESCE(bd.business_date, p.approved_at::date) AS jornada_date
+       FROM payments p
+       LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
+       LEFT JOIN business_days bd ON bd.id = cs.business_day_id
+     )
+     SELECT
        u.id                                                                      AS collector_id,
        u.full_name                                                               AS collector_name,
        u.role,
@@ -203,10 +227,10 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
          FILTER (WHERE p.status = 'APPROVED')::numeric, 2
        ), 0)::float8                                                             AS avg_approval_hours
      FROM users u
-     LEFT JOIN payments p
+     LEFT JOIN collector_payments p
        ON p.collector_id = u.id
-       AND p.approved_at::date BETWEEN $1 AND $2
        AND p.status = 'APPROVED'
+       AND p.jornada_date BETWEEN $1 AND $2
      WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
      ORDER BY total_collected DESC`,
@@ -313,29 +337,43 @@ const getUpcomingReport = async (days = 30) => {
 /**
  * Devuelve un resumen ejecutivo del día para el panel administrativo.
  * Suma los enganches reales del día junto con la cobranza aprobada.
+ * @param {number} graceDays - Días de gracia para considerar una cuota en mora.
+ * @param {string} jornadaDate - Fecha de la jornada comercial activa (YYYY-MM-DD).
  * @returns {Promise<object>} Métricas diarias clave del negocio.
  */
-const getSummaryReport = async () => {
+const getSummaryReport = async (graceDays, jornadaDate) => {
   const r = await pool.query(
     `WITH
      today_payments AS (
+       -- Neteo de reversiones: un cobro reversado (is_reversal=TRUE) es dinero que
+       -- salió de la caja, por lo que RESTA de lo recaudado — misma lógica que
+       -- computeSessionTotals. Sin esto, una reversión se sumaba como si fuera un
+       -- ingreso y "Recaudado hoy" quedaba inflado. El conteo de cobros excluye las
+       -- reversiones (no son cobros nuevos).
        SELECT
-         COALESCE(SUM(p.amount_received), 0)::float8                                     AS collected,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'CASH'),     0)::float8 AS cash,
-         COALESCE(SUM(p.amount_received) FILTER (WHERE p.payment_method = 'TRANSFER'), 0)::float8 AS transfer,
-         COUNT(*)::int                                                                    AS count
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_received ELSE p.amount_received END), 0)::float8 AS collected,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_cash     ELSE p.amount_cash     END), 0)::float8 AS cash,
+         COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_transfer ELSE p.amount_transfer END), 0)::float8 AS transfer,
+         COUNT(*) FILTER (WHERE NOT p.is_reversal)::int                                  AS count
        FROM payments p
-       WHERE p.status = 'APPROVED' AND p.approved_at::date = CURRENT_DATE
+       LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
+       LEFT JOIN business_days bd ON bd.id = cs.business_day_id
+       WHERE p.status = 'APPROVED'
+         AND COALESCE(bd.business_date, p.approved_at::date) = $2
      ),
+      -- Incluye PREPAID_INSTALLMENT además de DOWN_PAYMENT, igual que la caja
+      -- (computeSessionTotals). Las cuotas adelantadas NUEVAS ya no generan filas
+      -- en credit_down_payments (van a payments), así que esto solo recupera los
+      -- registros históricos y no hay doble conteo.
       today_down_payments AS (
         SELECT
           COALESCE(SUM(amount), 0)::float8 AS total,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'CASH'),     0)::float8 AS cash,
-          COALESCE(SUM(amount) FILTER (WHERE payment_method = 'TRANSFER'), 0)::float8 AS transfer,
+          COALESCE(SUM(amount_cash),     0)::float8 AS cash,
+          COALESCE(SUM(amount_transfer), 0)::float8 AS transfer,
           COUNT(*)::int                    AS count
         FROM credit_down_payments
-        WHERE created_at::date = CURRENT_DATE
-          AND payment_type = 'DOWN_PAYMENT'
+        WHERE register_date = $2
+          AND payment_type IN ('DOWN_PAYMENT', 'PREPAID_INSTALLMENT')
       ),
      pending_payments AS (
        SELECT COUNT(*)::int AS count FROM payments WHERE status = 'PENDING'
@@ -347,14 +385,14 @@ const getSummaryReport = async () => {
        SELECT COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS balance
        FROM installments i
        JOIN credits c ON c.id = i.credit_id
-       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID')
+       WHERE c.status = 'ACTIVE' AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      ),
      overdue AS (
        SELECT
          COUNT(*)::int                                         AS count,
          COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS amount
        FROM installments i
-       WHERE i.status = 'OVERDUE'
+       WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
      ),
      upcoming AS (
        SELECT
@@ -381,7 +419,7 @@ const getSummaryReport = async () => {
          AND created_at <  date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
      )
      SELECT
-       CURRENT_DATE                          AS report_date,
+       $2::date                              AS report_date,
        tp.collected                          AS today_collected,
        (tp.cash + tdp.cash)                  AS today_cash,
        (tp.transfer + tdp.transfer)          AS today_transfer,
@@ -408,6 +446,7 @@ const getSummaryReport = async () => {
           overdue ov,
           upcoming up,
           refinanced_month rm`,
+    [graceDays, jornadaDate],
   );
   return r.rows[0];
 };
@@ -449,22 +488,283 @@ const getSellersReport = async (dateFrom, dateTo) => {
  * @returns {Promise<array>} Lista de pagos pendientes con >48 horas.
  */
 const getPaymentsOverdue48h = async () => {
+  // payments NO tiene customer_id: hay que llegar a customers vía
+  // installments → credits. Además excluimos reversiones (no son cobros
+  // pendientes reales).
   const r = await pool.query(
     `SELECT
        p.id,
-       p.customer_id,
-       c.full_name                                        AS customer_name,
-       p.amount_received,
+       cu.id                                              AS customer_id,
+       cu.full_name                                       AS customer_name,
+       p.amount_received::float8,
        p.payment_method,
        p.created_at,
        EXTRACT(EPOCH FROM (NOW() - p.created_at)) / 3600 AS hours_pending
      FROM payments p
-     LEFT JOIN customers c ON c.id = p.customer_id
-     WHERE p.status = 'PENDING'
+     JOIN installments i ON i.id  = p.installment_id
+     JOIN credits     c  ON c.id  = i.credit_id
+     JOIN customers   cu ON cu.id = c.customer_id
+     WHERE p.status      = 'PENDING'
+       AND p.is_reversal = FALSE
        AND NOW() - p.created_at > INTERVAL '48 hours'
      ORDER BY p.created_at ASC`,
   );
   return r.rows;
+};
+
+/**
+ * Obtiene el reporte de conversiones de caja por rango de fechas.
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<object>} Resumen y detalle diario de conversiones.
+ */
+const getCashConversionsReport = async (dateFrom, dateTo) => {
+  const summaryResult = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total_conversions,
+       COALESCE(SUM(amount), 0)::float8 AS total_amount,
+       COALESCE(SUM(amount) FILTER (WHERE source_method = 'CASH'), 0)::float8 AS cash_to_transfer,
+       COALESCE(SUM(amount) FILTER (WHERE source_method = 'TRANSFER'), 0)::float8 AS transfer_to_cash
+     FROM cash_conversions
+     WHERE register_date BETWEEN $1::date AND $2::date`,
+    [dateFrom, dateTo],
+  );
+
+  const detailResult = await pool.query(
+    `SELECT
+       cc.id,
+       cc.register_date::text,
+       cc.criteria,
+       cc.source_method,
+       cc.target_method,
+       cc.amount::float8,
+       cc.notes,
+       cc.created_at,
+       u.full_name AS created_by_name
+     FROM cash_conversions cc
+     JOIN users u ON u.id = cc.created_by
+     WHERE cc.register_date BETWEEN $1::date AND $2::date
+     ORDER BY cc.register_date DESC, cc.created_at DESC`,
+    [dateFrom, dateTo],
+  );
+
+  return {
+    summary: summaryResult.rows[0],
+    rows: detailResult.rows,
+  };
+};
+
+/**
+ * Obtiene el reporte de movimientos de caja (cobros, enganches, gastos,
+ * drops y conversiones) imputados a una caja operativa puntual.
+ * @param {string} cashSessionId - ID de la caja operativa (cash_sessions.id).
+ * @returns {Promise<object>} Resumen agregado y detalle de movimientos.
+ */
+const getCashMovementsReport = async (cashSessionId) => {
+  const result = await pool.query(
+    `WITH movements AS (
+       SELECT p.id, 'COBRO' AS type, p.approved_at AS occurred_at,
+               p.cash_session_id, p.amount_received::float8 AS amount,
+               p.payment_method,
+               ${movementConceptCase("p", "cr")} AS description,
+               u.full_name AS performed_by_name,
+               p.transfer_reference,
+               c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,
+               cr.id AS credit_id, cr.type::text AS credit_type, i.id AS installment_id,
+               i.installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               prod.product_summary
+          FROM payments p
+          JOIN installments i ON i.id = p.installment_id
+          JOIN credits cr ON cr.id = i.credit_id
+          JOIN customers c ON c.id = cr.customer_id
+          LEFT JOIN users u ON u.id = p.approved_by
+          LEFT JOIN LATERAL (
+            SELECT string_agg(pr.title || COALESCE(' · ' || pu.unit_code, ''), ', ' ORDER BY pr.title, pu.unit_code) AS product_summary
+              FROM credit_products cp
+              JOIN product_units pu ON pu.id = cp.product_unit_id
+              JOIN product_variants pv ON pv.id = pu.variant_id
+              JOIN products pr ON pr.id = pv.product_id
+             WHERE cp.credit_id = cr.id
+          ) prod ON TRUE
+         WHERE p.status = 'APPROVED' AND p.cash_session_id IS NOT NULL
+
+       UNION ALL
+
+        SELECT dp.id, 'ENGANCHE' AS type, dp.created_at AS occurred_at,
+               dp.cash_session_id, dp.amount::float8 AS amount,
+               dp.payment_method,
+               'Enganche · ' || c.full_name AS description,
+               u.full_name AS performed_by_name,
+               dp.transfer_reference,
+               c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,
+               cr.id AS credit_id, cr.type::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               prod.product_summary
+          FROM credit_down_payments dp
+          JOIN credits cr ON cr.id = dp.credit_id
+          JOIN customers c ON c.id = cr.customer_id
+          LEFT JOIN users u ON u.id = dp.approved_by
+          LEFT JOIN LATERAL (
+            SELECT string_agg(pr.title || COALESCE(' · ' || pu.unit_code, ''), ', ' ORDER BY pr.title, pu.unit_code) AS product_summary
+              FROM credit_products cp
+              JOIN product_units pu ON pu.id = cp.product_unit_id
+              JOIN product_variants pv ON pv.id = pu.variant_id
+              JOIN products pr ON pr.id = pv.product_id
+             WHERE cp.credit_id = cr.id
+          ) prod ON TRUE
+         WHERE dp.cash_session_id IS NOT NULL
+
+       UNION ALL
+
+        SELECT e.id, 'GASTO' AS type, e.created_at AS occurred_at,
+               e.cash_session_id, e.amount::float8 AS amount,
+               e.payment_method, e.description,
+               u.full_name AS performed_by_name,
+               e.transfer_reference,
+               NULL::uuid AS customer_id, NULL::text AS customer_name, NULL::text AS customer_dni,
+               NULL::uuid AS credit_id, NULL::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, ec.id AS expense_category_id,
+               ec.name AS expense_category_name, e.source AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               NULL::text AS product_summary
+          FROM expenses e
+          LEFT JOIN users u ON u.id = e.created_by
+          LEFT JOIN expense_categories ec ON ec.id = e.category_id
+         WHERE e.cash_session_id IS NOT NULL
+
+       UNION ALL
+
+        SELECT d.id, 'DROP' AS type, d.performed_at AS occurred_at,
+               d.cash_session_id, d.amount::float8 AS amount,
+               d.payment_method,
+               'Drop a ' || d.destination
+                 || COALESCE(' · ' || d.reason, '')
+                 || CASE WHEN d.status = 'REVERSED' THEN ' (revertido)' ELSE '' END AS description,
+               u.full_name AS performed_by_name,
+               NULL::text AS transfer_reference,
+               NULL::uuid AS customer_id, NULL::text AS customer_name, NULL::text AS customer_dni,
+               NULL::uuid AS credit_id, NULL::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               d.destination AS drop_destination, d.reason AS drop_reason,
+               d.status AS drop_status, d.receipt_reference,
+               NULL::text AS conversion_source_method, NULL::text AS conversion_target_method,
+               NULL::text AS conversion_criteria,
+               NULL::text AS product_summary
+          FROM cash_session_drops d
+          LEFT JOIN users u ON u.id = d.performed_by
+
+       UNION ALL
+
+        SELECT cv.id, 'CONVERSION' AS type, cv.created_at AS occurred_at,
+               cv.cash_session_id, cv.amount::float8 AS amount,
+               cv.source_method || '_' || cv.target_method AS payment_method,
+               COALESCE(cv.notes, 'Conversión ' || cv.source_method || ' → ' || cv.target_method) AS description,
+               u.full_name AS performed_by_name,
+               NULL::text AS transfer_reference,
+               NULL::uuid AS customer_id, NULL::text AS customer_name, NULL::text AS customer_dni,
+               NULL::uuid AS credit_id, NULL::text AS credit_type, NULL::uuid AS installment_id,
+               NULL::int AS installment_number, NULL::uuid AS expense_category_id,
+               NULL::text AS expense_category_name, NULL::text AS expense_source,
+               NULL::text AS drop_destination, NULL::text AS drop_reason,
+               NULL::text AS drop_status, NULL::text AS receipt_reference,
+               cv.source_method AS conversion_source_method, cv.target_method AS conversion_target_method,
+               cv.criteria AS conversion_criteria,
+               NULL::text AS product_summary
+          FROM cash_conversions cv
+          LEFT JOIN users u ON u.id = cv.created_by
+         WHERE cv.cash_session_id IS NOT NULL
+     )
+     SELECT m.id, m.type, m.occurred_at, m.cash_session_id,
+            bd.business_date::text AS business_date, b.name AS branch_name,
+             cs.shift_label, m.amount, m.payment_method, m.description,
+             m.performed_by_name, m.transfer_reference, m.customer_id,
+             m.customer_name, m.customer_dni, m.credit_id, m.credit_type,
+             m.installment_id, m.installment_number, m.expense_category_id,
+             m.expense_category_name, m.expense_source, m.drop_destination,
+             m.drop_reason, m.drop_status, m.receipt_reference,
+             m.conversion_source_method, m.conversion_target_method,
+             m.conversion_criteria, m.product_summary
+       FROM movements m
+       JOIN cash_sessions cs ON cs.id = m.cash_session_id
+       JOIN business_days bd ON bd.id = cs.business_day_id
+       JOIN branches b ON b.id = bd.branch_id
+      WHERE cs.id = $1
+      ORDER BY m.occurred_at DESC`,
+    [cashSessionId],
+  );
+
+  const rows = result.rows;
+  const sumByType = (type) =>
+    rows.filter((r) => r.type === type).reduce((acc, r) => acc + r.amount, 0);
+
+  return {
+    summary: {
+      total_movements: rows.length,
+      total_collections: sumByType("COBRO"),
+      total_down_payments: sumByType("ENGANCHE"),
+      total_expenses: sumByType("GASTO"),
+      total_drops: sumByType("DROP"),
+    },
+    rows,
+  };
+};
+
+/**
+ * Reporte de movimientos de Caja General (tesorería): ledger completo de
+ * `cash_account_movements`, independiente de cualquier jornada/caja operativa.
+ * Cubre gastos/conversiones COMPANY e ingresos manuales (MANUAL_INCOME), que
+ * no aparecen en `getCashMovementsReport` (scoped a cash_session_id).
+ * @param {string} dateFrom - Fecha inicial del rango.
+ * @param {string} dateTo - Fecha final del rango.
+ * @returns {Promise<object>} Resumen agregado y detalle de movimientos.
+ */
+const getGeneralCashMovementsReport = async (dateFrom, dateTo) => {
+  const summaryResult = await pool.query(
+    `SELECT
+       COUNT(*)::int AS total_movements,
+       COALESCE(SUM(m.amount) FILTER (WHERE m.direction = 'IN'), 0)::float8 AS total_in,
+       COALESCE(SUM(m.amount) FILTER (WHERE m.direction = 'OUT'), 0)::float8 AS total_out
+     FROM cash_account_movements m
+     JOIN cash_accounts ca ON ca.id = m.cash_account_id AND ca.type = 'GENERAL_CASH'
+     WHERE m.created_at::date BETWEEN $1::date AND $2::date`,
+    [dateFrom, dateTo],
+  );
+
+  const detailResult = await pool.query(
+    `SELECT
+       m.id, m.movement_type, m.direction,
+       m.amount::float8 AS amount,
+       m.amount_cash::float8 AS amount_cash,
+       m.amount_transfer::float8 AS amount_transfer,
+       m.description, m.beneficiary_name,
+       m.reference_type, m.reference_id, m.created_at,
+       u.full_name AS performed_by_name
+     FROM cash_account_movements m
+     JOIN cash_accounts ca ON ca.id = m.cash_account_id AND ca.type = 'GENERAL_CASH'
+     LEFT JOIN users u ON u.id = m.created_by
+     WHERE m.created_at::date BETWEEN $1::date AND $2::date
+     ORDER BY m.created_at DESC`,
+    [dateFrom, dateTo],
+  );
+
+  return {
+    summary: summaryResult.rows[0],
+    rows: detailResult.rows,
+  };
 };
 
 module.exports = {
@@ -477,4 +777,7 @@ module.exports = {
   getSummaryReport,
   getSellersReport,
   getPaymentsOverdue48h,
+  getCashMovementsReport,
+  getCashConversionsReport,
+  getGeneralCashMovementsReport,
 };

@@ -1,11 +1,19 @@
 const pool = require('../../config/db');
 
-const findAll = async ({ role, status, search } = {}) => {
-  let q = `SELECT id, full_name, dni, email, address, role, status, is_temp_password,
+const findAll = async ({ role, roles, status, search } = {}) => {
+  let q = `SELECT id, full_name, dni, email, phone, address, role, status, is_temp_password,
                   failed_attempts, locked_at, last_login_at, created_at
            FROM users WHERE 1=1`;
   const params = [];
-  if (role)   { params.push(role);   q += ` AND role = $${params.length}`; }
+  // `role` = match exacto (compat). `roles` = conjunto (ej: cobradores =
+  // COLLECTOR + SELLER_COLLECTOR, vendedores = SELLER + SELLER_COLLECTOR).
+  if (role) {
+    params.push(role);
+    q += ` AND role = $${params.length}`;
+  } else if (Array.isArray(roles) && roles.length) {
+    params.push(roles);
+    q += ` AND role = ANY($${params.length}::text[])`;
+  }
   if (status) { params.push(status); q += ` AND status = $${params.length}`; }
   if (search) {
     params.push(`%${search}%`);
@@ -18,7 +26,7 @@ const findAll = async ({ role, status, search } = {}) => {
 
 const findById = async (id) => {
   const result = await pool.query(
-    `SELECT id, full_name, dni, email, address, role, status, is_temp_password,
+    `SELECT id, full_name, dni, email, phone, address, role, status, is_temp_password,
             failed_attempts, locked_at, last_login_at, created_at, updated_at
      FROM users WHERE id = $1`,
     [id]
@@ -54,6 +62,17 @@ const create = async ({ full_name, dni, email, address, password_hash, role }) =
   return result.rows[0];
 };
 
+const findOwnProfileById = async (id) => {
+  const result = await pool.query(
+    `SELECT id, full_name, dni, email, phone, address, role, status,
+            is_temp_password, failed_attempts, locked_at, last_login_at,
+            created_at, updated_at
+     FROM users WHERE id = $1`,
+    [id]
+  );
+  return result.rows[0] || null;
+};
+
 const update = async (id, { full_name, dni, email, address, role }) => {
   const result = await pool.query(
     `UPDATE users
@@ -66,6 +85,23 @@ const update = async (id, { full_name, dni, email, address, role }) => {
      WHERE id = $6
      RETURNING id, full_name, dni, email, address, role, status`,
     [full_name, dni, email, address, role, id]
+  );
+  return result.rows[0] || null;
+};
+
+const updateOwnProfile = async (id, { full_name, email, phone, address }) => {
+  const result = await pool.query(
+    `UPDATE users
+     SET full_name  = COALESCE($1, full_name),
+         email      = COALESCE($2, email),
+         phone      = COALESCE($3, phone),
+         address    = COALESCE($4, address),
+         updated_at = NOW()
+     WHERE id = $5
+     RETURNING id, full_name, dni, email, phone, address, role, status,
+               is_temp_password, failed_attempts, locked_at, last_login_at,
+               created_at, updated_at`,
+    [full_name, email, phone, address, id]
   );
   return result.rows[0] || null;
 };
@@ -123,5 +159,5 @@ const setForceReloginAt = async (id) => {
 module.exports = {
   findAll, findById, findByDni, findByEmail, countActiveAdmins,
   create, update, deactivate, activate, resetPassword, changePassword, unlock,
-  setForceReloginAt,
+  setForceReloginAt, findOwnProfileById, updateOwnProfile,
 };

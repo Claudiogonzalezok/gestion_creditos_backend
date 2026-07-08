@@ -4,8 +4,12 @@ const response = require('../../utils/response');
 // GET /api/users
 const getAll = async (req, res) => {
   try {
-    const { role, status, search } = req.query;
-    const users = await service.getAll({ role, status, search });
+    const { role, roles, status, search } = req.query;
+    // `roles` llega como CSV (ej: "COLLECTOR,SELLER_COLLECTOR"); se normaliza a array.
+    const rolesArr = roles
+      ? String(roles).split(',').map((r) => r.trim()).filter(Boolean)
+      : undefined;
+    const users = await service.getAll({ role, roles: rolesArr, status, search });
     return response.success(res, users);
   } catch (err) {
     return response.serverError(res, err);
@@ -16,6 +20,17 @@ const getAll = async (req, res) => {
 const getById = async (req, res) => {
   try {
     const user = await service.getById(req.params.id);
+    return response.success(res, user);
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+// GET /api/users/me
+const getMe = async (req, res) => {
+  try {
+    const user = await service.getOwnProfile(req.user.id);
     return response.success(res, user);
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
@@ -41,6 +56,19 @@ const update = async (req, res) => {
     const { full_name, dni, email, address, role } = req.body;
     const user = await service.update(req.params.id, { full_name, dni, email, address, role });
     return response.success(res, user, 'Usuario actualizado correctamente.');
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+// PATCH /api/users/me
+const updateMe = async (req, res) => {
+  try {
+    const { full_name, email, phone, address } = req.body;
+    const user = await service.updateOwnProfile(req.user.id, { full_name, email, phone, address });
+    return response.success(res, user, 'Perfil actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
@@ -109,4 +137,4 @@ const changePassword = async (req, res) => {
   }
 };
 
-module.exports = { getAll, getById, create, update, deactivate, activate, resetPassword, unlock, changePassword };
+module.exports = { getAll, getById, getMe, create, update, updateMe, deactivate, activate, resetPassword, unlock, changePassword };

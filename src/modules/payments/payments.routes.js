@@ -18,6 +18,10 @@ router.get('/',
       .isUUID().withMessage('collector_id debe ser un UUID válido.'),
     query('installment_id').optional()
       .isUUID().withMessage('installment_id debe ser un UUID válido.'),
+    query('date_from').optional()
+      .isISO8601().withMessage('date_from debe ser una fecha válida (YYYY-MM-DD).'),
+    query('date_to').optional()
+      .isISO8601().withMessage('date_to debe ser una fecha válida (YYYY-MM-DD).'),
   ],
   validate,
   controller.getAll

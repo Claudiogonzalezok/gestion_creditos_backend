@@ -19,8 +19,8 @@ router.get('/',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   [
     query('status').optional()
-      .isIn(['PENDING_APPROVAL','ACTIVE','SETTLED','REJECTED','EXPIRED'])
-      .withMessage('status debe ser PENDING_APPROVAL, ACTIVE, SETTLED, REJECTED o EXPIRED.'),
+      .isIn(['PENDING_APPROVAL','ACTIVE','SETTLED','REJECTED','EXPIRED','REFINANCED','WRITTEN_OFF'])
+      .withMessage('status debe ser PENDING_APPROVAL, ACTIVE, SETTLED, REJECTED, EXPIRED, REFINANCED o WRITTEN_OFF.'),
     query('type').optional()
       .isIn(['SALE','LOAN'])
       .withMessage('type debe ser SALE o LOAN.'),
@@ -40,11 +40,28 @@ router.patch('/:id/approve',
 router.patch('/:id/reject',
   authorize('ADMIN'), v.credits.reject, validate, controller.reject
 );
+router.patch('/:id/seller',
+  authorize('ADMIN'), v.credits.changeSeller, validate, controller.changeSeller
+);
 router.patch('/:id/early-settlement',
   authorize('ADMIN'), v.credits.earlySettlement, validate, controller.earlySettlement
 );
 router.post('/:id/refinance',
   authorize('ADMIN'), v.credits.refinance, validate, controller.refinance
+);
+
+// Cambio de plan — Etapa 1: simulación previa (solo ADMIN, solo lectura)
+router.get('/:id/plan-change/simulate',
+  authorize('ADMIN'), v.credits.id, validate, controller.planChangeSimulate
+);
+// Cambio de plan — Etapa 2: ejecución (solo ADMIN, sin doble aprobación)
+router.post('/:id/plan-change',
+  authorize('ADMIN'), v.credits.planChange, validate, controller.planChangeExecute
+);
+
+// Castigo de crédito (write off) — solo ADMIN
+router.post('/:id/write-off',
+  authorize('ADMIN'), v.credits.writeOff, validate, controller.writeOff
 );
 
 // Historial de cobros aprobados del crédito

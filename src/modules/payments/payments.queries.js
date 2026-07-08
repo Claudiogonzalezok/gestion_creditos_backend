@@ -1,13 +1,22 @@
-const pool = require('../../config/db');
+const pool = require("../../config/db");
+const { movementConceptCase } = require("../../utils/movementConcept");
 
-const findAll = async ({ status, collector_id, installment_id } = {}) => {
+const findAll = async ({
+  status,
+  collector_id,
+  installment_id,
+  date_from,
+  date_to,
+} = {}) => {
   let q = `
-    SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
+    SELECT p.id, p.installment_id, p.amount_received::float8,
+           p.amount_cash::float8, p.amount_transfer::float8, p.payment_method,
            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date, p.created_at,
            p.approved_at, p.approved_by,
            p.is_reversal, p.admin_direct, p.parent_payment_id,
            i.installment_number, i.amount_due::float8, i.due_date,
            c.id AS credit_id, c.type AS credit_type,
+           ${movementConceptCase("p", "c")} AS concepto,
            cu.full_name AS customer_name, cu.dni AS customer_dni,
            u.full_name  AS collector_name
     FROM payments p
@@ -17,16 +26,36 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
     LEFT JOIN users u   ON u.id  = p.collector_id
     WHERE 1=1`;
   const params = [];
-  if (status)         { params.push(status);         q += ` AND p.status = $${params.length}`; }
-  if (collector_id)   { params.push(collector_id);   q += ` AND p.collector_id = $${params.length}`; }
-  if (installment_id) { params.push(installment_id); q += ` AND p.installment_id = $${params.length}`; }
+  if (status) {
+    params.push(status);
+    q += ` AND p.status = $${params.length}`;
+  }
+  if (collector_id) {
+    params.push(collector_id);
+    q += ` AND p.collector_id = $${params.length}`;
+  }
+  if (installment_id) {
+    params.push(installment_id);
+    q += ` AND p.installment_id = $${params.length}`;
+  }
+  // Filtro por fecha sobre approved_at (fecha en que se acreditó el cobro). Los
+  // cobros sin aprobar (approved_at NULL) quedan fuera cuando se aplica el rango.
+  if (date_from) {
+    params.push(date_from);
+    q += ` AND p.approved_at::date >= $${params.length}`;
+  }
+  if (date_to) {
+    params.push(date_to);
+    q += ` AND p.approved_at::date <= $${params.length}`;
+  }
   q += ` ORDER BY p.created_at DESC`;
   return (await pool.query(q, params)).rows;
 };
 
 const findById = async (id) => {
   const r = await pool.query(
-    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8, p.payment_method,
+    `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8, p.payment_method,
             p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date,
             p.is_reversal, p.admin_direct, p.reversal_reason,
             p.created_at, p.approved_at, p.approved_by,
@@ -42,7 +71,7 @@ const findById = async (id) => {
      JOIN customers cu   ON cu.id = c.customer_id
      LEFT JOIN users u   ON u.id  = p.collector_id
      WHERE p.id = $1`,
-    [id]
+    [id],
   );
   return r.rows[0] || null;
 };
@@ -58,17 +87,42 @@ const getPendingCommittedAmount = async (installmentId) => {
     `SELECT COALESCE(SUM(amount_received), 0)::float8 AS total
      FROM payments
      WHERE installment_id = $1 AND status = 'PENDING'`,
-    [installmentId]
+    [installmentId],
   );
   return r.rows[0].total;
 };
 
-const create = async ({ installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date }) => {
-  const r = await pool.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, payment_method, transfer_reference, notes, next_visit_date)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, next_visit_date, created_at`,
-    [installment_id, collector_id, amount_received, payment_method, transfer_reference || null, notes || null, next_visit_date || null]
+const create = async (
+  {
+    installment_id,
+    collector_id,
+    amount_received,
+    amount_cash,
+    amount_transfer,
+    payment_method,
+    transfer_reference,
+    notes,
+    next_visit_date,
+    cash_session_id,
+  },
+  db = pool,
+) => {
+  const r = await db.query(
+    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,
+    [
+      installment_id,
+      collector_id,
+      amount_received,
+      amount_cash || 0,
+      amount_transfer || 0,
+      payment_method,
+      transfer_reference || null,
+      notes || null,
+      next_visit_date || null,
+      cash_session_id || null,
+    ],
   );
   return r.rows[0];
 };
@@ -86,6 +140,7 @@ const create = async ({ installment_id, collector_id, amount_received, payment_m
 const lockAndGetPayment = async (client, id) => {
   const r = await client.query(
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.notes,
             p.is_reversal, p.admin_direct, p.reversed_by_payment_id,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
@@ -101,7 +156,7 @@ const lockAndGetPayment = async (client, id) => {
      LEFT JOIN users u   ON u.id  = p.collector_id
      WHERE p.id = $1
      FOR UPDATE OF p`,
-    [id]
+    [id],
   );
   return r.rows[0] || null;
 };
@@ -122,7 +177,7 @@ const lockAndGetInstallment = async (client, installmentId) => {
      JOIN credits c ON c.id = i.credit_id
      WHERE i.id = $1
      FOR UPDATE OF i`,
-    [installmentId]
+    [installmentId],
   );
   return r.rows[0] || null;
 };
@@ -138,41 +193,80 @@ const lockAndGetInstallment = async (client, installmentId) => {
 const lockAndGetCredit = async (client, creditId) => {
   const r = await client.query(
     `SELECT id, status FROM credits WHERE id = $1 FOR UPDATE`,
-    [creditId]
+    [creditId],
   );
   return r.rows[0] || null;
 };
 
-const approve = async (client, id, adminId) => {
+const approve = async (client, id, adminId, cashSessionId = null) => {
+  // V4.2: cash_session_id se setea al aprobar (no al crear). En V4.3 el caller
+  // pasará la caja activa de la jornada; por ahora puede pasar la caja del
+  // admin que aprueba (comportamiento equivalente al Fase 2 pre-V4 en la
+  // práctica, ya que ambos son la misma caja cuando el admin opera la jornada).
   await client.query(
-    `UPDATE payments SET status = 'APPROVED', approved_by = $1, approved_at = NOW()
+    `UPDATE payments
+     SET status = 'APPROVED',
+         approved_by = $1,
+         approved_at = NOW(),
+         cash_session_id = COALESCE($3, cash_session_id)
      WHERE id = $2`,
-    [adminId, id]
+    [adminId, id, cashSessionId],
   );
 };
 
-// Aplica el cobro sobre la cuota, sin exceder el saldo real pendiente
-const updateInstallment = async (client, installmentId, amountReceived, amountDue, currentAmountPaid) => {
-  const remaining   = amountDue - currentAmountPaid;
-  const toApply     = Math.min(amountReceived, remaining);
-  const newTotal    = currentAmountPaid + toApply;
-  const newStatus   = newTotal >= amountDue ? 'PAID' : 'PARTIAL';
-  await client.query(
+/**
+ * Aplica un cobro sobre la cuota sin exceder el saldo real pendiente.
+ * El nuevo status se deriva de tres ejes: saldo restante, due_date y grace_days,
+ * en lugar de colapsar todo a PARTIAL — así una cuota vencida con pago parcial
+ * mantiene su estado OVERDUE y no oscila a PARTIAL.
+ *
+ * Reglas de transición de status (en SQL, para evaluarse con el due_date real):
+ *   1. amount_paid_nuevo ≥ amount_due                       → PAID
+ *   2. due_date + grace_days < CURRENT_DATE                  → OVERDUE
+ *   3. amount_paid_nuevo > 0                                 → PARTIAL
+ *   4. caso restante                                         → PENDING
+ *
+ * @param {object} client      - Cliente de transacción pg.
+ * @param {string} installmentId
+ * @param {number} amountReceived - Monto recibido a aplicar.
+ * @param {number} amountDue      - amount_due actual de la cuota.
+ * @param {number} currentAmountPaid - amount_paid antes del cobro.
+ * @param {number} graceDays      - Días de gracia del system_config.
+ * @returns {Promise<string>} Status final de la cuota tras aplicar el pago.
+ */
+const updateInstallment = async (
+  client,
+  installmentId,
+  amountReceived,
+  amountDue,
+  currentAmountPaid,
+  graceDays,
+) => {
+  const remaining = amountDue - currentAmountPaid;
+  const toApply = Math.min(amountReceived, remaining);
+  const newTotal = currentAmountPaid + toApply;
+  const r = await client.query(
     `UPDATE installments
-     SET status      = $1,
-         amount_paid = $2,
+     SET amount_paid = $1,
+         status      = CASE
+                         WHEN $1 >= amount_due                                          THEN 'PAID'
+                         WHEN due_date < (CURRENT_DATE - ($2)::int * INTERVAL '1 day') THEN 'OVERDUE'
+                         WHEN $1 > 0                                                    THEN 'PARTIAL'
+                         ELSE 'PENDING'
+                       END,
          updated_at  = NOW()
-     WHERE id = $3`,
-    [newStatus, newTotal, installmentId]
+     WHERE id = $3
+     RETURNING status`,
+    [newTotal, graceDays, installmentId],
   );
-  return newStatus;
+  return r.rows[0].status;
 };
 
 const countPendingInstallments = async (client, creditId) => {
   const r = await client.query(
     `SELECT COUNT(*) FROM installments
-     WHERE credit_id = $1 AND status NOT IN ('PAID')`,
-    [creditId]
+     WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')`,
+    [creditId],
   );
   return parseInt(r.rows[0].count);
 };
@@ -183,17 +277,31 @@ const settleCredit = async (client, creditId) => {
     `UPDATE credits
      SET status = 'SETTLED', settled_at = NOW(), settlement_type = 'NORMAL', updated_at = NOW()
      WHERE id = $1`,
-    [creditId]
+    [creditId],
   );
 };
 
-const reject = async (id, rejectionReason, adminId) => {
-  await pool.query(
+/**
+ * Marca una pre-carga como RECHAZADA. Debe ejecutarse DENTRO de una transacción
+ * con el payment ya lockeado vía lockAndGetPayment, y con guard SQL adicional
+ * sobre status='PENDING' para defensa contra races entre approve y reject
+ * concurrentes.
+ *
+ * @param {object} client - Cliente de transacción pg con el payment ya lockeado.
+ * @param {string} id
+ * @param {string} rejectionReason
+ * @param {string} adminId
+ * @returns {Promise<boolean>} true si se rechazó (status era PENDING), false si no.
+ */
+const reject = async (client, id, rejectionReason, adminId) => {
+  const r = await client.query(
     `UPDATE payments
      SET status = 'REJECTED', rejection_reason = $1, approved_by = $2, approved_at = NOW()
-     WHERE id = $3`,
-    [rejectionReason, adminId, id]
+     WHERE id = $3 AND status = 'PENDING'
+     RETURNING id`,
+    [rejectionReason, adminId, id],
   );
+  return r.rowCount > 0;
 };
 
 // Saldo pendiente total de todas las cuotas no pagadas del crédito
@@ -209,23 +317,27 @@ const getTotalPendingBalance = async (creditId) => {
          ), 0)
      )::float8 AS total
      FROM installments i
-     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID')`,
-    [creditId]
+     WHERE i.credit_id = $1 AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')`,
+    [creditId],
   );
   return Math.max(r.rows[0].total, 0);
 };
 
 // Cuotas pendientes/vencidas/parciales ordenadas desde un número de cuota dado
-const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumber) => {
+const getPendingInstallmentsFrom = async (
+  client,
+  creditId,
+  fromInstallmentNumber,
+) => {
   const r = await client.query(
     `SELECT id, installment_number, due_date,
             amount_due::float8, amount_paid::float8, penalty_amount::float8, status
      FROM installments
      WHERE credit_id = $1
-       AND status NOT IN ('PAID')
+       AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
        AND installment_number >= $2
      ORDER BY installment_number`,
-    [creditId, fromInstallmentNumber]
+    [creditId, fromInstallmentNumber],
   );
   return r.rows;
 };
@@ -242,11 +354,18 @@ const getPendingInstallmentsFrom = async (client, creditId, fromInstallmentNumbe
  * @param {string} paymentFrequency - Frecuencia del crédito.
  * @param {string|Date} baseDueDate - Fecha base desde la que se recalcula el plan.
  */
-const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDueDate) => {
+const shiftInstallmentDates = async (
+  client,
+  creditId,
+  paymentFrequency,
+  baseDueDate,
+) => {
+  // MENSUAL usa "1 month" (mes calendario, con clamp a fin de mes que hace
+  // PostgreSQL) para coincidir con addMonthsClamped del cronograma original.
   let interval;
-  if (paymentFrequency === 'WEEKLY')        interval = '1 week';
-  else if (paymentFrequency === 'BIWEEKLY') interval = '2 weeks';
-  else                                       interval = '1 month';
+  if (paymentFrequency === "WEEKLY") interval = "1 week";
+  else if (paymentFrequency === "BIWEEKLY") interval = "2 weeks";
+  else interval = "1 month";
 
   // Las cuotas restantes toman las fechas de las cuotas adelantadas:
   // rn=1 → baseDueDate + 0 (toma la fecha de la primera cuota adelantada)
@@ -255,7 +374,7 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
     `WITH ordered AS (
        SELECT id, ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
        FROM installments
-       WHERE credit_id = $1 AND status NOT IN ('PAID')
+       WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      )
      UPDATE installments i
      SET original_due_date = COALESCE(i.original_due_date, i.due_date),
@@ -263,7 +382,7 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
          updated_at         = NOW()
      FROM ordered
      WHERE i.id = ordered.id`,
-    [creditId, interval, baseDueDate]
+    [creditId, interval, baseDueDate],
   );
 };
 
@@ -280,21 +399,100 @@ const shiftInstallmentDates = async (client, creditId, paymentFrequency, baseDue
  */
 /**
  * @param {string|null} parentPaymentId - ID del cobro principal que generó este sub-pago por distribución.
+ * @param {number} cashRatio - Proporción del saldo a imputar a efectivo (0..1).
+ *   Hereda la mezcla del cobro cabecera: 1 si fue todo efectivo, 0 si fue todo
+ *   transferencia, o el ratio cash/total si fue mixto. El desglose se calcula en
+ *   SQL sobre el saldo real de la cuota para que amount_cash + amount_transfer
+ *   = amount_received exactamente (sin drift de redondeo JS/SQL).
  */
-const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, paymentMethod, transferReference = null, parentPaymentId = null) => {
+const markInstallmentAsPrepaid = async (
+  client,
+  installmentId,
+  adminId,
+  note,
+  paymentMethod,
+  transferReference = null,
+  parentPaymentId = null,
+  cashRatio = null,
+) => {
   await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, parent_payment_id)
-     SELECT id, $1, amount_due - amount_paid, $2, $3, 'APPROVED', $1, NOW(), $4, $6
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+        payment_method, transfer_reference,
+        status, approved_by, approved_at, notes, parent_payment_id, generation_type)
+     SELECT id, $1,
+            (amount_due - amount_paid),
+            ROUND((amount_due - amount_paid) * $7, 2),
+            (amount_due - amount_paid) - ROUND((amount_due - amount_paid) * $7, 2),
+            $2, $3, 'APPROVED', $1, NOW(), $4, $6, 'ADVANCE_DISTRIBUTION'
       FROM installments WHERE id = $5`,
-    [adminId, paymentMethod, transferReference || null, note, installmentId, parentPaymentId || null]
+    [
+      adminId,
+      paymentMethod,
+      transferReference || null,
+      note,
+      installmentId,
+      parentPaymentId || null,
+      // Fallback por método si no se pasó ratio (llamadas legacy de un solo medio).
+      cashRatio != null ? cashRatio : paymentMethod === "CASH" ? 1 : 0,
+    ],
   );
   await client.query(
     `UPDATE installments
       SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
      WHERE id = $1`,
-    [installmentId]
+    [installmentId],
+  );
+};
+
+/**
+ * Registra un pago APROBADO por una cuota adelantada AL APROBAR la venta y deja
+ * la cuota en el mismo estado que un cobro normal (PAID, amount_paid = amount_due,
+ * penalty intacta). Recibe la cuota YA resuelta por el flujo de aprobación: no
+ * re-consulta ni lockea, porque la misma transacción que la creó ya la posee de
+ * forma exclusiva. Imputa a la caja activa vía cash_session_id (el dinero se
+ * recibe al aprobar) y agrupa la operación con batch_id para trazabilidad futura.
+ * @param {object} client - Cliente de transacción.
+ * @param {object} data - installmentId, amountReceived, amountCash, amountTransfer,
+ *   paymentMethod, transferReference, adminId, cashSessionId, batchId.
+ */
+const createApprovalPrepaymentPayment = async (
+  client,
+  {
+    installmentId,
+    amountReceived,
+    amountCash,
+    amountTransfer,
+    paymentMethod,
+    transferReference = null,
+    adminId,
+    cashSessionId = null,
+    batchId,
+  },
+) => {
+  await client.query(
+    `INSERT INTO payments
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+        payment_method, transfer_reference,
+        status, approved_by, approved_at, generation_type, cash_session_id, batch_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), 'APPROVAL_PREPAYMENT', $8, $9)`,
+    [
+      installmentId,
+      adminId,
+      amountReceived,
+      amountCash,
+      amountTransfer,
+      paymentMethod,
+      transferReference || null,
+      cashSessionId || null,
+      batchId,
+    ],
+  );
+  await client.query(
+    `UPDATE installments
+       SET status = 'PAID', amount_paid = amount_due, updated_at = NOW()
+     WHERE id = $1`,
+    [installmentId],
   );
 };
 
@@ -302,14 +500,37 @@ const markInstallmentAsPrepaid = async (client, installmentId, adminId, note, pa
  * Inserta un pago ya aprobado (flujo admin-direct o bulk).
  * @returns {Promise<object>} Pago creado con su id.
  */
-const createApproved = async (client, { installmentId, adminId, amountReceived, paymentMethod, transferReference, notes }) => {
+const createApproved = async (
+  client,
+  {
+    installmentId,
+    adminId,
+    amountReceived,
+    amountCash,
+    amountTransfer,
+    paymentMethod,
+    transferReference,
+    notes,
+    cashSessionId,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, admin_direct)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), $6, TRUE)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status, created_at`,
-    [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, notes || null]
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
+        status, approved_by, approved_at, notes, admin_direct, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), $8, TRUE, $9)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, cash_session_id, created_at`,
+    [
+      installmentId,
+      adminId,
+      amountReceived,
+      amountCash || 0,
+      amountTransfer || 0,
+      paymentMethod,
+      transferReference || null,
+      notes || null,
+      cashSessionId || null,
+    ],
   );
   return r.rows[0];
 };
@@ -319,14 +540,39 @@ const createApproved = async (client, { installmentId, adminId, amountReceived, 
  * El monto es el mismo que el original (se registra como salida de caja).
  * @returns {Promise<object>} Pago de reversión con su id.
  */
-const createReversal = async (client, { installmentId, adminId, amountReceived, paymentMethod, transferReference, reason, originalPaymentId }) => {
+const createReversal = async (
+  client,
+  {
+    installmentId,
+    adminId,
+    amountReceived,
+    amountCash,
+    amountTransfer,
+    paymentMethod,
+    transferReference,
+    reason,
+    originalPaymentId,
+    cashSessionId,
+  },
+) => {
   const r = await client.query(
     `INSERT INTO payments
-       (installment_id, collector_id, amount_received, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, is_reversal, reversal_reason, reversed_by_payment_id)
-     VALUES ($1, $2, $3, $4, $5, 'APPROVED', $2, NOW(), NULL, TRUE, $6, $7)
-     RETURNING id, installment_id, amount_received::float8, payment_method, status`,
-    [installmentId, adminId, amountReceived, paymentMethod, transferReference || null, reason, originalPaymentId]
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
+        status, approved_by, approved_at, notes, is_reversal, reversal_reason, reversed_by_payment_id, cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), NULL, TRUE, $8, $9, $10)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, cash_session_id`,
+    [
+      installmentId,
+      adminId,
+      amountReceived,
+      amountCash || 0,
+      amountTransfer || 0,
+      paymentMethod,
+      transferReference || null,
+      reason,
+      originalPaymentId,
+      cashSessionId || null,
+    ],
   );
   return r.rows[0];
 };
@@ -336,14 +582,15 @@ const createReversal = async (client, { installmentId, adminId, amountReceived, 
  */
 const findChildPayments = async (client, parentPaymentId) => {
   const r = await client.query(
-    `SELECT p.id, p.installment_id, p.amount_received::float8, p.payment_method,
-            p.transfer_reference, p.status,
+    `SELECT p.id, p.installment_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8,
+            p.payment_method, p.transfer_reference, p.status,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8, i.due_date
      FROM payments p
      JOIN installments i ON i.id = p.installment_id
      WHERE p.parent_payment_id = $1
      ORDER BY i.installment_number`,
-    [parentPaymentId]
+    [parentPaymentId],
   );
   return r.rows;
 };
@@ -354,8 +601,9 @@ const findChildPayments = async (client, parentPaymentId) => {
 const findPaymentsByCredit = async (creditId) => {
   const r = await pool.query(
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.is_reversal,
-            p.reversal_reason, p.admin_direct, p.notes,
+            p.reversal_reason, p.admin_direct, p.notes, p.generation_type,
             p.created_at, p.approved_at, p.approved_by,
             p.parent_payment_id, p.reversed_by_payment_id,
             i.installment_number, i.amount_due::float8, i.due_date,
@@ -368,27 +616,40 @@ const findPaymentsByCredit = async (creditId) => {
      LEFT JOIN users adm ON adm.id = p.approved_by
      WHERE c.id = $1 AND p.status = 'APPROVED'
      ORDER BY p.approved_at DESC NULLS LAST`,
-    [creditId]
+    [creditId],
   );
   return r.rows;
 };
 
 /**
  * Revierte una cuota a su estado anterior al cobro que se está reversando.
- * Resta el monto recibido de amount_paid y recalcula el status.
+ * Resta el monto recibido de amount_paid y recalcula el status considerando
+ * due_date + grace_days. Si tras la reversión la cuota sigue vencida, vuelve
+ * a OVERDUE (antes quedaba en PENDING o PARTIAL incorrectamente).
+ *
+ * @param {object} client - Cliente de transacción.
+ * @param {string} installmentId
+ * @param {number} amountToRestore - Monto del cobro original a deshacer.
+ * @param {number} graceDays - Días de gracia del system_config.
  */
-const restoreInstallmentFromReversal = async (client, installmentId, amountToRestore) => {
+const restoreInstallmentFromReversal = async (
+  client,
+  installmentId,
+  amountToRestore,
+  graceDays,
+) => {
   await client.query(
     `UPDATE installments
      SET amount_paid = GREATEST(amount_paid - $1, 0),
          status      = CASE
-                         WHEN GREATEST(amount_paid - $1, 0) <= 0         THEN 'PENDING'
-                         WHEN GREATEST(amount_paid - $1, 0) < amount_due THEN 'PARTIAL'
-                         ELSE 'PAID'
+                         WHEN GREATEST(amount_paid - $1, 0) >= amount_due               THEN 'PAID'
+                         WHEN due_date < (CURRENT_DATE - ($3)::int * INTERVAL '1 day') THEN 'OVERDUE'
+                         WHEN GREATEST(amount_paid - $1, 0) > 0                         THEN 'PARTIAL'
+                         ELSE 'PENDING'
                        END,
          updated_at  = NOW()
      WHERE id = $2`,
-    [amountToRestore, installmentId]
+    [amountToRestore, installmentId, graceDays],
   );
 };
 
@@ -403,17 +664,33 @@ const getCreditStatusByInstallment = async (installmentId) => {
      FROM installments i
      JOIN credits c ON c.id = i.credit_id
      WHERE i.id = $1`,
-    [installmentId]
+    [installmentId],
   );
   return r.rows[0] || null;
 };
 
 module.exports = {
-  findAll, findById, getPendingCommittedAmount, create,
-  lockAndGetPayment, lockAndGetInstallment, lockAndGetCredit,
-  approve, updateInstallment, countPendingInstallments, settleCredit, reject,
-  getTotalPendingBalance, getPendingInstallmentsFrom, shiftInstallmentDates,
-  markInstallmentAsPrepaid, createApproved, createReversal,
-  findChildPayments, findPaymentsByCredit, restoreInstallmentFromReversal,
+  findAll,
+  findById,
+  getPendingCommittedAmount,
+  create,
+  lockAndGetPayment,
+  lockAndGetInstallment,
+  lockAndGetCredit,
+  approve,
+  updateInstallment,
+  countPendingInstallments,
+  settleCredit,
+  reject,
+  getTotalPendingBalance,
+  getPendingInstallmentsFrom,
+  shiftInstallmentDates,
+  markInstallmentAsPrepaid,
+  createApprovalPrepaymentPayment,
+  createApproved,
+  createReversal,
+  findChildPayments,
+  findPaymentsByCredit,
+  restoreInstallmentFromReversal,
   getCreditStatusByInstallment,
 };

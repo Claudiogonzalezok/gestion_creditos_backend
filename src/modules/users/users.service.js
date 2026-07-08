@@ -15,6 +15,12 @@ const getById = async (id) => {
   return user;
 };
 
+const getOwnProfile = async (id) => {
+  const user = await queries.findOwnProfileById(id);
+  if (!user) throw { status: 404, message: 'Usuario no encontrado.' };
+  return user;
+};
+
 const create = async ({ full_name, dni, email = null, address = null, role }) => {
   // Validar DNI único
   if (await queries.findByDni(dni))
@@ -75,6 +81,19 @@ const update = async (id, data) => {
   }
 
   return updated;
+};
+
+const updateOwnProfile = async (id, data) => {
+  const existing = await queries.findOwnProfileById(id);
+  if (!existing) throw { status: 404, message: 'Usuario no encontrado.' };
+
+  if (data.email && data.email !== existing.email) {
+    const taken = await queries.findByEmail(data.email);
+    if (taken && taken.id !== id)
+      throw { status: 409, message: 'Ya existe un usuario registrado con ese email.' };
+  }
+
+  return queries.updateOwnProfile(id, data);
 };
 
 const deactivate = async (id) => {
@@ -142,6 +161,6 @@ const unlock = async (id) => {
 };
 
 module.exports = {
-  getAll, getById, create, update,
+  getAll, getById, getOwnProfile, create, update, updateOwnProfile,
   deactivate, activate, resetPassword, changePassword, unlock,
 };

@@ -46,9 +46,12 @@ const forbidden = (res, message = 'No tenés permisos para realizar esta acción
 };
 
 // Conflicto (ej: DNI duplicado, pre-cargas pendientes)
-const conflict = (res, message = 'El recurso ya existe', data = null) => {
+// code: identificador estable para manejo programático en el cliente (ej.
+// NO_ACTIVE_SESSION, INSUFFICIENT_CASH) — documentado en cash-model-v4.md §7.
+const conflict = (res, message = 'El recurso ya existe', data = null, code = null) => {
   const body = { ok: false, message };
   if (data !== null) body.data = data;
+  if (code) body.code = code;
   return res.status(409).json(body);
 };
 

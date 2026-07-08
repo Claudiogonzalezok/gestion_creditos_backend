@@ -95,6 +95,30 @@ const updateStatus = async (client, id, status) => {
   );
 };
 
+/**
+ * Transición de status con guard SQL: solo actualiza si la fila está en el
+ * estado esperado. Devuelve true si la transición se hizo, false si la unidad
+ * cambió de estado en el medio (race). Pensado para cerrar TOCTOU entre
+ * validación y reserva (AVAILABLE → RESERVED) cuando el caller también toma
+ * SELECT FOR UPDATE: el guard SQL queda como cinturón de seguridad por si en
+ * el futuro alguien quita el lock.
+ *
+ * @param {import('pg').PoolClient} client
+ * @param {string} id
+ * @param {string} fromStatus - estado esperado (debe coincidir, sino no actualiza)
+ * @param {string} toStatus
+ * @returns {Promise<boolean>} true si rowCount === 1
+ */
+const transitionStatus = async (client, id, fromStatus, toStatus) => {
+  const r = await client.query(
+    `UPDATE product_units
+     SET status = $1, updated_at = NOW()
+     WHERE id = $2 AND status = $3`,
+    [toStatus, id, fromStatus]
+  );
+  return r.rowCount === 1;
+};
+
 const updateStatusBulk = async (client, ids, status) => {
   await client.query(
     `UPDATE product_units SET status = $1, updated_at = NOW() WHERE id = ANY($2::uuid[])`,
@@ -104,5 +128,5 @@ const updateStatusBulk = async (client, ids, status) => {
 
 module.exports = {
   findAll, findById, findByUnitCode, findByUnitCodeForClient,
-  create, update, updateStatus, updateStatusBulk,
+  create, update, updateStatus, updateStatusBulk, transitionStatus,
 };

@@ -42,13 +42,21 @@ const update = async (id, { title, description, model, brand_id, category_id }) 
   return queries.update(id, { title, description, model, brand_id, category_id });
 };
 
-const deactivate = async (id) => {
+/**
+ * Desactiva un producto. Si `force` es true, permite desactivar aunque tenga
+ * unidades vendidas; solo bloquea si hay unidades reservadas (créditos activos pendientes).
+ * @param {string} id
+ * @param {boolean} force
+ */
+const deactivate = async (id, force = false) => {
   const product = await queries.findById(id);
   if (!product) throw { status: 404, message: 'Producto no encontrado.' };
   if (product.status === 'INACTIVE')
     throw { status: 409, message: 'El producto ya está inactivo.' };
-  if (await queries.hasActiveCredits(id))
-    throw { status: 409, message: 'No se puede desactivar un producto con unidades reservadas o vendidas.' };
+  if (!force && await queries.hasActiveCredits(id))
+    throw { status: 409, message: 'El producto tiene unidades reservadas en créditos activos. Usá la opción de desactivación forzada para ignorar unidades ya vendidas.' };
+  if (force && await queries.hasReservedUnits(id))
+    throw { status: 409, message: 'No se puede desactivar: el producto tiene unidades reservadas en créditos pendientes de aprobación.' };
   await queries.deactivate(id);
 };
 

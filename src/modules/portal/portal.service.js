@@ -1,11 +1,15 @@
 const queries = require('./portal.queries');
+const { getValue } = require('../systemConfig/systemConfig.queries');
+
+const getGraceDays = async () =>
+  parseInt(await getValue('penalty_grace_days') || '3');
 
 /**
  * Resumen de cuenta del cliente autenticado.
  * Incluye totales, indicador de estado, próximos vencimientos y resumen de créditos.
  */
 const getAccountSummary = async (customerId) => {
-  const { totals, upcoming, creditsSummary } = await queries.getAccountSummary(customerId);
+  const { totals, upcoming, creditsSummary } = await queries.getAccountSummary(customerId, await getGraceDays());
 
   const totalOwed    = parseFloat(totals.total_owed);
   const paidCount    = parseInt(totals.paid_count);
@@ -49,7 +53,7 @@ const getAccountSummary = async (customerId) => {
  * Lista de créditos del cliente autenticado.
  */
 const getCredits = async (customerId) => {
-  const rows = await queries.findCredits(customerId);
+  const rows = await queries.findCredits(customerId, await getGraceDays());
   return rows.map(r => ({
     id:                 r.id,
     type:               r.type,

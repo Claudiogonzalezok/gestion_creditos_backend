@@ -14,6 +14,12 @@
 - **Backend:** Node.js + Express · **BD:** PostgreSQL · **Auth:** JWT · **Arch:** MVC estricta
 - **Frontend:** Angular + PrimeNG + Tailwind CSS
 
+## Regla transversal Frontend (moneda)
+- En formularios de monto con PrimeNG `p-inputNumber` y `mode="currency"`, usar siempre `appCurrencyAmountInput`.
+- Objetivo: evitar el autocompletado fijo de `,00` que dificulta edición/borrado y mantener UX consistente en toda la app.
+- Evitar `minFractionDigits="2"` en inputs monetarios editables por usuario (salvo requisito de negocio explícito).
+- Referencia de implementación: `frontend/gestion-creditos-f/src/app/shared/directives/currency-amount-input.directive.ts`.
+
 ## Convenciones de código
 - Comentarios en **español**. Documentación JSDoc en español justo sobre la firma:
   ```js
@@ -74,25 +80,39 @@ src/
 - Ciclo semanal lunes-sábado. Liquidación el lunes por el Admin.
 - Mora en un crédito SALE genera registro de comisión negativa (REVERSED), nunca se borra.
 
-### Caja
-- Un cierre por día (`cash_registers`). Inmutable una vez registrado.
-- Incluye: cobros aprobados + enganches (`DOWN_PAYMENT`) + adelantos de cuotas prepagados.
+### Caja — Modelo Operativo V4
+**Fuente de verdad arquitectónica:** `docs/cash-model-v4.md`. Resumen:
+
+- **Jornada (`business_days`)** = día contable del negocio. Estados: `OPEN → READY_TO_CLOSE → CLOSED → AUDITED`. `READY_TO_CLOSE` es reversible (vuelve a OPEN si se abre una nueva caja). El cierre formal a CLOSED es manual.
+- **Caja operativa (`cash_sessions`)** = la caja de la jornada. **Cada jornada tiene una sola caja, siempre** (índice único total sobre `business_day_id`, migración 037) — sin importar su status (OPEN, PENDING_RECONCILIATION o CLOSED). No existen turnos secuenciales ni reapertura: una vez cerrada la caja de la jornada, no se puede abrir otra para esa misma jornada. `owner_user_id` representa al cajero responsable del turno, NO al dueño del dinero.
+- **Cobradores NO administran cajas.** No abren, no cierran, no arquean. Solo registran pre-cargas. La pre-carga NO requiere caja abierta.
+- **Imputación de movimientos:** todo cobro aprobado, gasto, conversión, enganche y reversión se imputa a la **caja activa de la jornada** (vía `cashSessions.queries.lockActiveSessionForCurrentJornada`). Si no hay caja activa → `409 NO_ACTIVE_SESSION`.
+- **Aprobación = recepción del dinero.** No existe entidad de rendición ni `settled_at` — al aprobar una pre-carga, el dinero ya está en la empresa.
+- **Caja General (`cash_accounts`)** = tesorería consolidada. Recibe drops, paga sueldos/comisiones/proveedores. `current_balance` cacheado con CHECK `>= 0` en DB.
+- **Sueldos, comisiones, proveedores → SOLO Caja General** (vía endpoint público de `cash-accounts/:id/movements` o liquidate auto). Nunca caja operativa.
+- **Legacy:** `cash_registers` y `cash_movements` están `@deprecated`. Se mantienen por compat hasta `feat/cash-system-cleanup`. No agregar lógica nueva sobre ellas.
 
 ### Configuración
 - Parámetros del sistema en tabla `system_config` (leer siempre desde BD, no hardcodear).
 - Función helper: `getValue(key)` en `systemConfig.queries.js`.
 
-## Entidades principales (16)
-`users`, `customers`, `credits`, `products`, `product_variants`, `product_units`,
+## Entidades principales
+**Núcleo:** `users`, `customers`, `credits`, `products`, `product_variants`, `product_units`,
 `credit_products`, `installments`, `payments`, `credit_down_payments`,
-`cash_registers`, `collection_sheets`, `collection_sheet_details`,
+`collection_sheets`, `collection_sheet_details`,
 `commissions`, `commission_liquidations`, `salaries`,
-`interest_rates`, `product_rates`, `system_config`, `token_blacklist`
+`interest_rates`, `product_rates`, `system_config`, `token_blacklist`.
+
+**Caja V4:** `branches`, `business_days`, `cash_sessions`, `cash_session_drops`,
+`cash_session_closure_details`, `cash_accounts`, `cash_account_movements`.
+
+**Legacy (deprecated):** `cash_registers`, `cash_movements`. No agregar lógica nueva acá.
 
 ## Módulos actuales en `src/modules/`
 `auth` · `users` · `customers` · `products` · `productBrands` · `productCategories` ·
 `productVariants` · `productUnits` · `productRates` · `interestRates` · `credits` ·
-`installments` · `payments` · `collections` · `commissions` · `cashRegister` ·
+`installments` · `payments` · `collections` · `commissions` · `businessDays` ·
+`cashSessions` · `cashAccounts` · `cashRegister` (legacy) ·
 `expenses` · `expenseCategories` · `reports` · `systemConfig` · `portal`
 
 ## Lo que NO hacer
@@ -104,4 +124,7 @@ src/
 - **No leer el proyecto completo al iniciar. Leer solo lo necesario.**
 
 ## Referencia completa
-Ver `docs/casos-de-uso.md` para especificaciones detalladas de los 16 casos de uso y el DER.
+- Casos de uso: `docs/casos-de-uso.md`.
+- **Modelo de Caja V4 (fuente de verdad arquitectónica):** `docs/cash-model-v4.md`.
+- Plan de migración V4 (cómo se implementó): `docs/cash-model-v4-plan.md`.
+- Auditoría legacy + plan de cleanup: `docs/audit-cash-legacy-2026-06-02.md`.

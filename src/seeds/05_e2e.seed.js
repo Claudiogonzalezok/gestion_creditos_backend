@@ -27,7 +27,19 @@ const cuota = (total, rate, count) =>
 const seed = async () => {
   const check = await pool.query(`SELECT id FROM customers WHERE dni = '40567890'`);
   if (check.rows.length > 0) {
+    const clientPassword = await bcrypt.hash('1234', 10);
+    await pool.query(
+      `UPDATE customers
+         SET portal_enabled = TRUE,
+             portal_password_hash = $1,
+             portal_is_temp_password = FALSE,
+             portal_locked_at = NULL,
+             portal_failed_attempts = 0
+       WHERE dni = '40567890'`,
+      [clientPassword],
+    );
     console.log('   ⚠️   Semilla 05 ya ejecutada — saltando.');
+    console.log('   ✅  Cliente portal (DNI 40567890) re-habilitado para login E2E.');
     return;
   }
 
@@ -55,6 +67,7 @@ const seed = async () => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       ['Pedro Luis Gómez', '40567890', 'Av.长春 456, CABA', '1156789012', 'pedrogomez@email.com', collectorId, 'ACTIVE', clientPassword, false]
     );
+    await client.query(`UPDATE customers SET portal_enabled = TRUE WHERE id = $1`, [portalCustomer.rows[0].id]);
     const portalCustomerId = portalCustomer.rows[0].id;
     console.log('   ✅  Cliente portal B2C creado (DNI: 40567890, pass: 1234).');
 
@@ -262,9 +275,9 @@ const seed = async () => {
         const payDate = addDays(dueDate, -2);
         await client.query(
           `INSERT INTO payments
-             (installment_id, collector_id, amount_received, payment_method,
+             (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method,
               status, approved_by, approved_at, created_at)
-           VALUES (CURRVAL(),$1,$2,'CASH','APPROVED',$3,$4,$4)`,
+           VALUES (CURRVAL(),$1,$2,$2,0,'CASH','APPROVED',$3,$4,$4)`,
           [collectorId, amt1, adminId, payDate]
         );
       }

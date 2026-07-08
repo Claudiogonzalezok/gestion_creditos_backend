@@ -20,6 +20,7 @@ router.get('/',
   controller.getAll
 );
 router.get('/:id', authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'), v.collections.id, validate, controller.getById);
+router.patch('/:id/send', authorize('ADMIN'), v.collections.id, validate, controller.send);
 
 // Generar planilla — solo Admin
 router.post('/',
@@ -27,5 +28,16 @@ router.post('/',
   v.collections.generate, validate,
   controller.generate
 );
+
+// Generar planillas para varios cobradores en una sola operación — solo Admin
+router.post('/generate-batch',
+  authorize('ADMIN'),
+  v.collections.generateBatch, validate,
+  controller.generateBatch
+);
+
+// Cerrar / cancelar planilla — solo Admin. Operaciones terminales.
+router.post('/:id/close',  authorize('ADMIN'), v.collections.id, validate, controller.close);
+router.post('/:id/cancel', authorize('ADMIN'), v.collections.id, validate, controller.cancel);
 
 module.exports = router;

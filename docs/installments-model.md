@@ -1,0 +1,524 @@
+# Modelo financiero de cuotas (installments)
+
+Documento de referencia para entender la semántica, invariantes y patrones de
+uso del módulo financiero. Sirve como mapa para devs futuros que necesiten
+modificar lógica de cobranza, mora, reportes o reversión.
+
+---
+
+## 1. Tabla `installments` — campos clave
+
+```
+original_amount         NUMERIC(12,2)  NOT NULL   CHECK > 0      → capital original, INMUTABLE
+penalty_amount          NUMERIC(12,2)  NOT NULL   DEFAULT 0      → mora acumulada
+amount_due              NUMERIC(12,2)  NOT NULL                  → deuda viva
+amount_paid             NUMERIC(12,2)  NOT NULL   DEFAULT 0
+status                  VARCHAR(20)    NOT NULL   DEFAULT 'PENDING'
+due_date                DATE           NOT NULL
+last_penalty_applied_at DATE           NULL                      → último día en que el cron aplicó mora (catch-up)
+```
+
+### Invariantes (deben mantenerse SIEMPRE)
+
+| Invariante | Quién la garantiza |
+|------------|--------------------|
+| `amount_due = original_amount + penalty_amount` | Convención del código (jobs, services) |
+| `amount_paid <= amount_due` | DB CHECK `installments_amount_paid_check` |
+| `original_amount > 0` | DB CHECK `installments_original_amount_check` |
+| `penalty_amount >= 0` | DB CHECK `installments_penalty_amount_check` |
+
+La constraint de la DB sobre `amount_paid` impide cualquier "overpay" — es la
+red de seguridad final del modelo. Eso elimina la necesidad de pensar en
+saldos a favor del cliente.
+
+---
+
+## 2. Estados (`status`)
+
+| Estado | Significado | Quién lo asigna |
+|--------|-------------|-----------------|
+| `PENDING` | Cuota nueva sin pagos. | `generateInstallments` al aprobar crédito. |
+| `PARTIAL` | Cuota con pagos pero saldo > 0, no vencida. | `updateInstallment` (services de cobros). |
+| `OVERDUE` | Cuota vencida (saldo > 0, due_date + grace_days < hoy). | Cron de mora + `updateInstallment` (CASE en SQL). |
+| `PAID` | Cuota cancelada (amount_paid >= amount_due). | `updateInstallment`, `markInstallmentAsPrepaid`, `earlyPay`, `settleAllInstallments`. |
+| `REFINANCED` | Cuota absorbida en una refinanciación. | `markAsRefinanced` (migration 016). |
+
+### Diagrama de transiciones
+
+```
+                  ┌─────────────┐
+                  │  PENDING    │
+                  └──┬─────┬──┬─┘
+                     │     │  │
+       cron+grace ──>│     │  │<── pago parcial
+       (OVERDUE)    │     │  │     (PARTIAL si dentro de gracia,
+                     │     │  │      OVERDUE si fuera)
+                     v     │  v
+                  ┌─────────────┐
+                  │  OVERDUE    │<──┐
+                  └──┬──────────┘   │
+                     │              │ revertir cobro sobre
+       cobro parcial │              │ cuota vencida
+       sigue OVERDUE │              │ (restoreInstallmentFromReversal)
+       (anti-osc.)   │              │
+                     v              │
+                  ┌─────────────┐   │
+                  │  PARTIAL    │───┘
+                  └──┬──────────┘
+                     │  pago final
+                     v
+                  ┌─────────────┐    ┌──────────────┐
+                  │  PAID       │    │  REFINANCED  │
+                  └─────────────┘    └──────────────┘
+                       ▲                    ▲
+                       │                    │
+                  pago total          markAsRefinanced
+                                      (terminal — no vuelve)
+```
+
+PAID y REFINANCED son **estados terminales financieros**: la lógica de mora,
+adelantos, reportes operativos y saldos los excluye explícitamente.
+
+---
+
+## 3. Fórmula B — cálculo de mora diaria
+
+Decisión arquitectónica oficial (validada en `auditoria.md`):
+
+```
+base_mora_diaria = amount_due - amount_paid             # saldo pendiente REAL
+delta_mora_dia   = base × penalty_rate_daily
+penalty_nueva    = LEAST(penalty + delta, cap)
+cap              = original_amount × penalty_max_rate
+amount_due_nueva = original_amount + penalty_nueva       # mantiene invariante
+```
+
+### Por qué Fórmula B (sobre saldo) y no sobre capital fijo
+
+- Si el cliente pagó parcialmente, la base baja **al instante** → mora siguiente
+  se calcula sobre el saldo realmente debido.
+- Es matemáticamente equivalente a la Fórmula A (mora sobre original) en el
+  caso `amount_paid >= penalty_amount` (que es el caso normal).
+- Difiere en el caso extremo `amount_paid < penalty_amount`: B compone mora
+  sobre mora dentro del cap; A no.
+- Decisión documentada: usar B con cap estricto sobre `original`. El cap
+  limita la composición.
+
+### Defaults del sistema (`system_config`)
+
+```
+penalty_grace_days = 3       # días de gracia antes de aplicar mora
+penalty_rate_daily = 0.005   # 0.5% diario sobre el saldo
+penalty_max_rate   = 0.50    # cap total = 50% del original
+```
+
+Todos modificables por Admin desde `/api/system-config`.
+
+---
+
+## 4. Status persistido vs vencidez derivada
+
+El campo `status='OVERDUE'` es un **snapshot operativo/visual**. La lógica
+financiera **no debe depender exclusivamente de él**:
+
+| Cuándo usar `status='OVERDUE'` | Cuándo usar derivada |
+|-------------------------------|----------------------|
+| UI: badges, filtros de planilla, vistas operativas. | Lógica financiera: mora, reportes, saldos. |
+| Endpoints admin de mora manual (`applyPenalty`). | Cualquier query nueva sin razón fuerte. |
+
+### Helper canónico: `IS_OVERDUE_DERIVED`
+
+`src/utils/installmentSql.js`:
+
+```js
+IS_OVERDUE_DERIVED('i', '$1')
+// → "(i.due_date < (CURRENT_DATE - ($1)::int * INTERVAL '1 day')
+//     AND (i.amount_due - i.amount_paid) > 0
+//     AND i.status NOT IN ('PAID','REFINANCED'))"
+```
+
+Garantiza:
+- Vencidez basada en `due_date` real, no en si corrió el cron.
+- Saldo > 0 (excluye cuotas con status colgado).
+- Excluye terminales (`PAID`, `REFINANCED`).
+
+Usado en: `reports.queries.js`, `customers.queries.js`, `portal.queries.js`.
+
+### Otros helpers SQL (`src/utils/installmentSql.js`)
+
+| Helper | SQL devuelto | Uso |
+|--------|--------------|-----|
+| `REAL_REMAINING_BALANCE('i')` | `(i.amount_due - i.amount_paid)` | Saldo pendiente real. |
+| `REMAINING_CAPITAL('i')` | `GREATEST(original - GREATEST(paid - penalty, 0), 0)` | Capital aún no pagado (descontando mora absorbida). |
+| `IS_OVERDUE_DERIVED('i', '$N')` | Booleano compuesto | Vencidez derivada. |
+
+---
+
+## 5. Política de operaciones financieras
+
+### `waivePenalty` (condonar mora)
+
+Validaciones del service (en orden):
+1. **404** si la cuota no existe.
+2. **409** si `status === 'PAID'`: "La cuota ya fue cancelada. La condonación
+   retroactiva generaría saldo a favor no soportado por el sistema."
+   Razón: bajar `amount_due` mientras `amount_paid` queda alto violaría la
+   constraint `amount_paid <= amount_due`. Para revertir cobros sobre cuotas
+   pagadas, usar el flujo de reversión de payments.
+3. **409** si `penalty_amount === 0`: nada que condonar.
+4. Procede: `amount_due = original_amount`, `penalty_amount = 0`, status
+   recalculado con CASE según due_date + grace_days y amount_paid.
+
+### `earlyPay` (cobro anticipado directo)
+
+Doble validación de status:
+1. **Fast-path** en el service: chequea status fuera de la transacción para
+   fallar rápido sin tomar lock.
+2. **Safety-path** en la query: `SELECT ... FOR UPDATE` lee también `status`
+   y vuelve a chequear. Si entre ambos puntos otro flujo pagó la cuota
+   (cobro concurrente, cron, etc.), el inner check tira 409 y la transacción
+   hace ROLLBACK.
+
+Patrón aplicable a cualquier operación que modifique cuotas bajo concurrencia.
+
+### `updateInstallment` (cobros aprobados)
+
+`status` se calcula con CASE en SQL en lugar de JS — esto permite que el
+recálculo use el `due_date` real de la fila (no un snapshot de JS) y
+mantiene la lógica consistente sin viajes de ida y vuelta:
+
+```sql
+status = CASE
+  WHEN $newPaid >= amount_due                                     THEN 'PAID'
+  WHEN due_date < (CURRENT_DATE - ($grace)::int * INTERVAL '1 day') THEN 'OVERDUE'
+  WHEN $newPaid > 0                                                THEN 'PARTIAL'
+  ELSE 'PENDING'
+END
+```
+
+Consecuencia importante: un pago parcial sobre cuota vencida **NO degrada** a
+PARTIAL — sigue OVERDUE. Esto previene la oscilación `OVERDUE → PARTIAL →
+OVERDUE` que tenía el código viejo.
+
+### `restoreInstallmentFromReversal` (revertir un cobro)
+
+Mismo patrón de CASE en SQL. Si tras restar el monto revertido la cuota sigue
+vencida, vuelve a OVERDUE (no degrada a PENDING o PARTIAL).
+
+---
+
+## 6. Cron de mora — rol, catch-up y observabilidad
+
+### `src/jobs/overdueInstallments.job.js`
+
+Corre todos los días a las 02:00 ART. **Una sola operación atómica** (CTE
++ UPDATE) que marca OVERDUE y aplica mora en el mismo statement.
+
+### Fuente de verdad: `installments.last_penalty_applied_at`
+
+El campo `last_penalty_applied_at` (migration 018) registra el último día en
+que **esa cuota** recibió mora. Es la base del cálculo de catch-up:
+
+```
+mora_start = GREATEST(
+  COALESCE(last_penalty_applied_at, due_date + grace_days) + 1,
+  due_date + grace_days + 1
+)
+M = effective_today - mora_start + 1
+```
+
+Si `M > 0`, se aplica Fórmula B compuesta cerrada en una sola operación:
+
+```sql
+penalty_new = LEAST(
+  penalty + saldo × (POWER(1 + r, M) − 1),
+  original_amount × max_rate
+)
+amount_due              = original_amount + penalty_new
+last_penalty_applied_at = effective_today    -- ← SOLO si M > 0
+```
+
+### Invariante crítica: actualizar `last_penalty_applied_at` SOLO si M > 0
+
+Si una cuota dentro de gracia (M=0) quedara marcada como "procesada hoy",
+perdería días legítimos de mora al salir de gracia (el próximo cálculo
+arrancaría desde hoy en lugar de desde `due_date + grace_days + 1`).
+
+El SQL del job filtra explícitamente `WHERE days_to_apply > 0` antes del
+UPDATE — las cuotas en gracia, ya pagadas, REFINANCED o con cap alcanzado
+**no se tocan** en absoluto.
+
+### Catch-up de N días en una sola corrida
+
+Si el cron estuvo caído 5 días, la próxima corrida exitosa aplica los 5 días
+de mora compuesta en una sola operación atómica. La fórmula closed-form es
+matemáticamente equivalente al loop diario:
+
+```
+saldo_n     = saldo_0 × (1 + r)^n
+delta_total = saldo_0 × ((1 + r)^N − 1)
+```
+
+### Respeto a pre-cargas PENDING
+
+Si una cuota tiene pre-cargas de cobro **PENDING** (cobrador registró el
+pago pero el admin aún no aprobó), el cron descuenta esos montos del saldo
+antes de calcular mora:
+
+```
+pending_committed = SUM(payments.amount_received WHERE
+                         installment_id = i.id
+                         AND status      = 'PENDING'
+                         AND is_reversal = FALSE)
+saldo_0 = amount_due − amount_paid − pending_committed
+```
+
+- Si `saldo_0 <= 0` → el cron **no aplica mora** (cuota cubierta por
+  pre-cargas pendientes).
+- Si `saldo_0 > 0` → aplica mora solo sobre la porción no comprometida.
+
+**Casos especiales**:
+- Pre-cargas con `is_reversal=TRUE`: NO cuentan (son compensaciones de reversión).
+- Pre-cargas REJECTED: NO cuentan. El próximo cron aplica mora normal.
+
+**Por qué importa**: si un cobrador registra el pago tarde el día N (después
+de las 02:00 no, antes), y el admin no llega a aprobar antes del cron del
+día N+1, sin este descuento la cuota quedaría con un residuo de mora aunque
+el cliente pagó. El descuento por pending_committed evita ese efecto injusto.
+
+Cuando `saldo_0 <= 0` el cron tampoco actualiza `last_penalty_applied_at`,
+así que si la pre-carga se rechaza después, el cron del día siguiente
+calculará M correctamente desde donde quedó.
+
+### Saldo actual, no histórico
+
+El catch-up usa el **saldo de HOY** (no reconstruido día por día). Si hubo
+pagos durante el downtime, el saldo actual es menor y se sub-aplica mora —
+favorece al cliente. Decisión consciente y defensible.
+
+### Primera corrida del sistema
+
+Si `cron_execution_log` no tiene registro previo exitoso, el job limita
+`M = 1` para evitar "big bang" al bootstrap. La corrida queda registrada,
+y desde la siguiente el catch-up real opera con M correcto.
+
+### Congelamiento de `effective_today`
+
+`CURRENT_DATE` se captura **una sola vez** al inicio del job y se pasa como
+parámetro. Protege contra cambios de reloj/NTP/timezone durante la ejecución.
+
+### Atomicidad
+
+Todo el job corre dentro de `BEGIN/COMMIT`. Si algo falla → `ROLLBACK` →
+ninguna `last_penalty_applied_at` se mueve → el próximo run reaplica el
+catch-up correctamente. Idempotente y resiliente incluso si `cron_execution_log`
+se corrompe o se pierde — la verdad financiera vive en la propia cuota.
+
+### Importante
+
+- El cron **no es la fuente de verdad** de vencimiento. La lógica crítica usa
+  `IS_OVERDUE_DERIVED`. Si el cron se cae N días, las cuotas que se hayan
+  vencido en ese tiempo igual son detectadas correctamente por reportes y
+  saldos — y al volver, el cron las pone al día con catch-up automático.
+
+### Observabilidad
+
+Tabla `cron_execution_log` (migration 017) registra cada corrida:
+- `job_name`, `started_at`, `finished_at`, `success`, `affected_rows`,
+  `error_message`, `metadata` (JSONB).
+- Wrapper `runWithLogging` (`src/utils/cronLogger.js`) instrumenta los 4 jobs
+  (overdue, creditExpiry, tokenCleanup, weeklyCommissionCycle).
+- Endpoints admin: `GET /api/admin/cron-logs` (lista filtrable) y
+  `GET /api/admin/cron-logs/summary` (estado por job: OK / ERROR / RUNNING /
+  NO_RUN_TODAY).
+
+---
+
+## 7. Exclusión de REFINANCED en queries críticas
+
+Cuotas en estado `REFINANCED` representan deuda ya absorbida en una nueva
+operación. Toda query de saldo, mora, planilla o reporte operativo las
+excluye explícitamente:
+
+```sql
+WHERE status NOT IN ('PAID','REFINANCED')
+```
+
+Lista de queries que aplican este filtro:
+- `payments.queries.js`: `countPendingInstallments`, `getTotalPendingBalance`,
+  `getPendingInstallmentsFrom`, `shiftInstallmentDates`.
+- `reports.queries.js`: portfolio active balance, top customers, summary
+  executive portfolio.
+
+El helper `IS_OVERDUE_DERIVED` también las excluye en su componente
+`status NOT IN ('PAID','REFINANCED')`.
+
+---
+
+## 8. Testing
+
+### Estrategia mixta
+
+- **Unit** (`src/**/*.test.js`): mocks de `pool.query`. Para services sin
+  lógica financiera, controllers, validators, cronLogger.
+- **Integration** (`tests/integration/**`): Postgres real vía docker-compose.
+  Para SQL financiero, formula de mora, transiciones de status, locks.
+
+**Regla**: nunca mockear fórmulas financieras ni SQL. Si tocás algo en este
+módulo, agregá test de integration.
+
+Ver `tests/README.md` para detalles operativos.
+
+---
+
+## 9. Trampas conocidas / antipatrones
+
+- ❌ Usar `i.status = 'OVERDUE'` en queries de reporte/portal: depende del
+  cron habiéndose ejecutado. Usar `IS_OVERDUE_DERIVED`.
+- ❌ Calcular mora sobre `original_amount` fijo: ignora pagos parciales. Usar
+  saldo real (`amount_due - amount_paid`).
+- ❌ Llamar `waivePenalty` para revertir un cobro: usar `payments.reverse`.
+- ❌ Modificar `amount_due` sin recomputar desde `original + penalty`: rompe
+  invariante.
+- ❌ Promise.all sobre el mismo `client` de pg: causa "client.query while
+  another query in flight" — usar `pool` o secuencial.
+- ❌ Validar status fuera de la transacción sin revalidarlo bajo `FOR UPDATE`:
+  abre ventana de TOCTOU. Patrón: fast-path + safety-path.
+- ❌ Leer datos live (`amount_due` actual, `phone` actual del cliente) en
+  reportes de planillas históricas. Las planillas son inmutables (sección 10);
+  el snapshot persistido es la fuente de verdad para auditoría.
+
+---
+
+## 10. Planillas inmutables (`collection_sheets` + `collection_sheet_details`)
+
+### Reglas de inclusión en el recorrido (qué cuotas entran al generar)
+
+`findInstallmentsForSheet` decide qué cuotas entran. La fuente normativa
+completa son las reglas 1-10 documentadas en `collections.queries.js`. Las dos
+que cierran el flujo con el doble control y la agenda:
+
+- **Regla 9 — Pre-cargas pendientes excluyen.** Una cuota con una pre-carga
+  `PENDING` viva (cobro registrado por el cobrador, sin aprobar/rechazar) queda
+  **fuera** del recorrido hasta que el admin la resuelva. Evita re-visitas y
+  dobles pre-cargas. Si la pre-carga se **rechaza**, la cuota reaparece; si se
+  **aprueba** y salda, sale por saldo 0. Es coherente con cajas por jornada: las
+  pre-cargas pueden cruzar de un día a otro y no deben re-encolar la cuota.
+- **Regla 10 — La agenda respeta pagos aprobados.** `latest_next_visit`
+  considera pagos `PENDING` **y** `APPROVED`: un cobro **parcial aprobado**
+  conserva la fecha pactada con el cliente, así la cuota queda reservada hasta
+  esa fecha y se trae ese día. Una visita pactada para **hoy** es trabajo "del
+  día" → entra por `TODAY` y `TODAY_AND_OVERDUE`, **no** por "solo vencidas"
+  (`OVERDUE`, que usa `overdue_unscheduled`).
+
+---
+
+Las planillas son **documentos históricos legales**: una vez generadas, NO
+cambian — ni durante el día, ni después. Funcionan como una hoja de papel
+archivada: lo que el cobrador recibió al iniciar la jornada queda
+inmortalizado.
+
+### Por qué inmutable también durante el día
+
+Si el cobrador abre la planilla a las 10:00 y a las 11:00 entra un pago, la
+planilla NO debe cambiar entre ambas lecturas. Sino:
+- Dos usuarios viendo "la misma planilla" verían cosas distintas → rompe
+  consistencia operativa.
+- La planilla deja de ser un documento — se convierte en una vista híbrida.
+- Auditoría no puede defender lo que vio el cobrador.
+
+La planilla es **una foto**. Las gestiones del día se ven en otra capa.
+
+### Arquitectura: snapshot + eventos separados
+
+| Capa | Tabla / origen | Naturaleza |
+|------|----------------|-----------|
+| **Planilla snapshot** | `collection_sheets` + `collection_sheet_details` | INMUTABLE desde la generación |
+| **Eventos del día** | `payments`, `collection_attempts` | LIVE — se acumulan durante la operación |
+
+Frontend que quiere mostrar "qué pasó hoy" cruza ambas: snapshot para el
+contexto, eventos por separado para la novedad.
+
+### Campos snapshoteados (migration 020)
+
+En `collection_sheet_details`:
+- Económicos: `amount_due_snapshot`, `amount_paid_snapshot`, `penalty_amount_snapshot`, `planned_amount`, `remaining_amount_snapshot`.
+- Cuota: `installment_number_snapshot`, `due_date_snapshot`, `installment_status_snapshot`.
+- Cliente: `customer_name_snapshot`, `customer_phone_snapshot`, `customer_address_snapshot`.
+- Crédito: `credit_type_snapshot`, `collection_reference_snapshot`.
+- Gestión previa: `antecedent_id_snapshot`, `antecedent_type`, `antecedent_date`, `antecedent_notes`.
+- Operativos: `inclusion_criteria`, `inclusion_reason`, `op_priority`, `next_visit_date_snapshot`, `has_pending_payment_snapshot`.
+
+En `collection_sheets`:
+- Identidad: `collector_name_snapshot`, `generated_by_name_snapshot`.
+- Versionado: `snapshot_version` (0=legacy, 1=v1+).
+
+### Ciclo de vida
+
+```
+                  ┌──────────┐
+                  │  ACTIVE  │   (generada — única editable: management_status)
+                  └────┬─────┘
+            ┌─────────┼──────────────┐
+            ▼         ▼              ▼
+       ┌────────┐ ┌─────────┐ ┌───────────────┐
+       │ CLOSED │ │CANCELLED│ │ REGENERATED   │
+       └────────┘ └─────────┘ │ (al regenerar │
+       terminal  terminal     │  el mismo día)│
+                              └───────────────┘
+                              terminal
+```
+
+- `POST /api/collections/:id/close` — Admin. Sella la planilla con `closed_at` + `closed_by`.
+- `POST /api/collections/:id/cancel` — Admin. Cancela una planilla generada por error.
+- Regenerar la planilla del día marca la vieja `REGENERATED` automáticamente.
+
+Todos los estados ≠ ACTIVE son **terminales** — el trigger DB rechaza salir de ellos.
+
+### Único campo editable: `management_status`
+
+Estado de gestión por fila de la planilla (¿el cobrador la visitó? ¿qué pasó?):
+- Valores: `PENDING`, `VISITED`, `PAID`, `NO_PAYMENT`, `NOT_FOUND`.
+- **Editable solo si**: `sheet.status = 'ACTIVE'` Y `sheet.sheet_date = CURRENT_DATE`.
+- Tras cerrar el día (o tras CLOSED/CANCELLED/REGENERATED): **read-only absoluto**.
+
+#### Hook automático desde gestiones operativas
+
+El estado NO se edita a mano desde la UI. Se actualiza automáticamente cuando
+el cobrador (o el admin sobre datos del cobrador) ejecuta una gestión:
+
+| Evento operativo                          | management_status resultante  |
+|-------------------------------------------|-------------------------------|
+| `collectionAttempts.create` NO_PAYMENT    | `NO_PAYMENT`                  |
+| `collectionAttempts.create` NOT_FOUND     | `NOT_FOUND`                   |
+| `payments.create` (pre-carga PENDING)     | `VISITED`                     |
+| `payments.approve` → cuota PAID           | `PAID`                        |
+| `payments.approve` → cuota PARTIAL        | `VISITED`                     |
+| `payments.reverse`                        | `VISITED`                     |
+
+Implementado por `collectionsQueries.updateManagementStatusForActiveTodaySheet`,
+que filtra por `sheet.status='ACTIVE' AND sheet.sheet_date=CURRENT_DATE` —
+fuera de ese scope es no-op silencioso (planilla CLOSED, planilla de otro día,
+o cuotas sin planilla generada). El trigger DB es defensa en profundidad
+contra races concurrentes.
+
+### Defensa en profundidad
+
+A nivel DB:
+- **Trigger `trg_csd_immutability`** rechaza UPDATE de cualquier columna snapshot.
+- **Trigger `trg_collection_sheet_immutability`** rechaza modificar identidad
+  y bloquea transiciones desde estados terminales.
+
+Esto protege incluso contra bugs futuros del backend — un service mal
+escrito que intente modificar un snapshot falla con `RAISE EXCEPTION`.
+
+### Planillas legacy (pre-020)
+
+Quedan con `snapshot_version = 0` y campos snapshot en NULL. **NO se hace
+backfill** desde datos actuales: sería falso histórico (la planilla aparenta
+haber tenido los datos de hoy en el pasado).
+
+`findById` detecta legacy por `snapshot_version` y hace fallback a JOINs
+live solo en ese caso, documentando que esos datos NO son auditables.
+
+Para reportes auditables filtrar por `snapshot_version >= 1`.

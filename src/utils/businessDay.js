@@ -18,13 +18,32 @@ const toDateKey = (date) => {
 };
 
 /**
- * Determina si una fecha cae en fin de semana.
+ * Dias de la semana considerados no laborables a efectos de calcular el
+ * proximo dia habil de un vencimiento.
+ *
+ * Decision de negocio (acordada con el cliente, 2026-06): NINGUN dia de la
+ * semana corre el vencimiento. Las cuotas vencen el dia que les toca por
+ * calendario, incluso si cae domingo. Lo unico que puede correr un vencimiento
+ * es un feriado declarado (tabla holidays) — maquinaria que queda viva para uso
+ * futuro pero inocua mientras no haya feriados cargados.
+ *
+ * Codificacion segun Date.prototype.getDay():
+ *   0 = domingo · 1..5 = lunes a viernes · 6 = sabado
+ *
+ * Si en el futuro el cliente vuelve a querer corrimiento por fin de semana,
+ * basta con editar esta lista (ej. [0] para domingo, [0, 6] para sabado y
+ * domingo).
+ */
+const NON_BUSINESS_WEEKDAYS = [];
+
+/**
+ * Determina si una fecha cae en un dia de la semana no laborable.
  * @param {Date|string} date - Fecha evaluada.
- * @returns {boolean} true si es sábado o domingo.
+ * @returns {boolean} true si la fecha cae en uno de los dias listados en NON_BUSINESS_WEEKDAYS.
  */
 const isWeekend = (date) => {
   const day = new Date(date).getDay();
-  return day === 0 || day === 6;
+  return NON_BUSINESS_WEEKDAYS.includes(day);
 };
 
 /**
