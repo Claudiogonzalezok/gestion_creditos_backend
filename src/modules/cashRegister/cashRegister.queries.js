@@ -21,6 +21,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const pool = require("../../config/db");
+const { movementConceptCase } = require("../../utils/movementConcept");
 
 // ── Dashboard del día — única query con CTEs ──────────────────
 /**
@@ -550,10 +551,7 @@ const findMovementsBySessionId = async (cashSessionId) => {
      FROM (
        SELECT
          p.id,
-         CASE WHEN COALESCE(p.is_reversal, FALSE)
-           THEN 'Reversión de cobro'
-           ELSE 'Cobro de cuota'
-         END AS concepto,
+         ${movementConceptCase("p", "cr")} AS concepto,
          p.approved_at AS fecha_hora,
          COALESCE(approver.full_name, collector.full_name, 'Sistema') AS responsable,
          CASE WHEN COALESCE(p.is_reversal, FALSE) THEN 'EGRESO' ELSE 'INGRESO' END AS tipo,
@@ -566,6 +564,8 @@ const findMovementsBySessionId = async (cashSessionId) => {
        FROM payments p
        LEFT JOIN users approver ON approver.id = p.approved_by
        LEFT JOIN users collector ON collector.id = p.collector_id
+       LEFT JOIN installments i ON i.id = p.installment_id
+       LEFT JOIN credits cr ON cr.id = i.credit_id
        WHERE p.cash_session_id = $1
          AND p.status = 'APPROVED'
 

@@ -18,6 +18,7 @@ const cashSessionsQueries = require("../../src/modules/cashSessions/cashSessions
 const installmentsService = require("../../src/modules/installments/installments.service");
 const reportsQueries = require("../../src/modules/reports/reports.queries");
 const reportsService = require("../../src/modules/reports/reports.service");
+const cashRegisterQueries = require("../../src/modules/cashRegister/cashRegister.queries");
 const { today } = require("./helpers/dates");
 
 setupTestSuite();
@@ -283,5 +284,65 @@ describe("Dashboard — 'Recaudado hoy' cuadra con la caja", () => {
     );
     const cerrada = await reportsService.getSummaryReport();
     expect(cerrada.today_total).toBe(0);
+  });
+});
+
+describe("Caja — concepto del movimiento (venta de contado, adelantada, normal)", () => {
+  // Inserta un cobro APPROVED imputado a la sesión, sobre un crédito con el
+  // type/payment_condition/generation_type indicados. Devuelve el payment.id.
+  const seedCobro = async ({ admin, session, type, condition, gen }) => {
+    const credit = await createCreditFixture({ type, status: "ACTIVE" });
+    await pool.query(`UPDATE credits SET payment_condition = $1 WHERE id = $2`, [
+      condition,
+      credit.id,
+    ]);
+    const inst = await createInstallmentFixture({
+      credit_id: credit.id,
+      due_date: today(),
+      original_amount: 1000,
+      amount_paid: 0,
+      status: "PENDING",
+    });
+    const r = await pool.query(
+      `INSERT INTO payments
+         (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+          payment_method, status, is_reversal, generation_type, approved_by, approved_at, cash_session_id)
+       VALUES ($1, $2, 1000, 1000, 0, 'CASH', 'APPROVED', FALSE, $3, $2, $4, $5)
+       RETURNING id`,
+      [inst.id, admin.id, gen, today(), session.id],
+    );
+    return r.rows[0].id;
+  };
+
+  it("clasifica igual en Caja y Reportes; venta de contado ya no figura como cobro de cuota", async () => {
+    const admin = await createUserFixture({ role: "ADMIN" });
+    const session = await cashSessionsService.open(
+      { opening_amount: 0 },
+      asUser(admin),
+    );
+
+    const normal = await seedCobro({
+      admin, session, type: "LOAN", condition: "FINANCED", gen: "COLLECTION",
+    });
+    const contado = await seedCobro({
+      admin, session, type: "SALE", condition: "CASH", gen: "APPROVAL_PREPAYMENT",
+    });
+    const adelantada = await seedCobro({
+      admin, session, type: "LOAN", condition: "FINANCED", gen: "ADVANCE_DISTRIBUTION",
+    });
+
+    const caja = await cashRegisterQueries.findMovementsBySessionId(session.id);
+    const repo = await reportsQueries.getCashMovementsReport(session.id);
+    const cajaBy = Object.fromEntries(caja.map((m) => [m.id, m.concepto]));
+    const repoBy = Object.fromEntries(repo.rows.map((m) => [m.id, m.description]));
+
+    expect(cajaBy[normal]).toBe("Cobro de cuota");
+    expect(cajaBy[contado]).toBe("Venta de contado");
+    expect(cajaBy[adelantada]).toBe("Cobro de cuota adelantada");
+
+    // Misma clasificación en el reporte (no vuelven a divergir).
+    expect(repoBy[normal]).toBe(cajaBy[normal]);
+    expect(repoBy[contado]).toBe(cajaBy[contado]);
+    expect(repoBy[adelantada]).toBe(cajaBy[adelantada]);
   });
 });

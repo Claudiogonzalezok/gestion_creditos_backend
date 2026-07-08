@@ -1,6 +1,13 @@
 const pool = require("../../config/db");
+const { movementConceptCase } = require("../../utils/movementConcept");
 
-const findAll = async ({ status, collector_id, installment_id } = {}) => {
+const findAll = async ({
+  status,
+  collector_id,
+  installment_id,
+  date_from,
+  date_to,
+} = {}) => {
   let q = `
     SELECT p.id, p.installment_id, p.amount_received::float8,
            p.amount_cash::float8, p.amount_transfer::float8, p.payment_method,
@@ -9,6 +16,7 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
            p.is_reversal, p.admin_direct, p.parent_payment_id,
            i.installment_number, i.amount_due::float8, i.due_date,
            c.id AS credit_id, c.type AS credit_type,
+           ${movementConceptCase("p", "c")} AS concepto,
            cu.full_name AS customer_name, cu.dni AS customer_dni,
            u.full_name  AS collector_name
     FROM payments p
@@ -29,6 +37,16 @@ const findAll = async ({ status, collector_id, installment_id } = {}) => {
   if (installment_id) {
     params.push(installment_id);
     q += ` AND p.installment_id = $${params.length}`;
+  }
+  // Filtro por fecha sobre approved_at (fecha en que se acreditó el cobro). Los
+  // cobros sin aprobar (approved_at NULL) quedan fuera cuando se aplica el rango.
+  if (date_from) {
+    params.push(date_from);
+    q += ` AND p.approved_at::date >= $${params.length}`;
+  }
+  if (date_to) {
+    params.push(date_to);
+    q += ` AND p.approved_at::date <= $${params.length}`;
   }
   q += ` ORDER BY p.created_at DESC`;
   return (await pool.query(q, params)).rows;
