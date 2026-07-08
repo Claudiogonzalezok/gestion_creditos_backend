@@ -55,6 +55,7 @@ jest.mock("../businessDays/businessDays.queries", () => ({
 
 jest.mock("../cashSessions/cashSessions.queries", () => ({
   lockActiveSessionForCurrentJornada: jest.fn(),
+  computeSessionTotals: jest.fn(),
 }));
 
 jest.mock("../../utils/businessDay", () => {
@@ -87,6 +88,28 @@ const toKey = (date) => {
   return `${yyyy}-${mm}-${dd}`;
 };
 
+// Totales "vacíos" de computeSessionTotals — usado como default en tests
+// que no ejercitan la validación de efectivo disponible.
+const zeroTotals = (overrides = {}) => ({
+  drops_cash: 0,
+  drops_transfer: 0,
+  collections_payments_cash: 0,
+  collections_payments_transfer: 0,
+  collections_down_payments_cash: 0,
+  collections_down_payments_transfer: 0,
+  collections_manual_incomes_cash: 0,
+  collections_manual_incomes_transfer: 0,
+  outflows_expenses_cash: 0,
+  outflows_expenses_transfer: 0,
+  outflows_commissions_cash: 0,
+  outflows_commissions_transfer: 0,
+  outflows_loans_cash: 0,
+  outflows_loans_transfer: 0,
+  conversions_cash_delta: 0,
+  conversions_transfer_delta: 0,
+  ...overrides,
+});
+
 describe("credits.service holiday integration", () => {
   const client = { query: jest.fn() };
 
@@ -102,7 +125,9 @@ describe("credits.service holiday integration", () => {
     businessDaysQueries.findActiveJornadaDate.mockResolvedValue("2026-04-24");
     cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
       id: "cash-session-1",
+      opening_amount: 1000000,
     });
+    cashSessionsQueries.computeSessionTotals.mockResolvedValue(zeroTotals());
   });
 
   afterEach(() => {
@@ -506,6 +531,98 @@ describe("credits.service approve — venta de CONTADO", () => {
     await expect(
       service.approve("credit-cash-1", "admin-1"),
     ).rejects.toMatchObject({ status: 409 });
+    expect(queries.approve).not.toHaveBeenCalled();
+  });
+});
+
+describe("credits.service approve — egreso de préstamo (LOAN) en caja", () => {
+  const client = { query: jest.fn() };
+
+  const loanCredit = (overrides = {}) => ({
+    id: "credit-loan-1",
+    type: "LOAN",
+    status: "PENDING_APPROVAL",
+    payment_frequency: "WEEKLY",
+    installments_count: 2,
+    total_amount: 100000,
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    jest.useFakeTimers().setSystemTime(new Date(2026, 3, 24, 12, 0, 0, 0));
+    withTransaction.mockImplementation(async (callback) => callback(client));
+    irQueries.findActiveRate.mockResolvedValue({ rate: 0.1 });
+    queries.generateInstallments.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it("aprueba y guarda la caja que desembolsó el préstamo", async () => {
+    queries.findById
+      .mockResolvedValueOnce(loanCredit())
+      .mockResolvedValueOnce({ ...loanCredit(), status: "ACTIVE" });
+    cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
+      id: "cash-session-1",
+      opening_amount: 500000,
+    });
+    cashSessionsQueries.computeSessionTotals.mockResolvedValue(zeroTotals());
+
+    await service.approve("credit-loan-1", "admin-1");
+
+    expect(queries.approve).toHaveBeenCalledWith(
+      client,
+      "credit-loan-1",
+      "admin-1",
+      0.1,
+      2,
+      "cash-session-1",
+    );
+  });
+
+  it("rechaza (409 NO_ACTIVE_SESSION) si no hay caja operativa abierta", async () => {
+    queries.findById.mockResolvedValueOnce(loanCredit());
+    cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue(
+      null,
+    );
+
+    await expect(
+      service.approve("credit-loan-1", "admin-1"),
+    ).rejects.toMatchObject({ status: 409, code: "NO_ACTIVE_SESSION" });
+    expect(queries.approve).not.toHaveBeenCalled();
+  });
+
+  it("rechaza (409 INSUFFICIENT_CASH) si el préstamo supera el efectivo disponible", async () => {
+    queries.findById.mockResolvedValueOnce(loanCredit({ total_amount: 100000 }));
+    cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
+      id: "cash-session-1",
+      opening_amount: 50000,
+    });
+    cashSessionsQueries.computeSessionTotals.mockResolvedValue(zeroTotals());
+
+    await expect(
+      service.approve("credit-loan-1", "admin-1"),
+    ).rejects.toMatchObject({ status: 409, code: "INSUFFICIENT_CASH" });
+    expect(queries.approve).not.toHaveBeenCalled();
+  });
+
+  it("descuenta préstamos ya desembolsados antes de validar uno nuevo", async () => {
+    queries.findById.mockResolvedValueOnce(loanCredit({ total_amount: 40000 }));
+    cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
+      id: "cash-session-1",
+      opening_amount: 50000,
+    });
+    // Ya se desembolsaron $30.000 en préstamos previos desde esta misma caja:
+    // disponible real = 50000 - 30000 = 20000 < 40000 → debe rechazar.
+    cashSessionsQueries.computeSessionTotals.mockResolvedValue(
+      zeroTotals({ outflows_loans_cash: 30000 }),
+    );
+
+    await expect(
+      service.approve("credit-loan-1", "admin-1"),
+    ).rejects.toMatchObject({ status: 409, code: "INSUFFICIENT_CASH" });
     expect(queries.approve).not.toHaveBeenCalled();
   });
 });

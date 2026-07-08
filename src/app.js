@@ -232,9 +232,13 @@ app.use((err, req, res, next) => {
         message: "El cuerpo de la petición no es un JSON válido.",
       });
   }
-  // Errores de negocio lanzados con { status, message }
+  // Errores de negocio lanzados con { status, message, code? }
   if (err.status && err.status < 500) {
-    return res.status(err.status).json({ ok: false, message: err.message });
+    return res.status(err.status).json({
+      ok: false,
+      message: err.message,
+      ...(err.code ? { code: err.code } : {}),
+    });
   }
   console.error("🔴  Error no controlado:", err);
   res.status(500).json({ ok: false, message: "Error interno del servidor." });
