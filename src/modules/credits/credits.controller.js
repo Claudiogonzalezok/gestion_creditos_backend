@@ -179,7 +179,7 @@ const approve = async (req, res) => {
     );
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code);
     return response.serverError(res, err);
   }
 };
