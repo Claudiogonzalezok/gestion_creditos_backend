@@ -4,6 +4,7 @@
 jest.mock("../config/db", () => ({ query: jest.fn() }));
 jest.mock("../utils/cronLogger", () => ({
   runWithLogging: jest.fn((name, fn) => fn()),
+  ts: () => "",
 }));
 jest.mock("../modules/notifications/notifications.service", () => ({
   notify: jest.fn(),
