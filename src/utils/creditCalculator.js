@@ -44,15 +44,21 @@ const addMonthsClamped = (baseDate, periods) => {
 
 /**
  * Aplica el avance de período para una frecuencia de pago sobre una fecha base.
- * MENSUAL avanza por mes calendario (mismo día de cada mes), no por 30 días
- * corridos: si se ancla un día 24, todas las cuotas vencen el 24.
+ * DIARIA avanza 1 día corrido por período. MENSUAL avanza por mes calendario
+ * (mismo día de cada mes), no por 30 días corridos: si se ancla un día 24, todas
+ * las cuotas vencen el 24. Cada frecuencia es una rama explícita; una frecuencia
+ * desconocida lanza error (nunca cae silenciosamente en mensual).
  * @param {Date} baseDate - Fecha desde la cual se aplica el desplazamiento.
- * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
+ * @param {'DAILY'|'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
  * @param {number} periods - Cantidad de períodos a mover.
  * @returns {Date} Nueva fecha desplazada.
  */
 const addFrequencyPeriods = (baseDate, frequency, periods) => {
   const due = new Date(baseDate);
+  if (frequency === "DAILY") {
+    due.setDate(baseDate.getDate() + 1 * periods);
+    return due;
+  }
   if (frequency === "WEEKLY") {
     due.setDate(baseDate.getDate() + 7 * periods);
     return due;
@@ -61,7 +67,10 @@ const addFrequencyPeriods = (baseDate, frequency, periods) => {
     due.setDate(baseDate.getDate() + 14 * periods);
     return due;
   }
-  return addMonthsClamped(baseDate, periods);
+  if (frequency === "MONTHLY") {
+    return addMonthsClamped(baseDate, periods);
+  }
+  throw new Error(`Frecuencia de pago no soportada: ${frequency}`);
 };
 
 /**
@@ -130,7 +139,7 @@ const getDueDates = (startDate, installmentsCount, frequency) => {
  * Si no se informa, reutiliza la lógica histórica basada en la fecha actual.
  * @param {string|Date|null} firstPaymentDate - Primera fecha de pago elegida.
  * @param {number} installmentsCount - Cantidad total de cuotas.
- * @param {'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
+ * @param {'DAILY'|'WEEKLY'|'BIWEEKLY'|'MONTHLY'} frequency - Frecuencia del plan.
  * @returns {Date[]} Fechas de vencimiento calculadas.
  */
 const getDueDatesFromFirstPayment = (

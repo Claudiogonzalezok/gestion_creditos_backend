@@ -14,9 +14,35 @@ describe("creditCalculator", () => {
   it("avanza períodos correctamente según frecuencia", () => {
     const base = new Date(2026, 0, 10);
 
+    expect(toKey(addFrequencyPeriods(base, "DAILY", 1))).toBe("2026-01-11");
     expect(toKey(addFrequencyPeriods(base, "WEEKLY", 1))).toBe("2026-01-17");
     expect(toKey(addFrequencyPeriods(base, "BIWEEKLY", 1))).toBe("2026-01-24");
     expect(toKey(addFrequencyPeriods(base, "MONTHLY", 1))).toBe("2026-02-10");
+  });
+
+  it("DAILY avanza 1 día corrido por período (cruza fin de mes)", () => {
+    const base = new Date(2026, 0, 30);
+    expect(toKey(addFrequencyPeriods(base, "DAILY", 1))).toBe("2026-01-31");
+    expect(toKey(addFrequencyPeriods(base, "DAILY", 2))).toBe("2026-02-01");
+  });
+
+  it("lanza error ante una frecuencia no soportada (nunca cae en mensual)", () => {
+    expect(() => addFrequencyPeriods(new Date(2026, 0, 10), "YEARLY", 1)).toThrow(
+      /no soportada/,
+    );
+  });
+
+  it("genera vencimientos diarios consecutivos desde la primera cuota (días corridos)", () => {
+    const result = getDueDatesFromFirstPayment("2026-08-10", 5, "DAILY").map(
+      toKey,
+    );
+    expect(result).toEqual([
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+    ]);
   });
 
   it("genera vencimientos desde aprobación moviendo la primera cuota un período después", () => {

@@ -10,7 +10,7 @@ router.use(authenticate);
 // Lectura: Admin y Vendedor (para cotizador interno)
 router.get('/',
   authorize('ADMIN','SELLER','SELLER_COLLECTOR'),
-  [ query('payment_frequency').optional().isIn(['WEEKLY','BIWEEKLY','MONTHLY']).withMessage('payment_frequency inválido.') ],
+  [ query('payment_frequency').optional().isIn(['DAILY','WEEKLY','BIWEEKLY','MONTHLY']).withMessage('payment_frequency inválido.') ],
   validate,
   controller.getAll
 );
