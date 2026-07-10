@@ -5,3 +5,6 @@ dist/
 .DS_Store
 .claude/
 coverage/
+
+# Datos de migración inicial (información personal de clientes — NUNCA commitear)
+migracion/
