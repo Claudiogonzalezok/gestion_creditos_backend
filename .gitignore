@@ -7,4 +7,5 @@ dist/
 coverage/
 
 # Datos de migración inicial (información personal de clientes — NUNCA commitear)
-migracion/
+# Solo la carpeta de la raíz: los scripts en src/scripts/migracion/ SÍ se versionan.
+/migracion/

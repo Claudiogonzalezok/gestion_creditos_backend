@@ -62,7 +62,9 @@
 > **Definido:** todos los usuarios operativos se cargan con el rol mixto
 > `SELLER_COLLECTOR` (venden y cobran). El ADMIN es aparte.
 
-- DNI numérico sintético (ver §4), contraseña temporal (forzar cambio al primer login), teléfono si lo aportan.
+- DNI numérico sintético (ver §4), contraseña temporal `Cambiar.2026` con
+  `is_temp_password = TRUE` (el sistema fuerza el cambio al primer login),
+  teléfono si lo aportan.
 
 ### 3.2 Clientes (`customers`)
 
@@ -202,6 +204,9 @@ PostgreSQL producción
      rompe (productos vacíos, montos y cronograma correctos). Si rompe →
      cambiar la estrategia a "todo como LOAN con nota `VENTA: <producto>`"
      ANTES de tocar producción.
+     *Pre-validado a nivel backend (BD de test, 2026-07-10): `getById` y
+     `getAll` del service real responden sin errores sobre un SALE migrado.
+     Falta solo la verificación visual en el navegador.*
 5. **Detener el backend de producción** (`pm2 stop` o equivalente). Los cron
    jobs (mora, vencimientos, comisiones, recordatorios) corren **dentro del
    proceso de la app**: detenerla los deshabilita todos de una y además
