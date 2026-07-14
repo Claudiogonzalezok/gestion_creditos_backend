@@ -41,7 +41,7 @@ const swaggerSpec = {
       UUID: { type: 'string', format: 'uuid', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' },
       Date: { type: 'string', format: 'date', example: '2026-05-03' },
       PaymentMethod: { type: 'string', enum: ['CASH', 'TRANSFER'] },
-      PaymentFrequency: { type: 'string', enum: ['WEEKLY', 'BIWEEKLY', 'MONTHLY'] },
+      PaymentFrequency: { type: 'string', enum: ['DAILY', 'WEEKLY', 'BIWEEKLY', 'MONTHLY'] },
       CreditType: { type: 'string', enum: ['SALE', 'LOAN'] },
       Ok: {
         type: 'object',

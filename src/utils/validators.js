@@ -347,8 +347,10 @@ const credits = {
       .withMessage("La cantidad de cuotas debe ser un número entre 1 y 120."),
     body("payment_frequency")
       .if((val, { req }) => req.body.payment_condition !== "CASH")
-      .isIn(["WEEKLY", "BIWEEKLY", "MONTHLY"])
-      .withMessage("La frecuencia de pago debe ser WEEKLY, BIWEEKLY o MONTHLY."),
+      .isIn(["DAILY", "WEEKLY", "BIWEEKLY", "MONTHLY"])
+      .withMessage(
+        "La frecuencia de pago debe ser DAILY, WEEKLY, BIWEEKLY o MONTHLY.",
+      ),
     body("unit_ids")
       .if(body("type").equals("SALE"))
       .isArray({ min: 1 })
@@ -605,6 +607,7 @@ const credits = {
       .isInt({ min: 1, max: 120 })
       .withMessage("La cantidad de cuotas debe ser un número entre 1 y 120."),
     isEnum("payment_frequency", "La frecuencia de pago", [
+      "DAILY",
       "WEEKLY",
       "BIWEEKLY",
       "MONTHLY",
@@ -720,6 +723,7 @@ const credits = {
       .isInt({ min: 1, max: 120 })
       .withMessage("La cantidad de cuotas debe ser un entero entre 1 y 120."),
     isEnum("payment_frequency", "La frecuencia de pago", [
+      "DAILY",
       "WEEKLY",
       "BIWEEKLY",
       "MONTHLY",
@@ -878,6 +882,7 @@ const interestRates = {
       .isInt({ min: 1, max: 120 })
       .withMessage("La cantidad de cuotas debe ser entre 1 y 120."),
     isEnum("payment_frequency", "La frecuencia de pago", [
+      "DAILY",
       "WEEKLY",
       "BIWEEKLY",
       "MONTHLY",
@@ -1120,6 +1125,7 @@ const productRates = {
   create: [
     isUUID("product_id", "El producto"),
     isEnum("payment_frequency", "La frecuencia de pago", [
+      "DAILY",
       "WEEKLY",
       "BIWEEKLY",
       "MONTHLY",
