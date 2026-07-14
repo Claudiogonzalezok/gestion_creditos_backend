@@ -29,7 +29,7 @@
 ### Calidad de datos (verificada)
 
 - ✅ **878/880 filas cierran exacto**: `CTAS × IMP = PAGADO + SALDO`. El modelo de cuota uniforme del sistema calza perfecto con el negocio.
-- Las 2 excepciones: `rocio mazzini 2` (celda CTAS con formato fecha; el valor real es **24** — recuperable) y el encabezado `MENSUALES`.
+- Las 2 excepciones: una fila con la celda CTAS en formato fecha (artefacto de Excel — detalle en `anomalias.csv`) y el encabezado `MENSUALES`.
 - 2 créditos con `SALDO = 0` (ya saldados) · 138 con `PAGADO = 0` (sin pagos aún).
 - **DNI: 0 cargados** en las 881 fichas → se sintetizan todos (ver §4).
 - Teléfono: solo 2. Dirección real: 0. Vendedor en ficha: 0.
@@ -40,8 +40,11 @@
 
 **No se cargan.** Detectadas **14** (todas préstamos de 1 cuota):
 
-- 5 etiquetadas `PRESTAMO USD`: CORRALON ($225), CORRALON 2 ($75), GORDO LEO ($75), JORGE COTILLON ($122), JUANA ($650).
-- **9 sin etiquetar pero con montos imposibles en pesos** (cuota < $5.000): JORGE COTILLON ($150), BICHY ($810), GASTON BUO ($138), ALEJANDRO ALVAREZ ($276), DAVID GONZALEZ ($525), CABEZON ALE ($120 y $100), ALEJO TORINO ($90), SNUKER 2 ($210).
+- 5 etiquetadas `PRESTAMO USD` (montos $75–$650).
+- **9 sin etiquetar pero con montos imposibles en pesos** (cuota < $5.000, montos $90–$810).
+
+> Nombres, filas y montos exactos: en `excluidos_usd.csv` (canal privado —
+> este documento no incluye datos de clientes a propósito).
 
 → El script excluye por regla: `PRODUCTO contiene 'USD'` **o** `IMP < $5.000`. La lista exacta va en un CSV de revisión para que el cliente confirme antes de la carga.
 
@@ -71,7 +74,7 @@
 - 1 fila del maestro = 1 crédito; clientes repetidos: **45 nombres con 2–3 créditos** (93 filas). Dedupe por nombre normalizado (mayúsculas/minúsculas + sufijos numéricos: `belen quiroga 1` / `belen quiroga 2` = misma persona con 2 créditos).
 - **≈ 830 clientes únicos** estimados. El extractor genera `clientes_revision.csv` con la deduplicación propuesta para validar ANTES de cargar (riesgo: dos personas distintas con el mismo nombre).
 - Campos: nombre completo (normalizado a Título), **DNI sintético**, dirección/teléfono vacíos (no existen en origen; se completan después con la edición de clientes), `collector` = usuario de la zona (BICHY/GASTON/ALEJO/SAMUEL).
-- Nombres "comerciales" (CORRALON, SNUKER, etc.) se cargan igual como clientes.
+- Nombres "comerciales" (negocios, apodos) se cargan igual como clientes.
 
 ### 3.3 Productos (`products` + `product_units`) — catálogo Hoja1
 
