@@ -413,10 +413,16 @@ def main():
                  [["USUARIO", u["nombre"], u["dni"]] for u in usuarios] +
                  [["CLIENTE", c["nombre"], c["dni"]] for c in clientes])
 
-    combos = Counter((c["frecuencia"], c["ctas"]) for c in creditos)
+    # Separado por tipo: PRESTAMO → interest_rates (además necesita rango de
+    # monto), VENTA → product_rates (además se define POR PRODUCTO). Los
+    # créditos migrados no dependen de estas tasas; son para operar de ahí
+    # en adelante.
+    combos = Counter((c["tipo"], c["frecuencia"], c["ctas"]) for c in creditos)
     escribir_csv(SALIDA / "tasas_a_definir.csv",
-                 ["frecuencia", "cuotas", "creditos_existentes", "tasa_a_completar_por_cliente_%"],
-                 [[f, ct, n, ""] for (f, ct), n in sorted(combos.items())])
+                 ["destino", "frecuencia", "cuotas", "creditos_existentes",
+                  "tasa_a_completar_por_cliente_%"],
+                 [["PRESTAMOS (interest_rates)" if t == "LOAN" else "VENTAS (product_rates, por producto)",
+                   f, ct, n, ""] for (t, f, ct), n in sorted(combos.items())])
 
     # ── Reporte ──
     t = datos["meta"]["totales"]
