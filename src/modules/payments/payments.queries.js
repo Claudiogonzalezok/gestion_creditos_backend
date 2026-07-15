@@ -360,12 +360,18 @@ const shiftInstallmentDates = async (
   paymentFrequency,
   baseDueDate,
 ) => {
-  // MENSUAL usa "1 month" (mes calendario, con clamp a fin de mes que hace
-  // PostgreSQL) para coincidir con addMonthsClamped del cronograma original.
+  // Cada frecuencia mapea a un intervalo explícito. DIARIA usa "1 day" (días
+  // corridos). MENSUAL usa "1 month" (mes calendario, con clamp a fin de mes que
+  // hace PostgreSQL) para coincidir con addMonthsClamped del cronograma original.
+  // Una frecuencia desconocida lanza error: nunca se reprograma en mensual por
+  // defecto (evita corrimientos silenciosos ante una frecuencia futura).
   let interval;
-  if (paymentFrequency === "WEEKLY") interval = "1 week";
+  if (paymentFrequency === "DAILY") interval = "1 day";
+  else if (paymentFrequency === "WEEKLY") interval = "1 week";
   else if (paymentFrequency === "BIWEEKLY") interval = "2 weeks";
-  else interval = "1 month";
+  else if (paymentFrequency === "MONTHLY") interval = "1 month";
+  else
+    throw new Error(`Frecuencia de pago no soportada: ${paymentFrequency}`);
 
   // Las cuotas restantes toman las fechas de las cuotas adelantadas:
   // rn=1 → baseDueDate + 0 (toma la fecha de la primera cuota adelantada)

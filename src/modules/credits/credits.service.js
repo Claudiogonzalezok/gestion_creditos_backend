@@ -141,11 +141,16 @@ const toApiDate = (date) => localDate(date);
 
 /**
  * Ajusta fechas de vencimiento al próximo día hábil según feriados activos y fines de semana.
+ * La frecuencia DIARIA queda EXENTA: vence en días corridos (incluye domingos y
+ * feriados) para no solapar cuotas consecutivas al correrlas al próximo hábil.
  * @param {Date[]} baseDueDates - Fechas base calculadas por frecuencia.
- * @returns {Promise<Date[]>} Fechas ajustadas a calendario hábil.
+ * @param {'DAILY'|'WEEKLY'|'BIWEEKLY'|'MONTHLY'} [frequency] - Frecuencia del plan.
+ * @returns {Promise<Date[]>} Fechas ajustadas a calendario hábil (sin cambios si DAILY).
  */
-const applyBusinessDayRuleToDueDates = async (baseDueDates) => {
+const applyBusinessDayRuleToDueDates = async (baseDueDates, frequency) => {
   if (!baseDueDates.length) return [];
+  // DIARIA no aplica corrimiento hábil: días corridos, sin solapamiento.
+  if (frequency === "DAILY") return baseDueDates;
   const holidayKeys = await getActiveHolidayKeysInRange(
     baseDueDates[0],
     new Date(
@@ -179,7 +184,10 @@ const buildSimulationSchedule = async ({
     count,
     paymentFrequency,
   );
-  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+  const dueDates = await applyBusinessDayRuleToDueDates(
+    baseDueDates,
+    paymentFrequency,
+  );
   const rawCapital = financedAmount / count;
   let remaining = totalToReturn;
 
@@ -219,7 +227,10 @@ const buildSaleSimulationSchedule = async ({
     count,
     paymentFrequency,
   );
-  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+  const dueDates = await applyBusinessDayRuleToDueDates(
+    baseDueDates,
+    paymentFrequency,
+  );
 
   const rows = dueDates.map((dueDate, index) => {
     let amount = 0;
@@ -846,7 +857,10 @@ const approve = async (id, adminId, newInstallmentsCount) => {
       installmentsCount,
       credit.payment_frequency,
     );
-    const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+    const dueDates = await applyBusinessDayRuleToDueDates(
+      baseDueDates,
+      credit.payment_frequency,
+    );
 
     await withTransaction(async (client) => {
       const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
@@ -1059,7 +1073,10 @@ const approve = async (id, adminId, newInstallmentsCount) => {
     installmentsCount,
     credit.payment_frequency,
   );
-  const dueDates = await applyBusinessDayRuleToDueDates(baseDueDates);
+  const dueDates = await applyBusinessDayRuleToDueDates(
+    baseDueDates,
+    credit.payment_frequency,
+  );
   const registerDate = await getActiveJornadaDate();
 
   // V4.3: si el crédito implica un movimiento de caja (downPayment o prepaid),

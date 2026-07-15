@@ -304,7 +304,7 @@ const approve = async (
  * @param {string} creditId
  * @param {number} installmentAmount - Monto por cuota (uniforme para todas).
  * @param {Date[]} dueDates - Fechas de vencimiento en orden.
- * @param {string} paymentFrequency - WEEKLY | BIWEEKLY | MONTHLY.
+ * @param {string} paymentFrequency - DAILY | WEEKLY | BIWEEKLY | MONTHLY.
  */
 const generateInstallments = async (
   client,
