@@ -67,7 +67,7 @@ La carga crea **un usuario operativo por zona de cobranza real del Excel**
 | BICHY, GASTON, ALEJO | Zonas de cobranza | `SELLER_COLLECTOR` (rol mixto) |
 | SAMUEL (**Samuel Machuca** — cobrador empleado, **NO es Samuel Ruiz el socio**; confirmado por Tadeo 2026-07-14) | Zona de cobranza (94 créditos) | `SELLER_COLLECTOR` (rol mixto), igual que los otros 3 |
 | TADEO | Solo lista de precios en el catálogo — **NO es zona de cobranza** | No se crea (su cuenta ADMIN de producción alcanza) |
-| LEANDRO | Solo lista de precios — ¿quién es? | No se crea (confirmar con el cliente) |
+| LEANDRO | Solo lista de precios — no incide en ninguna planilla | ✅ **RESUELTO: no se crea** (decisión 2026-07-14). Si lo necesitan, lo registran ellos desde la UI de Usuarios |
 
 > **Aclaración importante (2026-07-14):** el "SAMUEL" de las planillas es
 > **Samuel Machuca**, un cobrador empleado — no Samuel Ruiz (socio/ADMIN),
