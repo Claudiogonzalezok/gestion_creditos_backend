@@ -110,7 +110,21 @@ Necesarias para que las **operaciones nuevas** funcionen desde el día 1 (sin ta
 - **Diaria:** 60 cuotas (y las que definan).
 - Markup observable en catálogo: costo → precio final ≈ +30% a +56%.
 
-→ El cliente debe entregar la **tabla de tasas por frecuencia × cuotas (× rango de monto para préstamos)**. El script las carga como seed. Sin esto no hay operaciones nuevas. **Los créditos migrados NO dependen de estas tasas** (se insertan con sus valores históricos congelados).
+→ **RESUELTO (2026-07-15, decisión del cliente):** el equipo carga tasas
+iniciales con `src/scripts/migracion/seed.tasas.js` y el cliente **las edita
+después desde la UI** de Configuración. El seed:
+- Cubre **las 4 frecuencias** (diaria, semanal, quincenal, mensual) para
+  préstamos (banda única de monto 0→sin tope) y para los 24 productos del
+  catálogo (14 combos por producto).
+- Valores anclados a la curva histórica del negocio (~30% por mes de plazo,
+  sublineal a plazos largos — misma curva del seed semanal ya existente).
+- **Respeta lo existente:** producción ya tiene tasas semanales/quincenales
+  por banda de monto (migración 005) — el seed saltea cualquier combo que ya
+  tenga tasa (evita bandas solapadas, lección de la migración 010) y es
+  idempotente.
+
+**Los créditos migrados NO dependen de estas tasas** (se insertan con sus
+valores históricos congelados).
 
 ### 3.5 Créditos + cuotas (`credits` + `installments`) — estrategia "saldo inicial"
 
@@ -202,7 +216,7 @@ PostgreSQL producción
 | 5 | 2 créditos con SALDO=0: ¿cargar como SETTLED o no cargar? | No cargar (solo historial) |
 | 6 | Mensuales vencidos entran **en mora visible** desde el día 1 (sin punitorios retroactivos). Semanales entran "al día". ¿OK? | Sí |
 | 7 | Precio de lista de los 25 artículos: ¿FINAL (lista Leandro) o hay 2 canales? | PRECIO FINAL |
-| 8 | **Tabla de tasas** por frecuencia × cuotas (× monto) para operaciones nuevas | ⚠️ Sin esto no hay ventas/préstamos nuevos |
+| 8 | ~~Tabla de tasas para operaciones nuevas~~ | ✅ **RESUELTO: seed inicial del equipo (`seed.tasas.js`), el cliente edita desde la UI** |
 | 9 | Revisión del dedupe de clientes (`clientes_revision.csv`) | — |
 | 10 | ¿Cargar teléfono/dirección después, a medida que cobren? | Sí (edición de cliente) |
 
@@ -234,13 +248,15 @@ PostgreSQL producción
    proceso de la app**: detenerla los deshabilita todos de una y además
    garantiza que nadie opere el sistema a mitad de la carga.
 6. En producción: `migrate.load.js --dry-run` → revisar reporte → correr real.
-7. Checklist §9 en producción (con el backend aún detenido, vía SQL).
-8. **Re-levantar el backend** (`pm2 start`). Los crons vuelven a correr solos;
+7. **Tasas iniciales**: `node src/scripts/migracion/seed.tasas.js` (dry-run) →
+   `--ejecutar`. Corre DESPUÉS del loader (necesita los 24 productos creados).
+8. Checklist §9 en producción (con el backend aún detenido, vía SQL).
+9. **Re-levantar el backend** (`pm2 start`). Los crons vuelven a correr solos;
    verificar en el log de arranque que los 6 jobs inicien, y que el cron de
    mora NO aplique punitorios retroactivos (protegido por
    `last_penalty_applied_at`, §3.5).
-9. Alta operativa: usuarios cambian contraseña, Admin abre jornada + caja, y el negocio opera.
-10. **Rollback si algo salió mal**: detener backend → restaurar backup → re-levantar (la carga es una transacción sobre una BD sin datos operativos previos, la ventana de riesgo es mínima).
+10. Alta operativa: usuarios cambian contraseña, Admin abre jornada + caja, y el negocio opera.
+11. **Rollback si algo salió mal**: detener backend → restaurar backup → re-levantar (la carga es una transacción sobre una BD sin datos operativos previos, la ventana de riesgo es mínima).
 
 ---
 
