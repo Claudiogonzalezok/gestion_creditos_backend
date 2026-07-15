@@ -65,17 +65,24 @@ La carga crea **un usuario operativo por zona de cobranza real del Excel**
 | Persona | Evidencia en planilla | Rol (DEFINIDO) |
 |---|---|---|
 | BICHY, GASTON, ALEJO | Zonas de cobranza | `SELLER_COLLECTOR` (rol mixto) |
-| SAMUEL | Zona de cobranza (94 créditos) **y además ADMIN en producción** | `SELLER_COLLECTOR` **como segunda cuenta, separada de su admin** (DNI sintético: el real ya lo usa su cuenta ADMIN) |
-| TADEO | Solo lista de precios en el catálogo — **NO es zona de cobranza** | No se crea. Si a futuro cobra, se le crea la operativa desde la UI |
+| SAMUEL (**Samuel Machuca** — cobrador empleado, **NO es Samuel Ruiz el socio**; confirmado por Tadeo 2026-07-14) | Zona de cobranza (94 créditos) | `SELLER_COLLECTOR` (rol mixto), igual que los otros 3 |
+| TADEO | Solo lista de precios en el catálogo — **NO es zona de cobranza** | No se crea (su cuenta ADMIN de producción alcanza) |
 | LEANDRO | Solo lista de precios — ¿quién es? | No se crea (confirmar con el cliente) |
 
-> **Por qué la cuenta doble de Samuel:** las planillas de cobranza solo se
-> generan para usuarios con rol `COLLECTOR`/`SELLER_COLLECTOR`
-> (`collections.service` valida el rol) — a un ADMIN nunca se le genera
-> planilla. Samuel administra con su cuenta ADMIN y cobra/recibe planillas
-> con la operativa. El loader detecta y reporta el ADMIN existente (lo usa
-> como `approved_by` de los créditos migrados) y ADVIERTE si no encuentra
-> ninguno.
+> **Aclaración importante (2026-07-14):** el "SAMUEL" de las planillas es
+> **Samuel Machuca**, un cobrador empleado — no Samuel Ruiz (socio/ADMIN),
+> como se asumió inicialmente. Por lo tanto **no existe conflicto de cuenta
+> doble**: los 4 usuarios de zona son empleados comunes con una sola cuenta.
+> El análisis de "planillas para ADMIN" (`docs/analisis-planilla-para-admin.md`)
+> queda archivado como referencia por si algún día un socio sale a cobrar,
+> sin urgencia.
+>
+> El loader detecta y reporta el ADMIN existente de producción (lo usa como
+> `approved_by` de los créditos migrados) y ADVIERTE si no encuentra ninguno.
+>
+> Nota operativa: los usuarios se crean con el nombre de la zona ("Samuel",
+> "Bichy"…). El Admin puede completar nombre y apellido reales desde la UI
+> de Usuarios después de la carga (ej. "Samuel Machuca").
 
 - DNI numérico sintético (ver §4), contraseña temporal `Cambiar.2026` con
   `is_temp_password = TRUE` (el sistema fuerza el cambio al primer login),

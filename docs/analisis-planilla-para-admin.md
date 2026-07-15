@@ -1,12 +1,18 @@
 # Análisis — ¿Planillas de cobranza para usuarios ADMIN?
 
-> Contexto: los dueños del negocio (Tadeo Heredia y Samuel Ruiz) son ADMIN en
-> producción y además operan en la calle (Samuel es zona de cobranza con 94
-> créditos). Hoy el sistema solo genera planillas para roles
-> `COLLECTOR`/`SELLER_COLLECTOR`, lo que fuerza a darles una **segunda cuenta**
-> operativa. Propuesta de Dante: **una sola cuenta ADMIN por persona, que pueda
-> recibir planillas**. Este doc analiza si conviene y qué costaría.
-> Solo análisis — no implementado.
+> **⚠ CASO ORIGEN RESUELTO DE OTRA FORMA (2026-07-14):** el "SAMUEL" de las
+> planillas resultó ser **Samuel Machuca** (cobrador empleado), no Samuel Ruiz
+> (socio/ADMIN) como se creía. El conflicto de cuenta doble que motivó este
+> análisis **no existe**: los 4 cobradores de zona son empleados comunes.
+> El documento queda **archivado como referencia** por si algún día un socio
+> sale a cobrar — el mapa de impacto y el plan siguen siendo válidos.
+> Sin urgencia de implementación.
+
+> Contexto original: se asumía que un socio ADMIN era zona de cobranza. Hoy el
+> sistema solo genera planillas para roles `COLLECTOR`/`SELLER_COLLECTOR`, lo
+> que forzaría una **segunda cuenta** operativa. Propuesta de Dante: **una sola
+> cuenta ADMIN por persona, que pueda recibir planillas**. Este doc analiza si
+> conviene y qué costaría. Solo análisis — no implementado.
 
 ---
 
