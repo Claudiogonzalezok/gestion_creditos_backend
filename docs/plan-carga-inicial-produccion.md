@@ -56,14 +56,26 @@
 
 ### 3.1 Usuarios (`users`)
 
+**Producción ya tiene 3 ADMIN** (no se tocan): Administrador del sistema
+(00000000), Tadeo Heredia (<DNI-ADMIN-TADEO>) y Samuel Ruiz (<DNI-ADMIN-SAMUEL>).
+
+La carga crea **un usuario operativo por zona de cobranza real del Excel**
+(derivado de los créditos, no de una lista fija):
+
 | Persona | Evidencia en planilla | Rol (DEFINIDO) |
 |---|---|---|
-| BICHY, GASTON, ALEJO, SAMUEL | Zonas de cobranza (881 créditos repartidos) | `SELLER_COLLECTOR` (rol mixto) |
-| TADEO, LEANDRO | Listas de precio propias en el catálogo | `SELLER_COLLECTOR` (rol mixto) |
-| (dueño/administrador) | — | `ADMIN` (al menos 1) |
+| BICHY, GASTON, ALEJO | Zonas de cobranza | `SELLER_COLLECTOR` (rol mixto) |
+| SAMUEL | Zona de cobranza (94 créditos) **y además ADMIN en producción** | `SELLER_COLLECTOR` **como segunda cuenta, separada de su admin** (DNI sintético: el real ya lo usa su cuenta ADMIN) |
+| TADEO | Solo lista de precios en el catálogo — **NO es zona de cobranza** | No se crea. Si a futuro cobra, se le crea la operativa desde la UI |
+| LEANDRO | Solo lista de precios — ¿quién es? | No se crea (confirmar con el cliente) |
 
-> **Definido:** todos los usuarios operativos se cargan con el rol mixto
-> `SELLER_COLLECTOR` (venden y cobran). El ADMIN es aparte.
+> **Por qué la cuenta doble de Samuel:** las planillas de cobranza solo se
+> generan para usuarios con rol `COLLECTOR`/`SELLER_COLLECTOR`
+> (`collections.service` valida el rol) — a un ADMIN nunca se le genera
+> planilla. Samuel administra con su cuenta ADMIN y cobra/recibe planillas
+> con la operativa. El loader detecta y reporta el ADMIN existente (lo usa
+> como `approved_by` de los créditos migrados) y ADVIERTE si no encuentra
+> ninguno.
 
 - DNI numérico sintético (ver §4), contraseña temporal `Cambiar.2026` con
   `is_temp_password = TRUE` (el sistema fuerza el cambio al primer login),

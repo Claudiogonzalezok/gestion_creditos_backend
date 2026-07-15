@@ -42,7 +42,13 @@ DNI_CLIENTES_DESDE = 99_000_001  # fuera del rango de DNIs argentinos reales
 DNI_USUARIOS_DESDE = 99_999_001
 UMBRAL_USD = 5_000               # cuota < $5.000 → operación en USD sin etiquetar
 MARCA_MIGRACION = "[MIGRACION 2026-07]"
-USUARIOS_OPERATIVOS = ["BICHY", "GASTON", "ALEJO", "SAMUEL", "TADEO", "LEANDRO"]
+# Un usuario operativo por ZONA DE COBRANZA real del Excel (se derivan de los
+# créditos, no de una lista fija). Las planillas solo se generan para
+# COLLECTOR/SELLER_COLLECTOR (collections.service valida el rol), por eso
+# Samuel — que además es ADMIN en producción — necesita esta cuenta operativa
+# SEPARADA de la de admin (su DNI real ya lo usa el admin → DNI sintético).
+# Tadeo y Leandro NO son zonas de cobranza → no se crean acá; sus cuentas
+# ADMIN de producción no se tocan.
 ROL_OPERATIVO = "SELLER_COLLECTOR"  # definido por el cliente: rol mixto para todos
 
 DIAS_SEMANA = {
@@ -324,10 +330,12 @@ def armar_clientes(creditos):
     return clientes
 
 
-def armar_usuarios():
+def armar_usuarios(creditos):
+    """Un usuario operativo por zona de cobranza presente en los créditos."""
+    zonas = sorted({c["zona"] for c in creditos if c["zona"]})
     usuarios, dni = [], DNI_USUARIOS_DESDE
-    for nombre in USUARIOS_OPERATIVOS:
-        usuarios.append({"nombre": a_titulo(nombre), "usuario": nombre.lower(),
+    for zona in zonas:
+        usuarios.append({"nombre": a_titulo(zona), "usuario": zona.lower(),
                          "dni": str(dni), "rol": ROL_OPERATIVO})
         dni += 1
     return usuarios
@@ -356,7 +364,7 @@ def main():
     con_ficha = cruzar_fichas(creditos, indice)
     catalogo = leer_catalogo(wb)
     clientes = armar_clientes(creditos)
-    usuarios = armar_usuarios()
+    usuarios = armar_usuarios(creditos)
 
     SALIDA.mkdir(exist_ok=True)
 

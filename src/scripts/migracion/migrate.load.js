@@ -107,9 +107,14 @@ const main = async () => {
 
     // approved_by: el ADMIN existente de producción (si hay).
     const adminRow = await client.query(
-      `SELECT id FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' ORDER BY created_at LIMIT 1`,
+      `SELECT id, full_name FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' ORDER BY created_at LIMIT 1`,
     );
     const adminId = adminRow.rows[0]?.id ?? null;
+    if (adminId) {
+      console.log(`   ADMIN existente: ${adminRow.rows[0].full_name} (será approved_by de los créditos migrados)\n`);
+    } else {
+      console.warn("   ⚠ NO hay ADMIN activo en esta BD: los créditos quedarían sin approved_by y nadie podría administrar. Crear el admin ANTES de cargar.\n");
+    }
 
     // ── 1. Usuarios operativos ───────────────────────────────────────────
     const hashTemporal = await bcrypt.hash(PASSWORD_TEMPORAL, SALT_ROUNDS);
