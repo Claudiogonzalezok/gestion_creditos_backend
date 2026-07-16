@@ -16,7 +16,9 @@ const getPreferences = async () => {
   const r = await pool.query(
     `SELECT type, enabled, frequency, updated_at
      FROM notification_preferences
-     ORDER BY type ASC`,
+     WHERE type = ANY($1::text[])
+     ORDER BY array_position($1::text[], type) ASC`,
+    [NOTIFICATION_TYPES],
   );
   return r.rows;
 };
@@ -44,13 +46,31 @@ const getPreferenceByType = async (type) => {
  * @returns {Promise<object>} fila actualizada
  */
 const updatePreference = async (type, { enabled, frequency }) => {
-  const r = await pool.query(
+  const r = await updatePreferenceWithClient(pool, type, { enabled, frequency });
+  return r;
+};
+
+/**
+ * Actualiza una preferencia usando el cliente recibido.
+ * Preserva updated_at cuando los valores enviados no cambian el estado actual.
+ * @param {object} client - Pool o cliente transaccional con query().
+ * @param {string} type
+ * @param {{enabled?: boolean, frequency?: string}} data
+ * @returns {Promise<object>} fila actualizada
+ */
+const updatePreferenceWithClient = async (client, type, { enabled, frequency }) => {
+  const r = await client.query(
     `INSERT INTO notification_preferences (type, enabled, frequency)
      VALUES ($1, COALESCE($2, TRUE), COALESCE($3, 'INSTANT'))
      ON CONFLICT (type) DO UPDATE SET
-       enabled    = COALESCE($2, notification_preferences.enabled),
-       frequency  = COALESCE($3, notification_preferences.frequency),
-       updated_at = NOW()
+        enabled    = COALESCE($2, notification_preferences.enabled),
+        frequency  = COALESCE($3, notification_preferences.frequency),
+        updated_at = CASE
+          WHEN notification_preferences.enabled IS DISTINCT FROM COALESCE($2, notification_preferences.enabled)
+            OR notification_preferences.frequency IS DISTINCT FROM COALESCE($3, notification_preferences.frequency)
+          THEN NOW()
+          ELSE notification_preferences.updated_at
+        END
      RETURNING type, enabled, frequency, updated_at`,
     [type, enabled, frequency],
   );
@@ -206,6 +226,7 @@ module.exports = {
   getPreferences,
   getPreferenceByType,
   updatePreference,
+  updatePreferenceWithClient,
   insertNotification,
   listByUser,
   countUnread,
