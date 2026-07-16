@@ -248,4 +248,10 @@ const main = async () => {
   }
 };
 
-main();
+// Solo ejecuta cuando se invoca directamente: generate.sql.js importa los
+// helpers de cronograma (única fuente de fechas) sin disparar la carga.
+if (require.main === module) {
+  main();
+}
+
+module.exports = { cronograma, proximoDia, iso, PASSWORD_TEMPORAL };

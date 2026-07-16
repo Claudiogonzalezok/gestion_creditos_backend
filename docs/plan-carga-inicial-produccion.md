@@ -211,7 +211,7 @@ PostgreSQL producción
 |---|---|---|
 | 1 | ~~Roles de los usuarios~~ | ✅ **RESUELTO: todos `SELLER_COLLECTOR`** |
 | 2 | ~~¿TADEO y LEANDRO son usuarios?~~ | ✅ **RESUELTO: sí, `SELLER_COLLECTOR`** |
-| 3 | 3 créditos con `PLAN=#REF!` (30 cuotas c/u): ¿qué día pagan? | — (bloqueante para esas 3 filas) |
+| 3 | ~~3 créditos con `PLAN=#REF!`~~ | ✅ **RESUELTO (Tadeo, 2026-07-15): quedan SIN cargar — alta manual** desde el sistema después del go-live |
 | 4 | Confirmar los **14 USD excluidos** (`excluidos_usd.csv`) | Excluir |
 | 5 | 2 créditos con SALDO=0: ¿cargar como SETTLED o no cargar? | No cargar (solo historial) |
 | 6 | Mensuales vencidos entran **en mora visible** desde el día 1 (sin punitorios retroactivos). Semanales entran "al día". ¿OK? | Sí |
