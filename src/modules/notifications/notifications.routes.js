@@ -12,6 +12,14 @@ router.use(authenticate);
 // ── Preferencias (config global V1) — solo ADMIN ───────────────
 router.get("/preferences", authorize("ADMIN"), controller.getPreferences);
 
+router.patch(
+  "/preferences",
+  authorize("ADMIN"),
+  v.notifications.updatePreferences,
+  validate,
+  controller.updatePreferences,
+);
+
 router.put(
   "/preferences/:type",
   authorize("ADMIN"),

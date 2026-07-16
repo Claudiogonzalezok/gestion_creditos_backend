@@ -1,4 +1,5 @@
 const queries = require("./notifications.queries");
+const { withTransaction } = require("../../utils/transaction");
 
 /**
  * Servicio central de emisión de notificaciones (push in-app, V1).
@@ -68,6 +69,25 @@ const updatePreference = async (type, data) =>
   queries.updatePreference(type, data);
 
 /**
+ * Actualiza varias preferencias en una única transacción.
+ * @param {{type: string, enabled?: boolean, frequency?: string}[]} preferences
+ * @returns {Promise<object[]>}
+ */
+const updatePreferences = async (preferences) =>
+  withTransaction(async (client) => {
+    const updated = [];
+    for (const preference of preferences) {
+      updated.push(
+        await queries.updatePreferenceWithClient(client, preference.type, {
+          enabled: preference.enabled,
+          frequency: preference.frequency,
+        }),
+      );
+    }
+    return updated;
+  });
+
+/**
  * Historial paginado de notificaciones de un usuario.
  * @param {string} userId
  * @param {number} page
@@ -126,6 +146,7 @@ module.exports = {
   notify,
   getPreferences,
   updatePreference,
+  updatePreferences,
   listByUser,
   countUnread,
   markRead,

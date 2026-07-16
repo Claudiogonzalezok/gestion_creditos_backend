@@ -1211,6 +1211,33 @@ const NOTIFICATION_TYPE_VALUES = [
   "NEW_CUSTOMER",
 ];
 const notifications = {
+  updatePreferences: [
+    body("preferences")
+      .isArray({ min: 1 })
+      .withMessage("preferences debe ser un array con al menos una preferencia."),
+    body("preferences.*.type")
+      .isIn(NOTIFICATION_TYPE_VALUES)
+      .withMessage(
+        `El tipo debe ser uno de: ${NOTIFICATION_TYPE_VALUES.join(", ")}.`,
+      ),
+    body("preferences.*.enabled")
+      .optional()
+      .isBoolean()
+      .withMessage("enabled debe ser booleano."),
+    body("preferences.*.frequency")
+      .optional()
+      .isIn(["INSTANT", "DAILY", "WEEKLY"])
+      .withMessage("frequency debe ser INSTANT, DAILY o WEEKLY."),
+    body("preferences.*").custom((preference) => {
+      if (
+        !Object.prototype.hasOwnProperty.call(preference, "enabled") &&
+        !Object.prototype.hasOwnProperty.call(preference, "frequency")
+      ) {
+        throw new Error("Cada preferencia debe incluir enabled o frequency.");
+      }
+      return true;
+    }),
+  ],
   updatePreference: [
     param("type")
       .isIn(NOTIFICATION_TYPE_VALUES)

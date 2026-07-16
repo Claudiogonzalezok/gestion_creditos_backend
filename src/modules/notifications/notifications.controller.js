@@ -25,6 +25,19 @@ const updatePreference = async (req, res) => {
   }
 };
 
+const updatePreferences = async (req, res) => {
+  try {
+    const updated = await service.updatePreferences(req.body.preferences);
+    return response.success(
+      res,
+      updated,
+      "Preferencias actualizadas correctamente.",
+    );
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
 const listByUser = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -88,6 +101,7 @@ const deleteAllByUser = async (req, res) => {
 module.exports = {
   getPreferences,
   updatePreference,
+  updatePreferences,
   listByUser,
   unreadCount,
   markRead,

@@ -7,6 +7,7 @@
 
 jest.mock("./notifications.queries", () => ({
   getPreferenceByType: jest.fn(),
+  updatePreferenceWithClient: jest.fn(),
   insertNotification: jest.fn(),
   listByUser: jest.fn(),
   countUnread: jest.fn(),
@@ -16,7 +17,12 @@ jest.mock("./notifications.queries", () => ({
   deleteAllByUser: jest.fn(),
 }));
 
+jest.mock("../../utils/transaction", () => ({
+  withTransaction: jest.fn((callback) => callback({ query: jest.fn() })),
+}));
+
 const queries = require("./notifications.queries");
+const { withTransaction } = require("../../utils/transaction");
 const service = require("./notifications.service");
 
 describe("notifications.service.notify", () => {
@@ -122,5 +128,29 @@ describe("notifications.service — historial y unread-count", () => {
     await service.deleteAllByUser("user-1");
 
     expect(queries.deleteAllByUser).toHaveBeenCalledWith("user-1");
+  });
+});
+
+describe("notifications.service.updatePreferences", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("actualiza preferencias en una única transacción", async () => {
+    queries.updatePreferenceWithClient
+      .mockResolvedValueOnce({ type: "MORA", enabled: false })
+      .mockResolvedValueOnce({ type: "NEW_CUSTOMER", enabled: true });
+
+    const result = await service.updatePreferences([
+      { type: "MORA", enabled: false },
+      { type: "NEW_CUSTOMER", enabled: true },
+    ]);
+
+    expect(withTransaction).toHaveBeenCalledTimes(1);
+    expect(queries.updatePreferenceWithClient).toHaveBeenCalledTimes(2);
+    expect(result).toEqual([
+      { type: "MORA", enabled: false },
+      { type: "NEW_CUSTOMER", enabled: true },
+    ]);
   });
 });
