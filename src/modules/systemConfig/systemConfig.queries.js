@@ -6,7 +6,7 @@ const CACHE_PREFIX = 'system_config:';
 const DEFAULT_VALUES = {
   commission_rate:           { value: '0.08',   description: 'Tasa de comisión por venta (0.08 = 8%)' },
   penalty_grace_days:        { value: '3',      description: 'Días de gracia antes de aplicar mora' },
-  penalty_rate_daily:        { value: '0.005',  description: 'Porcentaje diario de mora (0.005 = 0.5%)' },
+  penalty_rate_daily:        { value: '0',      description: 'Porcentaje diario de mora (0 = sin mora automática, decisión del cliente; ej: 0.005 = 0.5%)' },
   penalty_max_rate:          { value: '0.50',   description: 'Tope máximo de mora acumulable (0.50 = 50%)' },
   credit_expiry_days:        { value: '7',      description: 'Días en PENDING_APPROVAL antes de expirar' },
   min_credit_amount:         { value: '1000',   description: 'Monto mínimo en el cotizador' },
