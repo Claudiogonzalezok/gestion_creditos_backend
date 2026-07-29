@@ -281,19 +281,37 @@ def cruzar_fichas(creditos, indice_fichas):
 
 # ── Catálogo (Hoja1) ─────────────────────────────────────────────────────────
 def leer_catalogo(wb):
+    """Catálogo de artículos (Hoja1). Localiza el encabezado ARTICULOS de forma
+    DINÁMICA: entre snapshots el cliente movió las columnas de esta hoja
+    (14-07 en col 7, 28-07 en col 8), así que anclar a una columna fija hacía
+    que se leyeran 0 productos silenciosamente. A partir del encabezado:
+    nombre | PRECIO/U (+1) | CANTIDAD (+2) | PRECIO TADEO (+3) |
+    PRECIO LEANDRO (+4, = PRECIO FINAL → precio de lista §6.7)."""
     ws = wb["Hoja1"]
+    col_art = fila_header = None
+    for i, row in enumerate(ws.iter_rows(min_row=1, max_row=15, max_col=25, values_only=True), 1):
+        for j, cell in enumerate(row):
+            if normalizar(cell) == "ARTICULOS":  # primera ocurrencia = tabla principal
+                col_art, fila_header = j, i      # j: 0-based → columna 1-based = j+1
+                break
+        if col_art is not None:
+            break
+    if col_art is None:
+        print("   ⚠ Hoja1: no se encontró el encabezado 'ARTICULOS' — 0 productos")
+        return []
+
     productos = []
-    for row in ws.iter_rows(min_row=4, max_row=200, min_col=7, max_col=16, values_only=True):
+    for row in ws.iter_rows(min_row=fila_header + 1, max_row=fila_header + 100,
+                            min_col=col_art + 1, max_col=col_art + 5, values_only=True):
         nombre = row[0]
         if nombre is None or str(nombre).strip() == "":
-            continue
-        costo, cantidad = num(row[1]), num(row[2])
-        precio_final = num(row[9]) if num(row[9]) is not None else num(row[4])
+            break  # fin del bloque contiguo de artículos
+        costo, cantidad, precio_lista = num(row[1]), num(row[2]), num(row[4])
         productos.append({
             "nombre": a_titulo(nombre),
             "costo": round(costo) if costo else None,
             "stock": int(cantidad) if cantidad else 0,
-            "precio_lista": round(precio_final) if precio_final else None,
+            "precio_lista": round(precio_lista) if precio_lista else None,
         })
     return productos
 
