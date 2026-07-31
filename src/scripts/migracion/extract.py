@@ -308,25 +308,31 @@ def cruzar_fichas(creditos, indice_fichas):
     con_fecha = con_capital = 0
     for c in creditos:
         candidatos = indice_fichas.get(nombre_base(normalizar(c["nombre"])), [])
+        por_saldo = [f for f in candidatos if f["saldo"] is not None
+                     and abs(f["saldo"] - c["saldo"]) < 1]
         elegido = None
         if len(candidatos) == 1:
             elegido = candidatos[0]
-        elif len(candidatos) > 1:
-            por_saldo = [f for f in candidatos if f["saldo"] is not None
-                         and abs(f["saldo"] - c["saldo"]) < 1]
-            if len(por_saldo) == 1:
-                elegido = por_saldo[0]
+        elif len(por_saldo) == 1:
+            elegido = por_saldo[0]
+
+        # Fuente de fecha/capital: la ficha elegida, o —si quedó ambiguo (mismo
+        # nombre y saldo, ej. "cuni 1"/"cuni 2")— el valor COMPARTIDO por los
+        # candidatos: si todos coinciden en F.ENTREGA/capital, da igual cuál es
+        # cuál y se puede tomar igual.
+        fuente = [elegido] if elegido else (por_saldo or candidatos)
+
+        def compartido(campo):
+            vals = {f.get(campo) for f in fuente if f.get(campo)}
+            return next(iter(vals)) if len(vals) == 1 else None
 
         total_maestro = round(c["ctas"] * c["imp"], 2)  # total a devolver (con interés)
-        if elegido:
-            c["f_inicio"] = elegido["f_inicio"]
-            c["f_entrega"] = elegido["f_entrega"]
-            c["pagos_historicos"] = elegido["pagos"]
-            capital, flag = parse_capital(elegido.get("obs"), total_maestro)
-        else:
-            c["f_inicio"] = c["f_entrega"] = None
-            c["pagos_historicos"] = None
-            capital, flag = None, "sin_ficha"
+        c["f_inicio"] = compartido("f_inicio")
+        c["f_entrega"] = compartido("f_entrega")
+        c["pagos_historicos"] = elegido["pagos"] if elegido else None
+        capital, flag = parse_capital(compartido("obs"), total_maestro)
+        if not fuente:
+            flag = "sin_ficha"
 
         # ancla del cronograma: F.INICIO (1ª cuota) o, si falta, F.ENTREGA
         c["ancla_fecha"] = c["f_inicio"] or c["f_entrega"]

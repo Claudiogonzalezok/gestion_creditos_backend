@@ -49,27 +49,15 @@ const proximoDia = (desde, diaNombre) => {
   return d;
 };
 
-/** Primer día de pago EN o DESPUÉS de la fecha dada (inclusivo). Snappea la 1ª
- *  cuota al día de cobro del PLAN (ej. sábado) partiendo de F.INICIO/F.ENTREGA. */
-const primerDiaPago = (desde, diaNombre) => {
-  const objetivo = DIA_SEMANA[diaNombre.normalize("NFD").replace(/[̀-ͯ]/g, "")];
-  const d = new Date(desde);
-  d.setHours(12, 0, 0, 0);
-  while (d.getDay() !== objetivo) d.setDate(d.getDate() + 1);
-  return d;
-};
-
 /**
  * Cronograma completo del crédito migrado.
- * Prioridad del ancla (para que las fechas coincidan con la planilla real):
- *   1. MENSUAL con proximo_venc: esa fecha ES la 1ª cuota NO saldada (PLAN);
- *      las pagadas se fechan hacia atrás y las pendientes hacia adelante.
- *   2. ancla_fecha (F.INICIO/F.ENTREGA): es la fecha de la 1ª cuota; se
- *      reconstruye TODO el cronograma desde el inicio real → las cuotas ya
- *      vencidas quedan con fecha pasada (mora real visible).
- *   3. Sin fecha real: fallback legacy — semanal/quincenal → próxima ocurrencia
- *      del día de pago desde hoy; diario → mañana.
- * Reutiliza addFrequencyPeriods: única fuente de verdad de fechas.
+ * Ancla (Opción B — decisión del cliente): la 1ª cuota se fecha en la fecha de
+ * ENTREGA real (F.INICIO si está, si no F.ENTREGA) — al entregar el producto el
+ * dueño cobra la 1ª cuota ahí mismo — y de ahí en adelante por frecuencia (mismo
+ * día de la semana / del mes). Las cuotas ya vencidas quedan con fecha pasada
+ * (mora real visible). Fallback sin fecha real: mensual → próximo vencimiento
+ * del PLAN; semanal/quincenal → próxima ocurrencia del día de pago desde hoy;
+ * diario → mañana. Reutiliza addFrequencyPeriods: única fuente de verdad.
  */
 const cronograma = (credito, hoy) => {
   const anclaFecha = credito.ancla_fecha
@@ -80,19 +68,13 @@ const cronograma = (credito, hoy) => {
     : null;
 
   let ancla, numAncla;
-  if (credito.frecuencia === "MONTHLY" && credito.proximo_venc) {
+  if (anclaFecha) {
+    ancla = anclaFecha; // fecha de entrega/inicio = cuota 1 (todas las frecuencias)
+    numAncla = 1;
+  } else if (credito.frecuencia === "MONTHLY" && credito.proximo_venc) {
     const [y, m, d] = credito.proximo_venc.split("-").map(Number);
     ancla = new Date(y, m - 1, d, 12);
     numAncla = credito.cuotas_pagadas + 1; // proximo_venc = 1ª cuota no saldada
-  } else if (anclaFecha) {
-    // semanal/quincenal: la 1ª cuota cae en el día de pago del PLAN, no el día
-    // exacto de entrega → snap al 1er día de pago en/después del ancla.
-    ancla =
-      (credito.frecuencia === "WEEKLY" || credito.frecuencia === "BIWEEKLY") &&
-      credito.dia_pago
-        ? primerDiaPago(anclaFecha, credito.dia_pago)
-        : anclaFecha;
-    numAncla = 1; // ancla = cuota 1 (inicio real)
   } else if (
     (credito.frecuencia === "WEEKLY" || credito.frecuencia === "BIWEEKLY") &&
     credito.dia_pago
