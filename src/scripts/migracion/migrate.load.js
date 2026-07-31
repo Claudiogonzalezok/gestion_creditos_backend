@@ -49,25 +49,63 @@ const proximoDia = (desde, diaNombre) => {
   return d;
 };
 
+/** Primer día de pago EN o DESPUÉS de la fecha dada (inclusivo). Snappea la 1ª
+ *  cuota al día de cobro del PLAN (ej. sábado) partiendo de F.INICIO/F.ENTREGA. */
+const primerDiaPago = (desde, diaNombre) => {
+  const objetivo = DIA_SEMANA[diaNombre.normalize("NFD").replace(/[̀-ͯ]/g, "")];
+  const d = new Date(desde);
+  d.setHours(12, 0, 0, 0);
+  while (d.getDay() !== objetivo) d.setDate(d.getDate() + 1);
+  return d;
+};
+
 /**
  * Cronograma completo del crédito migrado.
- * Ancla = vencimiento de la primera cuota NO saldada; las pagadas se fechan
- * hacia atrás y las pendientes hacia adelante con la misma frecuencia
- * (reutiliza addFrequencyPeriods: única fuente de verdad de fechas).
+ * Prioridad del ancla (para que las fechas coincidan con la planilla real):
+ *   1. MENSUAL con proximo_venc: esa fecha ES la 1ª cuota NO saldada (PLAN);
+ *      las pagadas se fechan hacia atrás y las pendientes hacia adelante.
+ *   2. ancla_fecha (F.INICIO/F.ENTREGA): es la fecha de la 1ª cuota; se
+ *      reconstruye TODO el cronograma desde el inicio real → las cuotas ya
+ *      vencidas quedan con fecha pasada (mora real visible).
+ *   3. Sin fecha real: fallback legacy — semanal/quincenal → próxima ocurrencia
+ *      del día de pago desde hoy; diario → mañana.
+ * Reutiliza addFrequencyPeriods: única fuente de verdad de fechas.
  */
 const cronograma = (credito, hoy) => {
-  let ancla;
-  if (credito.frecuencia === "MONTHLY") {
+  const anclaFecha = credito.ancla_fecha
+    ? (() => {
+        const [y, m, d] = credito.ancla_fecha.split("-").map(Number);
+        return new Date(y, m - 1, d, 12);
+      })()
+    : null;
+
+  let ancla, numAncla;
+  if (credito.frecuencia === "MONTHLY" && credito.proximo_venc) {
     const [y, m, d] = credito.proximo_venc.split("-").map(Number);
     ancla = new Date(y, m - 1, d, 12);
-  } else if (credito.frecuencia === "WEEKLY") {
+    numAncla = credito.cuotas_pagadas + 1; // proximo_venc = 1ª cuota no saldada
+  } else if (anclaFecha) {
+    // semanal/quincenal: la 1ª cuota cae en el día de pago del PLAN, no el día
+    // exacto de entrega → snap al 1er día de pago en/después del ancla.
+    ancla =
+      (credito.frecuencia === "WEEKLY" || credito.frecuencia === "BIWEEKLY") &&
+      credito.dia_pago
+        ? primerDiaPago(anclaFecha, credito.dia_pago)
+        : anclaFecha;
+    numAncla = 1; // ancla = cuota 1 (inicio real)
+  } else if (
+    (credito.frecuencia === "WEEKLY" || credito.frecuencia === "BIWEEKLY") &&
+    credito.dia_pago
+  ) {
     ancla = proximoDia(hoy, credito.dia_pago);
+    numAncla = credito.cuotas_pagadas + 1;
   } else {
     ancla = new Date(hoy);
     ancla.setHours(12, 0, 0, 0);
-    ancla.setDate(ancla.getDate() + 1); // DAILY: mañana
+    ancla.setDate(ancla.getDate() + 1); // DAILY / sin día de pago: mañana
+    numAncla = credito.cuotas_pagadas + 1;
   }
-  const numAncla = credito.cuotas_pagadas + 1; // primera cuota no saldada
+
   const fechas = [];
   for (let n = 1; n <= credito.ctas; n++) {
     fechas.push(iso(addFrequencyPeriods(ancla, credito.frecuencia, n - numAncla)));
@@ -169,7 +207,10 @@ const main = async () => {
       const customerId = customerIdPorDni[cr.cliente_dni];
       if (!customerId) throw new Error(`Crédito fila ${cr.fila_excel}: cliente DNI ${cr.cliente_dni} no encontrado.`);
 
-      const totalAmount = cr.ctas * cr.imp;
+      // total_amount = capital financiado (de Observación); interest_rate = tasa
+      // congelada derivada. Sin capital → capital = total a devolver, interés 0.
+      const totalAmount = cr.total_amount != null ? cr.total_amount : cr.ctas * cr.imp;
+      const interestRate = cr.interest_rate != null ? cr.interest_rate : 0;
       const notas = [
         marca,
         cr.tipo === "SALE" ? `Producto: ${cr.producto}` : null,
@@ -177,14 +218,17 @@ const main = async () => {
         `Histórico pre-sistema: pagado $${cr.pagado.toLocaleString("es-AR")}` +
           (cr.pagos_historicos != null ? ` en ${cr.pagos_historicos} pagos` : "") + ".",
       ].filter(Boolean).join(" ");
-      const fechaInicio = cr.f_inicio ? new Date(`${cr.f_inicio}T12:00:00`) : hoy;
+      // created_at/approved_at = fecha de origen real (entrega o inicio)
+      const fechaOrigen = cr.f_entrega || cr.f_inicio;
+      const fechaInicio = fechaOrigen ? new Date(`${fechaOrigen}T12:00:00`) : hoy;
+      const hoyIso = iso(hoy);
 
       const credito = await client.query(
         `INSERT INTO credits
-           (customer_id, created_by, approved_by, type, total_amount,
+           (customer_id, created_by, approved_by, type, total_amount, interest_rate,
             installments_count, payment_frequency, status, notes, approved_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'ACTIVE', $8, $9, $9) RETURNING id`,
-        [customerId, userIdPorZona[cr.zona] ?? null, adminId, cr.tipo, totalAmount,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'ACTIVE', $9, $10, $10) RETURNING id`,
+        [customerId, userIdPorZona[cr.zona] ?? null, adminId, cr.tipo, totalAmount, interestRate,
          cr.ctas, cr.frecuencia, notas, fechaInicio],
       );
 
@@ -192,6 +236,10 @@ const main = async () => {
       for (let n = 1; n <= cr.ctas; n++) {
         const pagada = n <= cr.cuotas_pagadas;
         const parcial = !pagada && n === cr.cuotas_pagadas + 1 && cr.resto_parcial > 0;
+        // cuota no pagada con vencimiento anterior a la carga → VENCIDA, incluso
+        // si tiene pago parcial (sin punitorio: last_penalty_applied_at = NOW()
+        // evita mora retroactiva). Coincide con el cron (PENDING/PARTIAL→OVERDUE).
+        const vencida = !pagada && fechas[n - 1] < hoyIso;
         await client.query(
           `INSERT INTO installments
              (credit_id, installment_number, due_date, payment_frequency,
@@ -199,7 +247,7 @@ const main = async () => {
            VALUES ($1, $2, $3, $4, $5, $5, $6, $7, NOW())`,
           [credito.rows[0].id, n, fechas[n - 1], cr.frecuencia, cr.imp,
            pagada ? cr.imp : parcial ? cr.resto_parcial : 0,
-           pagada ? "PAID" : parcial ? "PARTIAL" : "PENDING"],
+           pagada ? "PAID" : vencida ? "OVERDUE" : parcial ? "PARTIAL" : "PENDING"],
         );
         cuotasInsertadas++;
       }

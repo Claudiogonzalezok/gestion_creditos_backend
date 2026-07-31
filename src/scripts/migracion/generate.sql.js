@@ -66,6 +66,7 @@ const main = async () => {
     console.error("--fecha inválida (usar YYYY-MM-DD)");
     process.exit(1);
   }
+  const isoCarga = iso(fechaCarga);
 
   const datos = JSON.parse(fs.readFileSync(DATOS, "utf8"));
   const t = datos.meta.totales;
@@ -177,7 +178,8 @@ ${unitRows.join(",\n")};
     const creditId = uuid();
     const customerId = customerIdPorDni[cr.cliente_dni];
     if (!customerId) throw new Error(`Fila ${cr.fila_excel}: cliente ${cr.cliente_dni} sin id`);
-    const totalAmount = cr.ctas * cr.imp;
+    const totalAmount = cr.total_amount != null ? cr.total_amount : cr.ctas * cr.imp;
+    const interestRate = cr.interest_rate != null ? cr.interest_rate : 0;
     const notas = [
       MARCA,
       cr.tipo === "SALE" ? `Producto: ${cr.producto}` : null,
@@ -185,11 +187,12 @@ ${unitRows.join(",\n")};
       `Histórico pre-sistema: pagado $${cr.pagado.toLocaleString("es-AR")}` +
         (cr.pagos_historicos != null ? ` en ${cr.pagos_historicos} pagos` : "") + ".",
     ].filter(Boolean).join(" ");
-    const fechaInicio = cr.f_inicio ? `${cr.f_inicio} 12:00:00` : `${iso(fechaCarga)} 12:00:00`;
+    const fechaOrigen = cr.f_entrega || cr.f_inicio;
+    const fechaInicio = fechaOrigen ? `${fechaOrigen} 12:00:00` : `${iso(fechaCarga)} 12:00:00`;
     const createdBy = userIdPorZona[cr.zona] ? `'${userIdPorZona[cr.zona]}'` : "NULL";
 
     credRows.push(
-      `('${creditId}', '${customerId}', ${createdBy}, (SELECT id FROM _mig_admin), ${q(cr.tipo)}, ${totalAmount}, ${cr.ctas}, ${q(cr.frecuencia)}, 'ACTIVE', ${q(notas)}, '${fechaInicio}', '${fechaInicio}')`,
+      `('${creditId}', '${customerId}', ${createdBy}, (SELECT id FROM _mig_admin), ${q(cr.tipo)}, ${totalAmount}, ${interestRate}, ${cr.ctas}, ${q(cr.frecuencia)}, 'ACTIVE', ${q(notas)}, '${fechaInicio}', '${fechaInicio}')`,
     );
 
     const fechas = cronograma(cr, fechaCarga);
@@ -197,7 +200,10 @@ ${unitRows.join(",\n")};
       const pagada = n <= cr.cuotas_pagadas;
       const parcial = !pagada && n === cr.cuotas_pagadas + 1 && cr.resto_parcial > 0;
       const amountPaid = pagada ? cr.imp : parcial ? cr.resto_parcial : 0;
-      const status = pagada ? "PAID" : parcial ? "PARTIAL" : "PENDING";
+      // vencida (aunque tenga pago parcial): pasada = OVERDUE. Solo la parcial NO
+      // vencida queda PARTIAL. Coincide con el cron (PENDING/PARTIAL→OVERDUE).
+      const vencida = !pagada && fechas[n - 1] < isoCarga;
+      const status = pagada ? "PAID" : vencida ? "OVERDUE" : parcial ? "PARTIAL" : "PENDING";
       instRows.push(
         `('${creditId}', ${n}, '${fechas[n - 1]}', ${q(cr.frecuencia)}, ${cr.imp}, ${cr.imp}, ${amountPaid}, '${status}', NOW())`,
       );
@@ -205,7 +211,7 @@ ${unitRows.join(",\n")};
   }
   sql.push(`-- ── 4. Créditos (${credRows.length}) ──`);
   for (const tanda of tandas(credRows, 100)) {
-    sql.push(`INSERT INTO credits (id, customer_id, created_by, approved_by, type, total_amount, installments_count, payment_frequency, status, notes, approved_at, created_at) VALUES
+    sql.push(`INSERT INTO credits (id, customer_id, created_by, approved_by, type, total_amount, interest_rate, installments_count, payment_frequency, status, notes, approved_at, created_at) VALUES
 ${tanda.join(",\n")};`);
   }
   sql.push(`-- ── 5. Cuotas (${instRows.length}) ──`);
@@ -270,6 +276,7 @@ COMMIT;
   console.log(`   Fecha de carga objetivo: ${iso(fechaCarga)} ← regenerar si cambia`);
   console.log(`   ${t.creditos} créditos · ${instRows.length} cuotas · ${custRows.length} clientes · ${userRows.length} usuarios`);
   console.log(`   ${prodRows.length} productos · tasas préstamo + ${rateRows.length} de producto`);
+  console.log(`   Capital real: ${t.creditos_con_capital}/${t.creditos} · fecha real: ${t.creditos_con_fecha}/${t.creditos} (resto usa fallback)`);
   console.log(`   Saldo esperado: $${t.suma_saldo.toLocaleString("es-AR")} (autoverificado al final)\n`);
 };
 

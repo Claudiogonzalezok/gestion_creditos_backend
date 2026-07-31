@@ -109,6 +109,44 @@ def fecha_iso(valor):
     return None
 
 
+# ── Capital desde la Observación de CONTROL DE PAGOS ─────────────────────────
+# El capital viene en taquigrafía: "300MIL"=300.000, "1,370MILL"=1.370.000, y
+# a veces "1,5MIL" son millones. Se desambigua la magnitud con el Total (que YA
+# incluye interés): el capital financiado tiene que caer entre ~35% y ~97% del
+# Total, así se descarta la interpretación equivocada (regla del cliente).
+BANDA_CAPITAL = (0.35, 0.97)
+
+
+def parse_capital(obs, total):
+    """Lee el capital de la Observación y desambigua mil/millón contra el Total.
+    @returns (capital|None, flag) con flag ∈ ok|ambiguo|fuera_banda|sin_numero|
+    sin_obs|sin_total|sin_ficha — para el CSV de revisión."""
+    if obs is None or str(obs).strip() == "":
+        return None, "sin_obs"
+    if isinstance(obs, (int, float)):
+        cands = [float(obs)]
+    else:
+        s = normalizar(obs)
+        m = re.search(r"(\d+(?:[.,]\d+)?)\s*(MILL|MIL)?", s.replace("REF", ""))
+        if not m:
+            return None, "sin_numero"
+        base = float(m.group(1).replace(".", "").replace(",", "."))
+        mag = m.group(2)
+        if mag == "MILL":
+            cands = [base * 1_000_000, base * 1_000]
+        elif mag == "MIL":
+            cands = [base * 1_000, base * 1_000_000]
+        else:
+            cands = [base * 1_000, base * 1_000_000, base]
+    if not total:
+        return None, "sin_total"
+    lo, hi = BANDA_CAPITAL
+    inband = [c for c in cands if lo * total <= c <= hi * total]
+    if not inband:
+        return None, "fuera_banda"
+    return round(inband[0], 2), ("ambiguo" if len(inband) > 1 else "ok")
+
+
 # ── Lectura del maestro (Planilla COBRANZA) ──────────────────────────────────
 def leer_maestro(wb):
     ws = wb["Planilla COBRANZA"]
@@ -179,6 +217,8 @@ def leer_maestro(wb):
             frecuencia, dia_pago, proximo_venc = "WEEKLY", str(plan).strip().lower(), None
         elif plan_norm and "DIAR" in plan_norm:
             frecuencia, dia_pago, proximo_venc = "DAILY", None, None
+        elif plan_norm and "QUINCEN" in plan_norm:
+            frecuencia, dia_pago, proximo_venc = "BIWEEKLY", None, None
         else:
             anomalias.append((i, base["nombre"], f"PLAN ilegible: {plan!r} (¿día de pago?) — bloqueante"))
             continue
@@ -220,13 +260,15 @@ def leer_fichas(wb):
             if actual:
                 fichas.append(actual)
             actual = {"nombre": str(row[1]).strip() if row[1] is not None else "",
-                      "producto": "", "f_entrega": None, "f_inicio": None,
+                      "producto": "", "obs": None, "f_entrega": None, "f_inicio": None,
                       "total": None, "saldo": None, "pagos": 0, "pagado_suma": 0.0}
             esperando_fechas = False
         elif actual is None:
             continue
         elif etiqueta == "PRODUCTO:":
             actual["producto"] = str(row[1]).strip() if row[1] is not None else ""
+        elif etiqueta == "OBSERVACION:":
+            actual["obs"] = row[1]  # capital en taquigrafía ("300MIL", etc.)
         elif etiqueta == "F.ENTREGA":
             esperando_fechas = True
         elif esperando_fechas:
@@ -256,9 +298,14 @@ def leer_fichas(wb):
 
 
 def cruzar_fichas(creditos, indice_fichas):
-    """Adjunta f_inicio y resumen de pagos históricos al crédito cuando la ficha
-    matchea sin ambigüedad (nombre → único candidato, o desempate por saldo)."""
-    con_ficha = 0
+    """Enriquece cada crédito con la ficha de CONTROL DE PAGOS que matchea sin
+    ambigüedad (nombre → único candidato, o desempate por saldo):
+      - fechas F.INICIO/F.ENTREGA → ancla del cronograma real (1ª cuota);
+      - capital desde Observación (desambiguado con el total) → total_amount;
+      - tasa congelada derivada = (total a devolver) / capital − 1.
+    Sin ficha o sin dato → cae al fallback (capital = total, interés 0, y el
+    generador ancla el cronograma a la fecha de carga)."""
+    con_fecha = con_capital = 0
     for c in creditos:
         candidatos = indice_fichas.get(nombre_base(normalizar(c["nombre"])), [])
         elegido = None
@@ -269,14 +316,32 @@ def cruzar_fichas(creditos, indice_fichas):
                          and abs(f["saldo"] - c["saldo"]) < 1]
             if len(por_saldo) == 1:
                 elegido = por_saldo[0]
+
+        total_maestro = round(c["ctas"] * c["imp"], 2)  # total a devolver (con interés)
         if elegido:
-            c["f_inicio"] = elegido["f_inicio"] or elegido["f_entrega"]
+            c["f_inicio"] = elegido["f_inicio"]
+            c["f_entrega"] = elegido["f_entrega"]
             c["pagos_historicos"] = elegido["pagos"]
-            con_ficha += 1
+            capital, flag = parse_capital(elegido.get("obs"), total_maestro)
         else:
-            c["f_inicio"] = None
+            c["f_inicio"] = c["f_entrega"] = None
             c["pagos_historicos"] = None
-    return con_ficha
+            capital, flag = None, "sin_ficha"
+
+        # ancla del cronograma: F.INICIO (1ª cuota) o, si falta, F.ENTREGA
+        c["ancla_fecha"] = c["f_inicio"] or c["f_entrega"]
+        c["ancla_fuente"] = "F.INICIO" if c["f_inicio"] else ("F.ENTREGA" if c["f_entrega"] else None)
+        # capital financiado (→ total_amount) y tasa congelada (→ interest_rate)
+        c["capital"] = capital
+        c["capital_flag"] = flag
+        c["total_amount"] = capital if capital else total_maestro
+        c["interest_rate"] = round(total_maestro / capital - 1, 4) if capital else 0.0
+
+        if c["ancla_fecha"]:
+            con_fecha += 1
+        if capital:
+            con_capital += 1
+    return con_fecha, con_capital
 
 
 # ── Catálogo (Hoja1) ─────────────────────────────────────────────────────────
@@ -379,7 +444,7 @@ def main():
 
     creditos, excluidos, anomalias = leer_maestro(wb)
     fichas, indice = leer_fichas(wb)
-    con_ficha = cruzar_fichas(creditos, indice)
+    con_fecha, con_capital = cruzar_fichas(creditos, indice)
     catalogo = leer_catalogo(wb)
     clientes = armar_clientes(creditos)
     usuarios = armar_usuarios(creditos)
@@ -400,7 +465,9 @@ def main():
                 "excluidos_usd": len(excluidos),
                 "anomalias": len(anomalias),
                 "suma_saldo": round(sum(c["saldo"] for c in creditos), 2),
-                "creditos_con_ficha": con_ficha,
+                "suma_capital": round(sum((c.get("capital") or c["total_amount"]) for c in creditos), 2),
+                "creditos_con_fecha": con_fecha,
+                "creditos_con_capital": con_capital,
             },
         },
         "usuarios": usuarios,
@@ -431,6 +498,25 @@ def main():
                  [["USUARIO", u["nombre"], u["dni"]] for u in usuarios] +
                  [["CLIENTE", c["nombre"], c["dni"]] for c in clientes])
 
+    # Capital por crédito (leído de Observación). flag != ok/ambiguo → cae a
+    # capital = total (interés 0): son los que conviene que el cliente complete.
+    escribir_csv(SALIDA / "capital_revision.csv",
+                 ["fila_excel", "nombre", "tipo", "ctas", "imp", "total_a_devolver",
+                  "capital", "tasa_%", "flag"],
+                 [[c["fila_excel"], c["nombre"], c["tipo"], c["ctas"], c["imp"],
+                   round(c["ctas"] * c["imp"], 2), c.get("capital"),
+                   round(c.get("interest_rate", 0) * 100, 1), c.get("capital_flag")]
+                  for c in creditos])
+
+    # Fecha ancla por crédito. fuente_fecha vacío → sin fecha real (el cronograma
+    # cae al fallback desde la fecha de carga): a completar por el cliente.
+    escribir_csv(SALIDA / "fechas_revision.csv",
+                 ["fila_excel", "nombre", "frecuencia", "cuotas", "cuotas_pagadas",
+                  "ancla_fecha", "fuente_fecha", "dia_pago", "proximo_venc"],
+                 [[c["fila_excel"], c["nombre"], c["frecuencia"], c["ctas"],
+                   c["cuotas_pagadas"], c.get("ancla_fecha"), c.get("ancla_fuente"),
+                   c.get("dia_pago"), c.get("proximo_venc")] for c in creditos])
+
     # Separado por tipo: PRESTAMO → interest_rates (además necesita rango de
     # monto), VENTA → product_rates (además se define POR PRODUCTO). Los
     # créditos migrados no dependen de estas tasas; son para operar de ahí
@@ -455,8 +541,10 @@ def main():
   Productos catálogo: {t['productos_catalogo']}
   Excluidos USD     : {t['excluidos_usd']}
   Anomalías         : {t['anomalias']}  ← revisar anomalias.csv
-  Con ficha cruzada : {t['creditos_con_ficha']} / {t['creditos']}
+  Con fecha de ancla: {t['creditos_con_fecha']} / {t['creditos']}  (F.INICIO/F.ENTREGA → cronograma real; ver fechas_revision.csv)
+  Con capital real  : {t['creditos_con_capital']} / {t['creditos']}  (resto: capital = total, interés 0; ver capital_revision.csv)
   SUMA SALDO        : ${t['suma_saldo']:,.0f}  ← verificar contra el sistema post-carga
+  SUMA CAPITAL      : ${t['suma_capital']:,.0f}  (financiado, sin interés)
 """)
 
 
