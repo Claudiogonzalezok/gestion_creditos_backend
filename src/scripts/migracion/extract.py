@@ -75,6 +75,31 @@ def nombre_base(nombre_norm):
     return re.sub(r"\s+\d{1,2}$", "", nombre_norm)
 
 
+def _lev(a, b):
+    """Distancia de edición (Levenshtein)."""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def nombres_similares(a, b):
+    """True si dos nombres normalizados son la misma persona con typos: cada
+    token de la parte común coincide o difiere por pocos caracteres. Rescata
+    'jesica torino' vs 'jesica torno' pero rechaza 'maxi rubio' vs 'maxi matana'
+    (apellidos distintos)."""
+    for x, y in zip(a.split(), b.split()):
+        d = _lev(x, y)
+        if d and not (d <= 2 and d <= 0.4 * max(len(x), len(y))):
+            return False
+    return True
+
+
 def a_titulo(texto):
     """'CARO QUIRINO' → 'Caro Quirino' (nombre presentable)."""
     return " ".join(w.capitalize() for w in normalizar(texto).split())
@@ -297,14 +322,20 @@ def leer_fichas(wb):
     return fichas, indice
 
 
-def cruzar_fichas(creditos, indice_fichas):
-    """Enriquece cada crédito con la ficha de CONTROL DE PAGOS que matchea sin
-    ambigüedad (nombre → único candidato, o desempate por saldo):
-      - fechas F.INICIO/F.ENTREGA → ancla del cronograma real (1ª cuota);
-      - capital desde Observación (desambiguado con el total) → total_amount;
-      - tasa congelada derivada = (total a devolver) / capital − 1.
-    Sin ficha o sin dato → cae al fallback (capital = total, interés 0, y el
-    generador ancla el cronograma a la fecha de carga)."""
+def cruzar_fichas(creditos, indice_fichas, fichas):
+    """Enriquece cada crédito con la ficha de CONTROL DE PAGOS que matchea:
+      - por nombre (único candidato, o desempate/valor compartido por saldo);
+      - si el nombre no matchea (typos entre las dos hojas, ej. "jesica torino"
+        vs "jesica torno"), FALLBACK por SALDO exacto + primer token del nombre.
+    De la ficha toma fechas F.INICIO/F.ENTREGA (ancla de la 1ª cuota), capital
+    (de Observación, desambiguado con el total) y la tasa derivada. Sin ficha →
+    capital = total, interés 0, y el generador ancla a la fecha de carga."""
+    # índice por saldo redondeado para el fallback por monto
+    por_saldo_idx = defaultdict(list)
+    for f in fichas:
+        if f.get("saldo") is not None:
+            por_saldo_idx[round(f["saldo"])].append(f)
+
     con_fecha = con_capital = 0
     for c in creditos:
         candidatos = indice_fichas.get(nombre_base(normalizar(c["nombre"])), [])
@@ -321,6 +352,22 @@ def cruzar_fichas(creditos, indice_fichas):
         # candidatos: si todos coinciden en F.ENTREGA/capital, da igual cuál es
         # cuál y se puede tomar igual.
         fuente = [elegido] if elegido else (por_saldo or candidatos)
+
+        # Fallback por SALDO exacto + nombre similar: rescata créditos cuyo
+        # nombre difiere entre las dos hojas por un typo (jesica torino vs torno).
+        # Exige saldo idéntico, mismo primer nombre y nombres similares (rechaza
+        # mismo primer nombre con apellido distinto, ej. maxi rubio / maxi matana).
+        if not fuente:
+            base_c = nombre_base(normalizar(c["nombre"]))
+            tok = base_c.split(" ")[0]
+            cs = [f for f in por_saldo_idx.get(round(c["saldo"]), [])
+                  if abs(f["saldo"] - c["saldo"]) < 1
+                  and normalizar(f["nombre"]).split(" ")[:1] == [tok]
+                  and nombres_similares(base_c, nombre_base(normalizar(f["nombre"])))]
+            if len(cs) == 1:
+                elegido = cs[0]
+                fuente = cs
+                c["match_typo"] = True
 
         def compartido(campo):
             vals = {f.get(campo) for f in fuente if f.get(campo)}
@@ -450,7 +497,7 @@ def main():
 
     creditos, excluidos, anomalias = leer_maestro(wb)
     fichas, indice = leer_fichas(wb)
-    con_fecha, con_capital = cruzar_fichas(creditos, indice)
+    con_fecha, con_capital = cruzar_fichas(creditos, indice, fichas)
     catalogo = leer_catalogo(wb)
     clientes = armar_clientes(creditos)
     usuarios = armar_usuarios(creditos)
@@ -518,10 +565,11 @@ def main():
     # cae al fallback desde la fecha de carga): a completar por el cliente.
     escribir_csv(SALIDA / "fechas_revision.csv",
                  ["fila_excel", "nombre", "frecuencia", "cuotas", "cuotas_pagadas",
-                  "ancla_fecha", "fuente_fecha", "dia_pago", "proximo_venc"],
+                  "ancla_fecha", "fuente_fecha", "match_por_typo", "dia_pago", "proximo_venc"],
                  [[c["fila_excel"], c["nombre"], c["frecuencia"], c["ctas"],
                    c["cuotas_pagadas"], c.get("ancla_fecha"), c.get("ancla_fuente"),
-                   c.get("dia_pago"), c.get("proximo_venc")] for c in creditos])
+                   "SI" if c.get("match_typo") else "", c.get("dia_pago"), c.get("proximo_venc")]
+                  for c in creditos])
 
     # Separado por tipo: PRESTAMO → interest_rates (además necesita rango de
     # monto), VENTA → product_rates (además se define POR PRODUCTO). Los
