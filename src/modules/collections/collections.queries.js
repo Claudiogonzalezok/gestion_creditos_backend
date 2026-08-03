@@ -632,6 +632,36 @@ const findActiveByCollectorAndDate = async (collectorId, date, db = pool) => {
 };
 
 /**
+ * Colapsa las cuotas de la planilla a UNA por crédito para la lectura: la más
+ * antigua (menor installment_number) queda como representante y se le adjunta
+ * `additional_installments_count` = las demás cuotas del MISMO crédito que
+ * están en la planilla. Reduce el listado que ven cobrador, admin y PDF (todos
+ * leen findById) sin tocar la generación ni el snapshot, que sigue guardando
+ * todas las cuotas. Se mantiene el orden por order_number.
+ * @param {Array<object>} rows - Filas del detalle (deben incluir credit_id).
+ * @returns {Array<object>} Una fila por crédito (representante) + contador.
+ */
+const collapseToOldestPerCredit = (rows) => {
+  const byCredit = new Map();
+  for (const row of rows) {
+    const key = row.credit_id ?? row.installment_id; // sin credit_id → no agrupa
+    const g = byCredit.get(key);
+    if (!g) {
+      byCredit.set(key, { rep: row, count: 1 });
+    } else {
+      g.count += 1;
+      if (row.installment_number < g.rep.installment_number) g.rep = row;
+    }
+  }
+  return [...byCredit.values()]
+    .map(({ rep, count }) => ({
+      ...rep,
+      additional_installments_count: count - 1,
+    }))
+    .sort((a, b) => a.order_number - b.order_number);
+};
+
+/**
  * Obtiene una planilla por ID con su detalle.
  *
  * Estrategia de lectura por snapshot_version:
@@ -677,6 +707,7 @@ const findById = async (id) => {
     detailsRes = await pool.query(
       `SELECT csd.order_number,
               csd.installment_id,
+              i.credit_id,
               csd.installment_number_snapshot AS installment_number,
               csd.due_date_snapshot           AS due_date,
               csd.amount_due_snapshot::float8 AS amount_due,
@@ -702,6 +733,9 @@ const findById = async (id) => {
               csd.antecedent_notes,
               csd.management_status
        FROM collection_sheet_details csd
+       -- JOIN a installments SOLO por credit_id (inmutable): permite agrupar por
+       -- crédito en la lectura sin romper la semántica de snapshot inmutable.
+       JOIN installments i ON i.id = csd.installment_id
        WHERE csd.sheet_id = $1
        ORDER BY csd.order_number`,
       [id],
@@ -758,7 +792,9 @@ const findById = async (id) => {
     );
   }
 
-  const items = detailsRes.rows;
+  // Una cuota por crédito (la más antigua) + contador de las demás. Aplica a
+  // TODOS los consumidores de findById (cobrador, admin, PDF) → misma vista.
+  const items = collapseToOldestPerCredit(detailsRes.rows);
 
   // ── Capa LIVE separada ───────────────────────────────────────────────────────
   // El snapshot es inmutable, pero el cobrador necesita ver el estado VIVO de la
@@ -984,6 +1020,7 @@ const recalcManagementStatusForActiveTodaySheet = async (
 
 module.exports = {
   CTE_LATEST_NEXT_VISIT,
+  collapseToOldestPerCredit,
   findInstallmentsForSheet,
   create,
   createDetails,
