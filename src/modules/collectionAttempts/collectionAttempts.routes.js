@@ -24,7 +24,7 @@ router.get('/:id',
 );
 
 router.post('/',
-  authorize('ADMIN', 'COLLECTOR', 'SELLER_COLLECTOR'),
+  authorize('ADMIN', 'SELLER', 'COLLECTOR', 'SELLER_COLLECTOR'),
   v.collectionAttempts.create, validate,
   controller.create
 );
