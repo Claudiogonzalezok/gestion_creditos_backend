@@ -14,6 +14,7 @@ const findAll = async ({
            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date, p.created_at,
            p.approved_at, p.approved_by,
            p.is_reversal, p.admin_direct, p.parent_payment_id,
+           (SELECT id FROM payments rev WHERE rev.reversed_by_payment_id = p.id LIMIT 1) AS reversal_payment_id,
            i.installment_number, i.amount_due::float8, i.due_date,
            c.id AS credit_id, c.type AS credit_type,
            ${movementConceptCase("p", "c")} AS concepto,
