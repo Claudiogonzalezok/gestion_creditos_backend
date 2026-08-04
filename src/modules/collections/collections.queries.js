@@ -812,6 +812,23 @@ const findById = async (id) => {
               i.amount_due::float8    AS amount_due,
               i.amount_paid::float8   AS amount_paid,
               i.penalty_amount::float8 AS penalty_amount,
+              -- Saldo total pendiente del crédito (mismo cálculo que
+              -- payments.getTotalPendingBalance): tope hasta el que el cobrador
+              -- puede ingresar un excedente que se reparte a cuotas siguientes.
+              (
+                COALESCE((
+                  SELECT SUM(i2.amount_due - i2.amount_paid)
+                  FROM installments i2
+                  WHERE i2.credit_id = i.credit_id
+                    AND i2.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
+                ), 0)
+                - COALESCE((
+                    SELECT SUM(p2.amount_received)
+                    FROM payments p2
+                    JOIN installments i3 ON i3.id = p2.installment_id
+                    WHERE i3.credit_id = i.credit_id AND p2.status = 'PENDING'
+                  ), 0)
+              )::float8 AS credit_pending_balance,
               EXISTS (
                 SELECT 1 FROM payments p
                 WHERE p.installment_id = i.id
@@ -847,6 +864,7 @@ const findById = async (id) => {
           amount_due: r.amount_due,
           amount_paid: r.amount_paid,
           penalty_amount: r.penalty_amount,
+          credit_pending_balance: r.credit_pending_balance,
           has_pending_payment: r.has_pending_payment,
           today_attempt_id: r.today_attempt_id,
           today_attempt_type: r.today_attempt_type,
@@ -859,6 +877,7 @@ const findById = async (id) => {
         amount_due: null,
         amount_paid: null,
         penalty_amount: null,
+        credit_pending_balance: null,
         has_pending_payment: false,
         today_attempt_id: null,
         today_attempt_type: null,
