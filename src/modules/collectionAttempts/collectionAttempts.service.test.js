@@ -16,6 +16,8 @@ const service = require("./collectionAttempts.service");
 
 const ADMIN = { id: "admin-1", role: "ADMIN" };
 const COLLECTOR = { id: "col-1", role: "COLLECTOR" };
+const SELLER = { id: "sel-1", role: "SELLER" };
+const SELLER_COLLECTOR = { id: "selcol-1", role: "SELLER_COLLECTOR" };
 
 /** Configura el SELECT de la cuota que hace el service al inicio de create(). */
 const mockInstallment = (overrides = {}) => {
@@ -38,7 +40,7 @@ const mockInstallment = (overrides = {}) => {
 describe("collectionAttempts.create — SCHEDULED_VISIT (gestión admin)", () => {
   beforeEach(() => jest.clearAllMocks());
 
-  it("rechaza con 403 si el rol no es ADMIN", async () => {
+  it("rechaza con 403 si el rol es COLLECTOR (cobrador puro no programa)", async () => {
     await expect(
       service.create(
         { installment_id: "inst-1", attempt_type: "SCHEDULED_VISIT" },
@@ -153,6 +155,48 @@ describe("collectionAttempts.create — SCHEDULED_VISIT (gestión admin)", () =>
 
     expect(queries.create).toHaveBeenCalledWith(
       expect.objectContaining({ collectorId: "admin-1", createdBy: "admin-1" }),
+    );
+  });
+
+  it("un VENDEDOR puede programar: se imputa al cobrador asignado y created_by=vendedor", async () => {
+    mockInstallment({ assigned_collector_id: "col-1" });
+    queries.create.mockResolvedValue({ id: "att-5" });
+
+    await service.create(
+      {
+        installment_id: "inst-1",
+        attempt_type: "SCHEDULED_VISIT",
+        next_visit_date: "2026-06-30",
+        notes: "El cliente me avisó en la calle",
+      },
+      SELLER,
+    );
+
+    expect(queries.create).toHaveBeenCalledWith(
+      expect.objectContaining({ collectorId: "col-1", createdBy: "sel-1" }),
+    );
+    expect(
+      collectionsQueries.updateManagementStatusForActiveTodaySheet,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("un MIXTO puede programar sobre un cliente que NO es de su cartera (exención de cartera)", async () => {
+    mockInstallment({ assigned_collector_id: "col-9" });
+    queries.create.mockResolvedValue({ id: "att-6" });
+
+    await service.create(
+      {
+        installment_id: "inst-1",
+        attempt_type: "SCHEDULED_VISIT",
+        next_visit_date: "2026-06-30",
+        notes: "Cliente de otra cartera me avisó",
+      },
+      SELLER_COLLECTOR,
+    );
+
+    // No lanza 403 por cartera; la visita se imputa al cobrador asignado real.
+    expect(queries.create).toHaveBeenCalledWith(
+      expect.objectContaining({ collectorId: "col-9", createdBy: "selcol-1" }),
     );
   });
 });
