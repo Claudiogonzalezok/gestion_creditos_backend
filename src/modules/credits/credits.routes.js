@@ -64,6 +64,12 @@ router.post('/:id/write-off',
   authorize('ADMIN'), v.credits.writeOff, validate, controller.writeOff
 );
 
+// Renovación de préstamo de una sola cuota (cobra el interés y corre el
+// vencimiento un período; el capital no cambia) — solo ADMIN
+router.post('/:id/renew',
+  authorize('ADMIN'), v.credits.renew, validate, controller.renew
+);
+
 // Historial de cobros aprobados del crédito
 router.get('/:creditId/payments',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),

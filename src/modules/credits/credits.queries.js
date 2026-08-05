@@ -134,6 +134,7 @@ const findById = async (id) => {
        WHERE p.installment_id = i.id
          AND p.status = 'APPROVED'
          AND p.is_reversal = FALSE
+         AND p.generation_type <> 'RENEWAL'
        ORDER BY p.approved_at DESC
        LIMIT 1
      ) lp ON TRUE

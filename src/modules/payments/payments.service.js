@@ -767,6 +767,126 @@ const adminDirect = async (data, adminId) => {
 };
 
 /**
+ * Renueva un préstamo LOAN de una sola cuota: el cliente paga solo el interés del
+ * período para extender el vencimiento. Es un caso particular del cobro directo —
+ * reutiliza los mismos primitivos (createApproved + registro en caja) — pero NO
+ * aplica el pago a la cuota (el capital sigue debiéndose) y, en su lugar, corre el
+ * vencimiento un período. El pago se etiqueta generation_type='RENEWAL'.
+ *
+ * @param {string} creditId - Préstamo a renovar.
+ * @param {object} data - Medio de pago del interés (payment_method + split mixto).
+ * @param {string} adminId - Admin que registra la renovación.
+ * @returns {Promise<object>} El pago de renovación creado.
+ */
+const renew = async (creditId, data, adminId) => {
+  const jornadaDate = await getActiveJornadaDate();
+  await _validateCajaOpen(jornadaDate);
+  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+
+  const loan = await queries.getRenewableLoan(creditId);
+  if (!loan) throw { status: 404, message: "Crédito no encontrado." };
+  if (loan.type !== "LOAN" || loan.installments_count !== 1)
+    throw {
+      status: 409,
+      message: "La renovación solo aplica a préstamos de una sola cuota.",
+    };
+  if (loan.credit_status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: `No se puede renovar un crédito en estado ${loan.credit_status}.`,
+    };
+  if (loan.installment_status === "PAID")
+    throw {
+      status: 409,
+      message: "La cuota ya fue pagada; no se puede renovar.",
+    };
+
+  // Interés del período = cuota (capital + interés) − capital. Sin capitalización:
+  // el interés se calcula siempre sobre el capital original.
+  const interest = _round2(loan.amount_due - loan.total_amount);
+  if (interest <= 0)
+    throw { status: 409, message: "El préstamo no tiene interés a renovar." };
+
+  // El monto SIEMPRE es el interés (fijo). Se reutiliza el normalizador de montos:
+  // para un solo medio se imputa todo el interés; en mixto, el split debe sumar
+  // exactamente el interés.
+  const amounts =
+    data.payment_method === "MIXED"
+      ? _normalizePaymentAmounts({
+          amount_cash: data.amount_cash,
+          amount_transfer: data.amount_transfer,
+        })
+      : _normalizePaymentAmounts({
+          amount_received: interest,
+          payment_method: data.payment_method,
+        });
+  if (_round2(amounts.amountReceived) !== interest)
+    throw {
+      status: 422,
+      message: `El monto debe ser exactamente el interés a renovar ($${interest.toLocaleString("es-AR")}).`,
+    };
+
+  let newPaymentId;
+  await withTransaction(async (client) => {
+    const activeSession =
+      await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession)
+      throw {
+        status: 409,
+        message:
+          "No hay caja operativa abierta. Abrí una caja para registrar la renovación.",
+        code: "NO_ACTIVE_SESSION",
+      };
+
+    const lockedInst = await queries.lockAndGetInstallment(
+      client,
+      loan.installment_id,
+    );
+    if (!lockedInst) throw { status: 404, message: "Cuota no encontrada." };
+    if (lockedInst.status === "PAID")
+      throw {
+        status: 409,
+        message: "La cuota ya fue pagada; no se puede renovar.",
+      };
+
+    const created = await queries.createApproved(client, {
+      installmentId: loan.installment_id,
+      adminId,
+      amountReceived: amounts.amountReceived,
+      amountCash: amounts.amountCash,
+      amountTransfer: amounts.amountTransfer,
+      paymentMethod: amounts.paymentMethod,
+      transferReference: data.transfer_reference,
+      notes: "Pago por renovación",
+      cashSessionId: activeSession.id,
+      generationType: "RENEWAL",
+    });
+    newPaymentId = created.id;
+
+    // Renovación: NO se aplica el pago a la cuota (el capital sigue debiéndose).
+    // Solo se corre el vencimiento un período (punto 24: período consecutivo desde
+    // el vencimiento anterior, nunca desde la fecha de pago; puede quedar vencido).
+    await queries.advanceInstallmentDueDate(
+      client,
+      loan.installment_id,
+      loan.payment_frequency,
+      graceDays,
+    );
+
+    await _registerSplitCashMovements(client, {
+      paymentId: newPaymentId,
+      amountCash: amounts.amountCash,
+      amountTransfer: amounts.amountTransfer,
+      movementType: "PAYMENT",
+      registerDate: jornadaDate,
+      userId: adminId,
+    });
+  });
+
+  return queries.findById(newPaymentId);
+};
+
+/**
  * Revierte totalmente un cobro aprobado y todos sus sub-pagos derivados.
  * Genera un payment compensatorio (is_reversal=TRUE) por cada cuota afectada.
  * No elimina registros — patrón de transacción compensatoria.
@@ -1047,6 +1167,7 @@ module.exports = {
   reject,
   getByCredit,
   adminDirect,
+  renew,
   reverse,
   generatePrepaidInstallmentPayments,
   // Núcleo exportado para reutilización en nuevos flujos
