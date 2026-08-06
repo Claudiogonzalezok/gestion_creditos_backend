@@ -399,18 +399,23 @@ const shiftInstallmentDates = async (
 };
 
 /**
- * Corre el vencimiento de UNA cuota un período hacia adelante (renovación de
- * préstamo de una sola cuota). due_date = due_date + intervalo(frecuencia), SIN
- * clamp a hoy: el nuevo vencimiento es el anterior + 1 período aunque quede ya
- * vencido (regla de la renovación: siempre período consecutivo, nunca la fecha de
- * pago). Guarda original_due_date y recomputa el status por la nueva fecha con la
- * misma regla que updateInstallment (OVERDUE si venció + gracia, sino PENDING).
+ * Deja la cuota de un préstamo de una sola cuota lista para el próximo período al
+ * renovar (como si arrancara de nuevo): corre el vencimiento un período, resetea
+ * la mora y recomputa el status.
+ *   · due_date = due_date + intervalo(frecuencia), SIN clamp a hoy: el nuevo
+ *     vencimiento es el anterior + 1 período aunque quede ya vencido (regla de la
+ *     renovación: siempre período consecutivo, nunca la fecha de pago).
+ *   · penalty_amount = 0: la mora se cobró dentro de la renovación, así que se limpia.
+ *   · status por la nueva fecha con la misma regla que updateInstallment (OVERDUE
+ *     si venció + gracia, sino PENDING).
+ *   · original_due_date se guarda solo la primera vez.
+ * El capital (amount_due / amount_paid) NO se toca: sigue debiéndose igual.
  * @param {object} client - Cliente de transacción.
  * @param {string} installmentId - Cuota a renovar.
  * @param {string} paymentFrequency - Frecuencia del crédito.
  * @param {number} graceDays - Días de gracia del system_config.
  */
-const advanceInstallmentDueDate = async (
+const renewInstallment = async (
   client,
   installmentId,
   paymentFrequency,
@@ -421,6 +426,7 @@ const advanceInstallmentDueDate = async (
     `UPDATE installments
        SET original_due_date = COALESCE(original_due_date, due_date),
            due_date          = (due_date + $2::interval)::date,
+           penalty_amount    = 0,
            status            = CASE
                                  WHEN (due_date + $2::interval)::date < (CURRENT_DATE - ($3)::int * INTERVAL '1 day')
                                    THEN 'OVERDUE'
@@ -731,6 +737,7 @@ const getRenewableLoan = async (creditId) => {
             c.status AS credit_status, c.total_amount::float8 AS total_amount,
             c.payment_frequency,
             i.id AS installment_id, i.amount_due::float8 AS amount_due,
+            i.penalty_amount::float8 AS penalty_amount,
             i.status AS installment_status,
             to_char(i.due_date, 'YYYY-MM-DD') AS due_date
      FROM credits c
@@ -759,7 +766,7 @@ module.exports = {
   getTotalPendingBalance,
   getPendingInstallmentsFrom,
   shiftInstallmentDates,
-  advanceInstallmentDueDate,
+  renewInstallment,
   markInstallmentAsPrepaid,
   createApprovalPrepaymentPayment,
   createApproved,

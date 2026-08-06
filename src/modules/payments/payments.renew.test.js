@@ -8,7 +8,7 @@ jest.mock("./payments.queries", () => ({
   getRenewableLoan: jest.fn(),
   lockAndGetInstallment: jest.fn(),
   createApproved: jest.fn(),
-  advanceInstallmentDueDate: jest.fn(),
+  renewInstallment: jest.fn(),
   updateInstallment: jest.fn(), // no debe llamarse en una renovación
   findById: jest.fn(),
 }));
@@ -61,6 +61,7 @@ const validLoan = (overrides = {}) => ({
   payment_frequency: "MONTHLY",
   installment_id: "inst-1",
   amount_due: 12000,
+  penalty_amount: 0,
   installment_status: "PENDING",
   due_date: "2026-09-05",
   ...overrides,
@@ -80,7 +81,7 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
       status: "PENDING",
     });
     queries.createApproved.mockResolvedValue({ id: "pay-1" });
-    queries.advanceInstallmentDueDate.mockResolvedValue();
+    queries.renewInstallment.mockResolvedValue();
     queries.findById.mockResolvedValue({ id: "pay-1" });
   });
 
@@ -114,7 +115,7 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
 
     await service.renew(CREDIT_ID, { payment_method: "CASH" }, "admin-1");
 
-    expect(queries.advanceInstallmentDueDate).toHaveBeenCalledWith(
+    expect(queries.renewInstallment).toHaveBeenCalledWith(
       client,
       "inst-1",
       "MONTHLY",
@@ -128,7 +129,23 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
     ).toHaveBeenCalledWith(client, "inst-1", "admin-1");
   });
 
-  it("acepta pago mixto cuando efectivo + transferencia suman el interés", async () => {
+  it("cobra interés + mora cuando la cuota tiene mora manual aplicada", async () => {
+    // Interés 2.000 + mora 500 = 2.500 a cobrar.
+    queries.getRenewableLoan.mockResolvedValue(validLoan({ penalty_amount: 500 }));
+
+    await service.renew(CREDIT_ID, { payment_method: "CASH" }, "admin-1");
+
+    expect(queries.createApproved).toHaveBeenCalledWith(
+      client,
+      expect.objectContaining({
+        amountReceived: 2500,
+        amountCash: 2500,
+        generationType: "RENEWAL",
+      }),
+    );
+  });
+
+  it("acepta pago mixto cuando efectivo + transferencia suman el total (interés + mora)", async () => {
     queries.getRenewableLoan.mockResolvedValue(validLoan());
 
     await service.renew(

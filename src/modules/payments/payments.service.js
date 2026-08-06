@@ -808,9 +808,15 @@ const renew = async (creditId, data, adminId) => {
   if (interest <= 0)
     throw { status: 409, message: "El préstamo no tiene interés a renovar." };
 
-  // El monto SIEMPRE es el interés (fijo). Se reutiliza el normalizador de montos:
-  // para un solo medio se imputa todo el interés; en mixto, el split debe sumar
-  // exactamente el interés.
+  // La renovación cobra TODO: interés + mora manual acumulada en la cuota. Al
+  // renovar la cuota se resetea (renewInstallment pone penalty_amount = 0), así que
+  // la mora se cobra acá una sola vez y queda saldada.
+  const mora = _round2(loan.penalty_amount || 0);
+  const totalToCharge = _round2(interest + mora);
+
+  // El monto SIEMPRE es el total a cobrar (fijo). Se reutiliza el normalizador de
+  // montos: para un solo medio se imputa todo el total; en mixto, el split debe
+  // sumar exactamente el total (interés + mora).
   const amounts =
     data.payment_method === "MIXED"
       ? _normalizePaymentAmounts({
@@ -818,13 +824,13 @@ const renew = async (creditId, data, adminId) => {
           amount_transfer: data.amount_transfer,
         })
       : _normalizePaymentAmounts({
-          amount_received: interest,
+          amount_received: totalToCharge,
           payment_method: data.payment_method,
         });
-  if (_round2(amounts.amountReceived) !== interest)
+  if (_round2(amounts.amountReceived) !== totalToCharge)
     throw {
       status: 422,
-      message: `El monto debe ser exactamente el interés a renovar ($${interest.toLocaleString("es-AR")}).`,
+      message: `El monto debe ser exactamente el total a cobrar ($${totalToCharge.toLocaleString("es-AR")}: interés $${interest.toLocaleString("es-AR")} + mora $${mora.toLocaleString("es-AR")}).`,
     };
 
   let newPaymentId;
@@ -867,7 +873,7 @@ const renew = async (creditId, data, adminId) => {
     // Renovación: NO se aplica el pago a la cuota (el capital sigue debiéndose).
     // Solo se corre el vencimiento un período (punto 24: período consecutivo desde
     // el vencimiento anterior, nunca desde la fecha de pago; puede quedar vencido).
-    await queries.advanceInstallmentDueDate(
+    await queries.renewInstallment(
       client,
       loan.installment_id,
       loan.payment_frequency,
