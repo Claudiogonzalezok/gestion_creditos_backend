@@ -7,6 +7,7 @@ const {
   getActiveJornadaDate,
 } = require("../businessDays/businessDays.service");
 const collectionsQueries = require("../collections/collections.queries");
+const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
 const notificationsService = require("../notifications/notifications.service");
@@ -871,6 +872,14 @@ const renew = async (creditId, data, adminId) => {
       loan.installment_id,
       loan.payment_frequency,
       graceDays,
+    );
+
+    // La próxima visita agendada queda obsoleta al correr el vencimiento: se
+    // resetea anulando las gestiones con próxima visita de la cuota.
+    await collectionAttemptsQueries.voidScheduledVisitsForInstallment(
+      client,
+      loan.installment_id,
+      adminId,
     );
 
     await _registerSplitCashMovements(client, {

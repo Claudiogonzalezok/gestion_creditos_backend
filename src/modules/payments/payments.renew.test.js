@@ -33,6 +33,10 @@ jest.mock("../collections/collections.queries", () => ({
   updateManagementStatusForActiveTodaySheet: jest.fn(),
 }));
 
+jest.mock("../collectionAttempts/collectionAttempts.queries", () => ({
+  voidScheduledVisitsForInstallment: jest.fn(),
+}));
+
 jest.mock("../systemConfig/systemConfig.queries", () => ({
   getValue: jest.fn().mockResolvedValue("3"),
 }));
@@ -41,6 +45,7 @@ jest.mock("../../utils/transaction", () => ({ withTransaction: jest.fn() }));
 
 const queries = require("./payments.queries");
 const cashMovementsQueries = require("./cash_movements.queries");
+const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
 const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
 const { withTransaction } = require("../../utils/transaction");
 const service = require("./payments.service");
@@ -117,6 +122,10 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
     );
     // El capital sigue debiéndose: nunca se toca el saldo de la cuota.
     expect(queries.updateInstallment).not.toHaveBeenCalled();
+    // La próxima visita se resetea (se anulan las gestiones agendadas de la cuota).
+    expect(
+      collectionAttemptsQueries.voidScheduledVisitsForInstallment,
+    ).toHaveBeenCalledWith(client, "inst-1", "admin-1");
   });
 
   it("acepta pago mixto cuando efectivo + transferencia suman el interés", async () => {
