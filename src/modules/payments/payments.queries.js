@@ -405,11 +405,16 @@ const shiftInstallmentDates = async (
  *   · due_date = due_date + intervalo(frecuencia), SIN clamp a hoy: el nuevo
  *     vencimiento es el anterior + 1 período aunque quede ya vencido (regla de la
  *     renovación: siempre período consecutivo, nunca la fecha de pago).
+ *   · amount_due = original_amount: se restaura el importe congelado de la cuota
+ *     (capital + interés original) quitando la mora que applyPenalty había sumado
+ *     a amount_due. Mantiene el invariante amount_due = original_amount +
+ *     penalty_amount con penalty_amount = 0. Así el próximo período vuelve a cobrar
+ *     el interés original, nunca uno inflado por la mora ya cobrada.
  *   · penalty_amount = 0: la mora se cobró dentro de la renovación, así que se limpia.
  *   · status por la nueva fecha con la misma regla que updateInstallment (OVERDUE
  *     si venció + gracia, sino PENDING).
  *   · original_due_date se guarda solo la primera vez.
- * El capital (amount_due / amount_paid) NO se toca: sigue debiéndose igual.
+ * El capital efectivamente debido (amount_paid) NO se toca: sigue debiéndose igual.
  * @param {object} client - Cliente de transacción.
  * @param {string} installmentId - Cuota a renovar.
  * @param {string} paymentFrequency - Frecuencia del crédito.
@@ -426,6 +431,7 @@ const renewInstallment = async (
     `UPDATE installments
        SET original_due_date = COALESCE(original_due_date, due_date),
            due_date          = (due_date + $2::interval)::date,
+           amount_due        = COALESCE(original_amount, amount_due - penalty_amount),
            penalty_amount    = 0,
            status            = CASE
                                  WHEN (due_date + $2::interval)::date < (CURRENT_DATE - ($3)::int * INTERVAL '1 day')
@@ -737,6 +743,7 @@ const getRenewableLoan = async (creditId) => {
             c.status AS credit_status, c.total_amount::float8 AS total_amount,
             c.payment_frequency,
             i.id AS installment_id, i.amount_due::float8 AS amount_due,
+            i.original_amount::float8 AS original_amount,
             i.penalty_amount::float8 AS penalty_amount,
             i.status AS installment_status,
             to_char(i.due_date, 'YYYY-MM-DD') AS due_date

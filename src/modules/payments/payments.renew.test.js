@@ -1,6 +1,7 @@
 // Renovación de préstamo LOAN de una sola cuota (payments.service.renew).
-// Verifica: interés = amount_due − total_amount, pago etiquetado RENEWAL, impacto
-// en caja, corrimiento de vencimiento, y que NO se aplica el pago a la cuota.
+// Verifica: interés = original_amount − total_amount (importe CONGELADO, no el
+// amount_due inflado por la mora), pago etiquetado RENEWAL, impacto en caja,
+// corrimiento de vencimiento, y que NO se aplica el pago a la cuota.
 
 jest.mock("../../config/db", () => ({ query: jest.fn() }));
 
@@ -52,7 +53,11 @@ const service = require("./payments.service");
 
 const CREDIT_ID = "credit-1";
 
-/** Préstamo LOAN de 1 cuota: capital 10.000, cuota 12.000 (interés 2.000). */
+/**
+ * Préstamo LOAN de 1 cuota: capital 10.000, importe congelado 12.000 (interés
+ * original 2.000). Invariante del sistema: amount_due = original_amount +
+ * penalty_amount (applyPenalty suma la mora a ambas columnas).
+ */
 const validLoan = (overrides = {}) => ({
   type: "LOAN",
   installments_count: 1,
@@ -60,6 +65,7 @@ const validLoan = (overrides = {}) => ({
   total_amount: 10000,
   payment_frequency: "MONTHLY",
   installment_id: "inst-1",
+  original_amount: 12000,
   amount_due: 12000,
   penalty_amount: 0,
   installment_status: "PENDING",
@@ -129,9 +135,14 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
     ).toHaveBeenCalledWith(client, "inst-1", "admin-1");
   });
 
-  it("cobra interés + mora cuando la cuota tiene mora manual aplicada", async () => {
-    // Interés 2.000 + mora 500 = 2.500 a cobrar.
-    queries.getRenewableLoan.mockResolvedValue(validLoan({ penalty_amount: 500 }));
+  it("cobra interés original + mora (sin contaminar el interés con la mora)", async () => {
+    // Con mora 500 aplicada: amount_due sube a 12.500 (invariante), pero el interés
+    // se toma del importe congelado (original_amount 12.000): interés 2.000 + mora
+    // 500 = 2.500. Si el código usara amount_due daría 3.000 (interés inflado 2.500
+    // + mora 500) y este caso fallaría.
+    queries.getRenewableLoan.mockResolvedValue(
+      validLoan({ penalty_amount: 500, amount_due: 12500 }),
+    );
 
     await service.renew(CREDIT_ID, { payment_method: "CASH" }, "admin-1");
 

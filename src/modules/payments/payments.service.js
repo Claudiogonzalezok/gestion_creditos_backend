@@ -802,9 +802,16 @@ const renew = async (creditId, data, adminId) => {
       message: "La cuota ya fue pagada; no se puede renovar.",
     };
 
-  // Interés del período = cuota (capital + interés) − capital. Sin capitalización:
-  // el interés se calcula siempre sobre el capital original.
-  const interest = _round2(loan.amount_due - loan.total_amount);
+  // Interés del período = importe CONGELADO de la cuota (capital + interés original)
+  // − capital. Se usa original_amount, NO amount_due: applyPenalty suma la mora a
+  // amount_due (invariante amount_due = original_amount + penalty_amount), así que
+  // amount_due está contaminado por la mora. El interés se calcula siempre sobre el
+  // interés original congelado en la operación, sin capitalización ni tasa nueva.
+  const frozenAmount =
+    loan.original_amount != null
+      ? loan.original_amount
+      : loan.amount_due - (loan.penalty_amount || 0);
+  const interest = _round2(frozenAmount - loan.total_amount);
   if (interest <= 0)
     throw { status: 409, message: "El préstamo no tiene interés a renovar." };
 
