@@ -122,6 +122,93 @@ const _normalizePaymentAmounts = (data) => {
   };
 };
 
+// ── Núcleo de renovación (compartido por los dos caminos de pago) ─────────────
+// Existe UNA sola operación de negocio RENEWAL, partida en dos primitivas puras
+// que recorren cualquiera de los dos pipelines de pago (directo y pre-carga):
+//   · _computeRenewalCharge: cálculo + validación ("cuánto y por qué").
+//   · _applyRenewalEffects:  efectos sobre el préstamo cuando el pago se aprueba.
+
+/**
+ * Valida que el préstamo sea renovable y calcula el cargo de la renovación.
+ * Compartido por el cobro directo (valida y cobra en el acto) y la pre-carga
+ * (valida y congela el monto al crearse).
+ *
+ * Interés del período = importe CONGELADO de la cuota (capital + interés original)
+ * − capital. Se usa original_amount, NO amount_due: applyPenalty suma la mora a
+ * amount_due (invariante amount_due = original_amount + penalty_amount), así que
+ * amount_due está contaminado por la mora. El interés se calcula siempre sobre el
+ * interés original congelado en la operación, sin capitalización ni tasa nueva.
+ * La mora manual acumulada se cobra junto con el interés (una sola vez).
+ *
+ * @param {object} loan - Fila de getRenewableLoan (crédito + cuota única).
+ * @returns {{ interest:number, mora:number, total:number }} Desglose del cargo.
+ * @throws {{ status:409, message }} si el préstamo no es renovable o no tiene interés.
+ */
+const _computeRenewalCharge = (loan) => {
+  if (loan.type !== "LOAN" || loan.installments_count !== 1)
+    throw {
+      status: 409,
+      message: "La renovación solo aplica a préstamos de una sola cuota.",
+    };
+  if (loan.credit_status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: `No se puede renovar un crédito en estado ${loan.credit_status}.`,
+    };
+  if (loan.installment_status === "PAID")
+    throw {
+      status: 409,
+      message: "La cuota ya fue pagada; no se puede renovar.",
+    };
+
+  const frozenAmount =
+    loan.original_amount != null
+      ? loan.original_amount
+      : loan.amount_due - (loan.penalty_amount || 0);
+  const interest = _round2(frozenAmount - loan.total_amount);
+  if (interest <= 0)
+    throw { status: 409, message: "El préstamo no tiene interés a renovar." };
+  const mora = _round2(loan.penalty_amount || 0);
+  const total = _round2(interest + mora);
+  return { interest, mora, total };
+};
+
+/**
+ * Aplica los efectos de la renovación sobre el préstamo, en el momento en que el
+ * pago queda APROBADO (cobro directo: de inmediato; pre-carga: al aprobar). Es la
+ * segunda mitad de la operación RENEWAL, compartida por ambos caminos.
+ *   · renewInstallment: corre el vencimiento un período (consecutivo desde el
+ *     vencimiento anterior), resetea la mora (penalty_amount = 0) y restaura
+ *     amount_due = original_amount, dejando la cuota como un préstamo nuevo.
+ *   · anula la próxima visita agendada (queda obsoleta al correr el vencimiento).
+ * NO aplica el pago a la cuota: el capital sigue debiéndose igual.
+ *
+ * @param {object} client - Cliente de transacción activa.
+ * @param {string} installmentId - Cuota única del préstamo.
+ * @param {string} paymentFrequency - Frecuencia del crédito.
+ * @param {number} graceDays - Días de gracia (system_config).
+ * @param {string} userId - Usuario que concreta la renovación (aprueba/cobra).
+ */
+const _applyRenewalEffects = async (
+  client,
+  installmentId,
+  paymentFrequency,
+  graceDays,
+  userId,
+) => {
+  await queries.renewInstallment(
+    client,
+    installmentId,
+    paymentFrequency,
+    graceDays,
+  );
+  await collectionAttemptsQueries.voidScheduledVisitsForInstallment(
+    client,
+    installmentId,
+    userId,
+  );
+};
+
 /**
  * Distribuye el monto recibido sobre la cuota principal y cuotas siguientes si sobra saldo.
  * Toda la lógica financiera de distribución está centralizada aquí para reutilización.
@@ -786,40 +873,10 @@ const renew = async (creditId, data, adminId) => {
 
   const loan = await queries.getRenewableLoan(creditId);
   if (!loan) throw { status: 404, message: "Crédito no encontrado." };
-  if (loan.type !== "LOAN" || loan.installments_count !== 1)
-    throw {
-      status: 409,
-      message: "La renovación solo aplica a préstamos de una sola cuota.",
-    };
-  if (loan.credit_status !== "ACTIVE")
-    throw {
-      status: 409,
-      message: `No se puede renovar un crédito en estado ${loan.credit_status}.`,
-    };
-  if (loan.installment_status === "PAID")
-    throw {
-      status: 409,
-      message: "La cuota ya fue pagada; no se puede renovar.",
-    };
 
-  // Interés del período = importe CONGELADO de la cuota (capital + interés original)
-  // − capital. Se usa original_amount, NO amount_due: applyPenalty suma la mora a
-  // amount_due (invariante amount_due = original_amount + penalty_amount), así que
-  // amount_due está contaminado por la mora. El interés se calcula siempre sobre el
-  // interés original congelado en la operación, sin capitalización ni tasa nueva.
-  const frozenAmount =
-    loan.original_amount != null
-      ? loan.original_amount
-      : loan.amount_due - (loan.penalty_amount || 0);
-  const interest = _round2(frozenAmount - loan.total_amount);
-  if (interest <= 0)
-    throw { status: 409, message: "El préstamo no tiene interés a renovar." };
-
-  // La renovación cobra TODO: interés + mora manual acumulada en la cuota. Al
-  // renovar la cuota se resetea (renewInstallment pone penalty_amount = 0), así que
-  // la mora se cobra acá una sola vez y queda saldada.
-  const mora = _round2(loan.penalty_amount || 0);
-  const totalToCharge = _round2(interest + mora);
+  // Núcleo de renovación compartido: valida que sea renovable y calcula el cargo
+  // (interés congelado + mora). Misma lógica que recorre la pre-carga.
+  const { interest, mora, total: totalToCharge } = _computeRenewalCharge(loan);
 
   // El monto SIEMPRE es el total a cobrar (fijo). Se reutiliza el normalizador de
   // montos: para un solo medio se imputa todo el total; en mixto, el split debe
@@ -877,21 +934,14 @@ const renew = async (creditId, data, adminId) => {
     });
     newPaymentId = created.id;
 
-    // Renovación: NO se aplica el pago a la cuota (el capital sigue debiéndose).
-    // Solo se corre el vencimiento un período (punto 24: período consecutivo desde
-    // el vencimiento anterior, nunca desde la fecha de pago; puede quedar vencido).
-    await queries.renewInstallment(
+    // Efectos de la renovación (los mismos que aplicará la pre-carga al aprobarse):
+    // correr el vencimiento un período, resetear mora/amount_due y anular la
+    // próxima visita. El pago NO se aplica a la cuota: el capital sigue debiéndose.
+    await _applyRenewalEffects(
       client,
       loan.installment_id,
       loan.payment_frequency,
       graceDays,
-    );
-
-    // La próxima visita agendada queda obsoleta al correr el vencimiento: se
-    // resetea anulando las gestiones con próxima visita de la cuota.
-    await collectionAttemptsQueries.voidScheduledVisitsForInstallment(
-      client,
-      loan.installment_id,
       adminId,
     );
 
