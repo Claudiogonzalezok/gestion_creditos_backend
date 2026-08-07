@@ -1075,6 +1075,28 @@ const renew = async (creditId, data, adminId) => {
 };
 
 /**
+ * Cotización de renovación de un préstamo: dice si es renovable y cuánto se
+ * cobraría (interés + mora). Reusa getRenewableLoan + _computeRenewalCharge para
+ * que el monto salga del MISMO lugar que el cobro real (una sola fórmula, sin
+ * duplicarla en la planilla). No lanza cuando no es renovable: devuelve
+ * { renewable: false } para que la UI lo trate suave (ocultar/deshabilitar).
+ * @param {string} creditId - Préstamo a cotizar.
+ * @returns {Promise<{renewable:boolean, interest?:number, mora?:number, total?:number}>}
+ */
+const renewalQuote = async (creditId) => {
+  const loan = await queries.getRenewableLoan(creditId);
+  if (!loan) return { renewable: false };
+  try {
+    const { interest, mora, total } = _computeRenewalCharge(loan);
+    return { renewable: true, interest, mora, total };
+  } catch (err) {
+    // 409 = no renovable / sin interés → cotización negativa, no un error de API.
+    if (err.status === 409) return { renewable: false };
+    throw err;
+  }
+};
+
+/**
  * Revierte totalmente un cobro aprobado y todos sus sub-pagos derivados.
  * Genera un payment compensatorio (is_reversal=TRUE) por cada cuota afectada.
  * No elimina registros — patrón de transacción compensatoria.
@@ -1356,6 +1378,7 @@ module.exports = {
   getByCredit,
   adminDirect,
   renew,
+  renewalQuote,
   reverse,
   generatePrepaidInstallmentPayments,
   // Núcleo exportado para reutilización en nuevos flujos

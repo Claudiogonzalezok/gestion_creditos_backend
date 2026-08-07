@@ -207,6 +207,15 @@ const renew = async (req, res) => {
   }
 };
 
+const renewalQuote = async (req, res) => {
+  try {
+    const quote = await paymentsService.renewalQuote(req.params.id);
+    return response.success(res, quote);
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
 const changeSeller = async (req, res) => {
   try {
     const credit = await service.changeSeller(
@@ -335,6 +344,7 @@ module.exports = {
   simulateAll,
   approve,
   renew,
+  renewalQuote,
   changeSeller,
   reject,
   earlySettlement,

@@ -836,8 +836,15 @@ const findById = async (id) => {
                   AND p.is_reversal = FALSE
               ) AS has_pending_payment,
               ca.id           AS today_attempt_id,
-              ca.attempt_type AS today_attempt_type
+              ca.attempt_type AS today_attempt_type,
+              -- Flag estructural para habilitar "Renovar" en la planilla: préstamo
+              -- LOAN de una sola cuota, ACTIVE y no pagada. NO incluye la fórmula
+              -- del interés (esa vive solo en _computeRenewalCharge, expuesta por el
+              -- endpoint renewal-quote) para no duplicarla en el SQL.
+              (c.type = 'LOAN' AND c.installments_count = 1
+                 AND c.status = 'ACTIVE' AND i.status <> 'PAID') AS renewable
        FROM installments i
+       JOIN credits c ON c.id = i.credit_id
        LEFT JOIN LATERAL (
          SELECT a.id, a.attempt_type
          FROM collection_attempts a
@@ -868,6 +875,7 @@ const findById = async (id) => {
           has_pending_payment: r.has_pending_payment,
           today_attempt_id: r.today_attempt_id,
           today_attempt_type: r.today_attempt_type,
+          renewable: r.renewable,
         },
       ]),
     );
@@ -881,6 +889,7 @@ const findById = async (id) => {
         has_pending_payment: false,
         today_attempt_id: null,
         today_attempt_type: null,
+        renewable: false,
       };
     }
   } else {

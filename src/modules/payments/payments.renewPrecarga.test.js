@@ -296,3 +296,39 @@ describe("payments.service.approve — aprobación de una PRE-CARGA de renovaci�
     expect(queries.renewInstallment).not.toHaveBeenCalled();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe("payments.service.renewalQuote — cotización de renovación", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("devuelve renewable + interés + mora + total para un préstamo renovable", async () => {
+    queries.getRenewableLoan.mockResolvedValue(
+      validLoan({ penalty_amount: 500, amount_due: 12500 }),
+    );
+
+    const q = await service.renewalQuote("credit-1");
+
+    expect(q).toEqual({
+      renewable: true,
+      interest: 2000,
+      mora: 500,
+      total: 2500,
+    });
+  });
+
+  it("renewable:false si el crédito no existe", async () => {
+    queries.getRenewableLoan.mockResolvedValue(null);
+    expect(await service.renewalQuote("credit-x")).toEqual({
+      renewable: false,
+    });
+  });
+
+  it("renewable:false si no es renovable (más de una cuota)", async () => {
+    queries.getRenewableLoan.mockResolvedValue(
+      validLoan({ installments_count: 3 }),
+    );
+    expect(await service.renewalQuote("credit-1")).toEqual({
+      renewable: false,
+    });
+  });
+});
