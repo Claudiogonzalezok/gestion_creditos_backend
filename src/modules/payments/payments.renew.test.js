@@ -7,6 +7,7 @@ jest.mock("../../config/db", () => ({ query: jest.fn() }));
 
 jest.mock("./payments.queries", () => ({
   getRenewableLoan: jest.fn(),
+  getPendingCommittedAmount: jest.fn(),
   lockAndGetInstallment: jest.fn(),
   createApproved: jest.fn(),
   renewInstallment: jest.fn(),
@@ -88,6 +89,7 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
     });
     queries.createApproved.mockResolvedValue({ id: "pay-1" });
     queries.renewInstallment.mockResolvedValue();
+    queries.getPendingCommittedAmount.mockResolvedValue(0);
     queries.findById.mockResolvedValue({ id: "pay-1" });
   });
 
@@ -220,5 +222,15 @@ describe("payments.service.renew — renovación de préstamo de una sola cuota"
     await expect(
       service.renew(CREDIT_ID, { payment_method: "CASH" }, "admin-1"),
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("rechaza 409 si la cuota ya tiene una pre-carga pendiente", async () => {
+    queries.getRenewableLoan.mockResolvedValue(validLoan());
+    queries.getPendingCommittedAmount.mockResolvedValue(2000);
+
+    await expect(
+      service.renew(CREDIT_ID, { payment_method: "CASH" }, "admin-1"),
+    ).rejects.toMatchObject({ status: 409 });
+    expect(queries.createApproved).not.toHaveBeenCalled();
   });
 });

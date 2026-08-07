@@ -856,6 +856,12 @@ const paymentAmountFields = [
 const payments = {
   create: [
     isUUID("installment_id", "La cuota"),
+    // Único generation_type que el cliente puede fijar: RENEWAL (pre-carga de
+    // renovación). Ausente = cobro normal (COLLECTION por defecto en el server).
+    body("generation_type")
+      .optional()
+      .isIn(["RENEWAL"])
+      .withMessage("El tipo de generación no es válido."),
     ...paymentAmountFields,
     body("notes")
       .optional({ nullable: true, checkFalsy: true })
