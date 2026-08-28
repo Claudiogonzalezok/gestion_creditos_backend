@@ -105,13 +105,14 @@ const create = async (
     notes,
     next_visit_date,
     cash_session_id,
+    generation_type,
   },
   db = pool,
 ) => {
   const r = await db.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,
+    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id, generation_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, generation_type, created_at`,
     [
       installment_id,
       collector_id,
@@ -123,6 +124,7 @@ const create = async (
       notes || null,
       next_visit_date || null,
       cash_session_id || null,
+      generation_type || "COLLECTION",
     ],
   );
   return r.rows[0];
@@ -143,7 +145,7 @@ const lockAndGetPayment = async (client, id) => {
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
             p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.notes,
-            p.is_reversal, p.admin_direct, p.reversed_by_payment_id,
+            p.is_reversal, p.admin_direct, p.reversed_by_payment_id, p.generation_type,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
             i.due_date, i.penalty_amount::float8,
             c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
