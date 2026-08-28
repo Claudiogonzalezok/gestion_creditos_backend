@@ -99,4 +99,35 @@ const markVoided = async (id, voidedBy) => {
   return r.rows[0] || null;
 };
 
-module.exports = { create, findAll, findById, findRawById, markVoided };
+/**
+ * Anula todas las gestiones vigentes con próxima visita de una cuota (supersede en
+ * lote). Se usa al renovar un préstamo: la visita agendada queda obsoleta porque el
+ * crédito corrió su vencimiento. Como el CTE latest_next_visit filtra voided_at IS
+ * NULL, anularlas equivale a resetear la próxima visita. Transaccional (recibe client).
+ * @param {object} client - Cliente de transacción.
+ * @param {string} installmentId - Cuota cuya próxima visita se resetea.
+ * @param {string} voidedBy - Usuario que ejecuta el reset.
+ */
+const voidScheduledVisitsForInstallment = async (
+  client,
+  installmentId,
+  voidedBy,
+) => {
+  await client.query(
+    `UPDATE collection_attempts
+       SET voided_at = NOW(), voided_by = $2
+     WHERE installment_id = $1
+       AND next_visit_date IS NOT NULL
+       AND voided_at IS NULL`,
+    [installmentId, voidedBy],
+  );
+};
+
+module.exports = {
+  create,
+  findAll,
+  findById,
+  findRawById,
+  markVoided,
+  voidScheduledVisitsForInstallment,
+};

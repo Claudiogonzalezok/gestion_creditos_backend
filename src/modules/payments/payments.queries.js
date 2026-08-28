@@ -14,6 +14,7 @@ const findAll = async ({
            p.transfer_reference, p.status, p.rejection_reason, p.notes, p.next_visit_date, p.created_at,
            p.approved_at, p.approved_by,
            p.is_reversal, p.admin_direct, p.parent_payment_id,
+           (SELECT id FROM payments rev WHERE rev.reversed_by_payment_id = p.id LIMIT 1) AS reversal_payment_id,
            i.installment_number, i.amount_due::float8, i.due_date,
            c.id AS credit_id, c.type AS credit_type,
            ${movementConceptCase("p", "c")} AS concepto,
@@ -104,13 +105,14 @@ const create = async (
     notes,
     next_visit_date,
     cash_session_id,
+    generation_type,
   },
   db = pool,
 ) => {
   const r = await db.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, created_at`,
+    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id, generation_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, generation_type, created_at`,
     [
       installment_id,
       collector_id,
@@ -122,6 +124,7 @@ const create = async (
       notes || null,
       next_visit_date || null,
       cash_session_id || null,
+      generation_type || "COLLECTION",
     ],
   );
   return r.rows[0];
@@ -142,7 +145,7 @@ const lockAndGetPayment = async (client, id) => {
     `SELECT p.id, p.installment_id, p.collector_id, p.amount_received::float8,
             p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.notes,
-            p.is_reversal, p.admin_direct, p.reversed_by_payment_id,
+            p.is_reversal, p.admin_direct, p.reversed_by_payment_id, p.generation_type,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
             i.due_date, i.penalty_amount::float8,
             c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
@@ -342,6 +345,22 @@ const getPendingInstallmentsFrom = async (
   return r.rows;
 };
 
+/**
+ * Mapea una frecuencia de pago al intervalo de PostgreSQL correspondiente. Una
+ * frecuencia desconocida lanza (nunca se cae a mensual por defecto: evita
+ * corrimientos silenciosos ante una frecuencia futura). DAILY usa días corridos;
+ * MONTHLY usa "1 month" (mes calendario con clamp a fin de mes que hace PostgreSQL).
+ * @param {string} paymentFrequency - DAILY | WEEKLY | BIWEEKLY | MONTHLY.
+ * @returns {string} '1 day' | '1 week' | '2 weeks' | '1 month'.
+ */
+const frequencyToInterval = (paymentFrequency) => {
+  if (paymentFrequency === "DAILY") return "1 day";
+  if (paymentFrequency === "WEEKLY") return "1 week";
+  if (paymentFrequency === "BIWEEKLY") return "2 weeks";
+  if (paymentFrequency === "MONTHLY") return "1 month";
+  throw new Error(`Frecuencia de pago no soportada: ${paymentFrequency}`);
+};
+
 // Reasigna las fechas de vencimiento de las cuotas restantes (no PAID) empezando
 // desde HOY + 1 período. Independientemente de cuántas cuotas se adelantaron,
 // la siguiente cuota siempre vence el próximo período desde la fecha de aprobación.
@@ -360,18 +379,7 @@ const shiftInstallmentDates = async (
   paymentFrequency,
   baseDueDate,
 ) => {
-  // Cada frecuencia mapea a un intervalo explícito. DIARIA usa "1 day" (días
-  // corridos). MENSUAL usa "1 month" (mes calendario, con clamp a fin de mes que
-  // hace PostgreSQL) para coincidir con addMonthsClamped del cronograma original.
-  // Una frecuencia desconocida lanza error: nunca se reprograma en mensual por
-  // defecto (evita corrimientos silenciosos ante una frecuencia futura).
-  let interval;
-  if (paymentFrequency === "DAILY") interval = "1 day";
-  else if (paymentFrequency === "WEEKLY") interval = "1 week";
-  else if (paymentFrequency === "BIWEEKLY") interval = "2 weeks";
-  else if (paymentFrequency === "MONTHLY") interval = "1 month";
-  else
-    throw new Error(`Frecuencia de pago no soportada: ${paymentFrequency}`);
+  const interval = frequencyToInterval(paymentFrequency);
 
   // Las cuotas restantes toman las fechas de las cuotas adelantadas:
   // rn=1 → baseDueDate + 0 (toma la fecha de la primera cuota adelantada)
@@ -389,6 +397,52 @@ const shiftInstallmentDates = async (
      FROM ordered
      WHERE i.id = ordered.id`,
     [creditId, interval, baseDueDate],
+  );
+};
+
+/**
+ * Deja la cuota de un préstamo de una sola cuota lista para el próximo período al
+ * renovar (como si arrancara de nuevo): corre el vencimiento un período, resetea
+ * la mora y recomputa el status.
+ *   · due_date = due_date + intervalo(frecuencia), SIN clamp a hoy: el nuevo
+ *     vencimiento es el anterior + 1 período aunque quede ya vencido (regla de la
+ *     renovación: siempre período consecutivo, nunca la fecha de pago).
+ *   · amount_due = original_amount: se restaura el importe congelado de la cuota
+ *     (capital + interés original) quitando la mora que applyPenalty había sumado
+ *     a amount_due. Mantiene el invariante amount_due = original_amount +
+ *     penalty_amount con penalty_amount = 0. Así el próximo período vuelve a cobrar
+ *     el interés original, nunca uno inflado por la mora ya cobrada.
+ *   · penalty_amount = 0: la mora se cobró dentro de la renovación, así que se limpia.
+ *   · status por la nueva fecha con la misma regla que updateInstallment (OVERDUE
+ *     si venció + gracia, sino PENDING).
+ *   · original_due_date se guarda solo la primera vez.
+ * El capital efectivamente debido (amount_paid) NO se toca: sigue debiéndose igual.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} installmentId - Cuota a renovar.
+ * @param {string} paymentFrequency - Frecuencia del crédito.
+ * @param {number} graceDays - Días de gracia del system_config.
+ */
+const renewInstallment = async (
+  client,
+  installmentId,
+  paymentFrequency,
+  graceDays,
+) => {
+  const interval = frequencyToInterval(paymentFrequency);
+  await client.query(
+    `UPDATE installments
+       SET original_due_date = COALESCE(original_due_date, due_date),
+           due_date          = (due_date + $2::interval)::date,
+           amount_due        = COALESCE(original_amount, amount_due - penalty_amount),
+           penalty_amount    = 0,
+           status            = CASE
+                                 WHEN (due_date + $2::interval)::date < (CURRENT_DATE - ($3)::int * INTERVAL '1 day')
+                                   THEN 'OVERDUE'
+                                 ELSE 'PENDING'
+                               END,
+           updated_at        = NOW()
+     WHERE id = $1`,
+    [installmentId, interval, graceDays],
   );
 };
 
@@ -518,13 +572,14 @@ const createApproved = async (
     transferReference,
     notes,
     cashSessionId,
+    generationType,
   },
 ) => {
   const r = await client.query(
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, admin_direct, cash_session_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), $8, TRUE, $9)
+        status, approved_by, approved_at, notes, admin_direct, cash_session_id, generation_type)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), $8, TRUE, $9, $10)
      RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, cash_session_id, created_at`,
     [
       installmentId,
@@ -536,6 +591,7 @@ const createApproved = async (
       transferReference || null,
       notes || null,
       cashSessionId || null,
+      generationType || "COLLECTION",
     ],
   );
   return r.rows[0];
@@ -675,6 +731,34 @@ const getCreditStatusByInstallment = async (installmentId) => {
   return r.rows[0] || null;
 };
 
+/**
+ * Devuelve el crédito y su cuota única para evaluar una renovación de préstamo.
+ * Solo tiene sentido en préstamos LOAN de una sola cuota; el servicio valida el
+ * tipo, installments_count y estado. Devuelve la primera cuota (la única en un
+ * préstamo de un solo pago) con su saldo y vencimiento.
+ * @param {string} creditId - ID del crédito.
+ * @returns {Promise<object|null>} Datos del crédito + cuota, o null si no existe.
+ */
+const getRenewableLoan = async (creditId) => {
+  const r = await pool.query(
+    `SELECT c.type, c.installments_count::int AS installments_count,
+            c.status AS credit_status, c.total_amount::float8 AS total_amount,
+            c.payment_frequency,
+            i.id AS installment_id, i.amount_due::float8 AS amount_due,
+            i.original_amount::float8 AS original_amount,
+            i.penalty_amount::float8 AS penalty_amount,
+            i.status AS installment_status,
+            to_char(i.due_date, 'YYYY-MM-DD') AS due_date
+     FROM credits c
+     JOIN installments i ON i.credit_id = c.id
+     WHERE c.id = $1
+     ORDER BY i.installment_number
+     LIMIT 1`,
+    [creditId],
+  );
+  return r.rows[0] || null;
+};
+
 module.exports = {
   findAll,
   findById,
@@ -691,6 +775,7 @@ module.exports = {
   getTotalPendingBalance,
   getPendingInstallmentsFrom,
   shiftInstallmentDates,
+  renewInstallment,
   markInstallmentAsPrepaid,
   createApprovalPrepaymentPayment,
   createApproved,
@@ -699,4 +784,5 @@ module.exports = {
   findPaymentsByCredit,
   restoreInstallmentFromReversal,
   getCreditStatusByInstallment,
+  getRenewableLoan,
 };

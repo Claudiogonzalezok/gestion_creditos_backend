@@ -632,6 +632,36 @@ const findActiveByCollectorAndDate = async (collectorId, date, db = pool) => {
 };
 
 /**
+ * Colapsa las cuotas de la planilla a UNA por crédito para la lectura: la más
+ * antigua (menor installment_number) queda como representante y se le adjunta
+ * `additional_installments_count` = las demás cuotas del MISMO crédito que
+ * están en la planilla. Reduce el listado que ven cobrador, admin y PDF (todos
+ * leen findById) sin tocar la generación ni el snapshot, que sigue guardando
+ * todas las cuotas. Se mantiene el orden por order_number.
+ * @param {Array<object>} rows - Filas del detalle (deben incluir credit_id).
+ * @returns {Array<object>} Una fila por crédito (representante) + contador.
+ */
+const collapseToOldestPerCredit = (rows) => {
+  const byCredit = new Map();
+  for (const row of rows) {
+    const key = row.credit_id ?? row.installment_id; // sin credit_id → no agrupa
+    const g = byCredit.get(key);
+    if (!g) {
+      byCredit.set(key, { rep: row, count: 1 });
+    } else {
+      g.count += 1;
+      if (row.installment_number < g.rep.installment_number) g.rep = row;
+    }
+  }
+  return [...byCredit.values()]
+    .map(({ rep, count }) => ({
+      ...rep,
+      additional_installments_count: count - 1,
+    }))
+    .sort((a, b) => a.order_number - b.order_number);
+};
+
+/**
  * Obtiene una planilla por ID con su detalle.
  *
  * Estrategia de lectura por snapshot_version:
@@ -677,6 +707,7 @@ const findById = async (id) => {
     detailsRes = await pool.query(
       `SELECT csd.order_number,
               csd.installment_id,
+              i.credit_id,
               csd.installment_number_snapshot AS installment_number,
               csd.due_date_snapshot           AS due_date,
               csd.amount_due_snapshot::float8 AS amount_due,
@@ -702,6 +733,9 @@ const findById = async (id) => {
               csd.antecedent_notes,
               csd.management_status
        FROM collection_sheet_details csd
+       -- JOIN a installments SOLO por credit_id (inmutable): permite agrupar por
+       -- crédito en la lectura sin romper la semántica de snapshot inmutable.
+       JOIN installments i ON i.id = csd.installment_id
        WHERE csd.sheet_id = $1
        ORDER BY csd.order_number`,
       [id],
@@ -758,7 +792,9 @@ const findById = async (id) => {
     );
   }
 
-  const items = detailsRes.rows;
+  // Una cuota por crédito (la más antigua) + contador de las demás. Aplica a
+  // TODOS los consumidores de findById (cobrador, admin, PDF) → misma vista.
+  const items = collapseToOldestPerCredit(detailsRes.rows);
 
   // ── Capa LIVE separada ───────────────────────────────────────────────────────
   // El snapshot es inmutable, pero el cobrador necesita ver el estado VIVO de la
@@ -776,6 +812,23 @@ const findById = async (id) => {
               i.amount_due::float8    AS amount_due,
               i.amount_paid::float8   AS amount_paid,
               i.penalty_amount::float8 AS penalty_amount,
+              -- Saldo total pendiente del crédito (mismo cálculo que
+              -- payments.getTotalPendingBalance): tope hasta el que el cobrador
+              -- puede ingresar un excedente que se reparte a cuotas siguientes.
+              (
+                COALESCE((
+                  SELECT SUM(i2.amount_due - i2.amount_paid)
+                  FROM installments i2
+                  WHERE i2.credit_id = i.credit_id
+                    AND i2.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
+                ), 0)
+                - COALESCE((
+                    SELECT SUM(p2.amount_received)
+                    FROM payments p2
+                    JOIN installments i3 ON i3.id = p2.installment_id
+                    WHERE i3.credit_id = i.credit_id AND p2.status = 'PENDING'
+                  ), 0)
+              )::float8 AS credit_pending_balance,
               EXISTS (
                 SELECT 1 FROM payments p
                 WHERE p.installment_id = i.id
@@ -783,8 +836,15 @@ const findById = async (id) => {
                   AND p.is_reversal = FALSE
               ) AS has_pending_payment,
               ca.id           AS today_attempt_id,
-              ca.attempt_type AS today_attempt_type
+              ca.attempt_type AS today_attempt_type,
+              -- Flag estructural para habilitar "Renovar" en la planilla: préstamo
+              -- LOAN de una sola cuota, ACTIVE y no pagada. NO incluye la fórmula
+              -- del interés (esa vive solo en _computeRenewalCharge, expuesta por el
+              -- endpoint renewal-quote) para no duplicarla en el SQL.
+              (c.type = 'LOAN' AND c.installments_count = 1
+                 AND c.status = 'ACTIVE' AND i.status <> 'PAID') AS renewable
        FROM installments i
+       JOIN credits c ON c.id = i.credit_id
        LEFT JOIN LATERAL (
          SELECT a.id, a.attempt_type
          FROM collection_attempts a
@@ -811,9 +871,11 @@ const findById = async (id) => {
           amount_due: r.amount_due,
           amount_paid: r.amount_paid,
           penalty_amount: r.penalty_amount,
+          credit_pending_balance: r.credit_pending_balance,
           has_pending_payment: r.has_pending_payment,
           today_attempt_id: r.today_attempt_id,
           today_attempt_type: r.today_attempt_type,
+          renewable: r.renewable,
         },
       ]),
     );
@@ -823,9 +885,11 @@ const findById = async (id) => {
         amount_due: null,
         amount_paid: null,
         penalty_amount: null,
+        credit_pending_balance: null,
         has_pending_payment: false,
         today_attempt_id: null,
         today_attempt_type: null,
+        renewable: false,
       };
     }
   } else {
@@ -984,6 +1048,7 @@ const recalcManagementStatusForActiveTodaySheet = async (
 
 module.exports = {
   CTE_LATEST_NEXT_VISIT,
+  collapseToOldestPerCredit,
   findInstallmentsForSheet,
   create,
   createDetails,

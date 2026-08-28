@@ -125,8 +125,12 @@ const markOverdueAndApplyPenalty = () =>
       const maxRate = parseFloat(
         (await getValue("penalty_max_rate")) || "0.50",
       );
+      // Fallback '0' = sin mora automática (decisión del cliente). El valor
+      // real vive en system_config y es editable desde la UI; con 0 el cron
+      // igual marca OVERDUE pero no aplica punitorios, y NUNCA pisa una mora
+      // cargada manualmente (la fórmula suma sobre el acumulado existente).
       const dailyRate = parseFloat(
-        (await getValue("penalty_rate_daily")) || "0.005",
+        (await getValue("penalty_rate_daily")) || "0",
       );
 
       // Congelar la fecha de referencia para toda la corrida.
