@@ -142,6 +142,23 @@ def fecha_iso(valor):
 BANDA_CAPITAL = (0.35, 0.97)
 
 
+def _bases_posibles(txt):
+    """Lecturas numéricas posibles de la taquigrafía capturada.
+
+    El separador es ambiguo y la planilla NO es consistente: en '1,370MILL' la
+    coma separa miles (1370), pero en '1,2MILL' y '1,5MIL' actúa como decimal
+    (1,2 y 1,5 millones). Lo mismo pasa con el punto ('1.6MIL' = 1,6). En vez de
+    fijar una convención que rompería la mitad de los casos, se devuelven las dos
+    lecturas y decide la banda contra el Total, igual que con mil/millón.
+    """
+    sep = "," if "," in txt else ("." if "." in txt else None)
+    if sep is None:
+        return [float(txt)]
+    sin_sep = float(txt.replace(sep, ""))          # separador de miles: 1,370 → 1370
+    decimal = float(txt.replace(sep, "."))         # decimal:            1,370 → 1.37
+    return [decimal, sin_sep] if decimal != sin_sep else [decimal]
+
+
 def parse_capital(obs, total):
     """Lee el capital de la Observación y desambigua mil/millón contra el Total.
     @returns (capital|None, flag) con flag ∈ ok|ambiguo|fuera_banda|sin_numero|
@@ -155,18 +172,21 @@ def parse_capital(obs, total):
         m = re.search(r"(\d+(?:[.,]\d+)?)\s*(MILL|MIL)?", s.replace("REF", ""))
         if not m:
             return None, "sin_numero"
-        base = float(m.group(1).replace(".", "").replace(",", "."))
+        bases = _bases_posibles(m.group(1))
         mag = m.group(2)
         if mag == "MILL":
-            cands = [base * 1_000_000, base * 1_000]
+            factores = (1_000_000, 1_000)
         elif mag == "MIL":
-            cands = [base * 1_000, base * 1_000_000]
+            factores = (1_000, 1_000_000)
         else:
-            cands = [base * 1_000, base * 1_000_000, base]
+            factores = (1_000, 1_000_000, 1)
+        cands = [b * f for f in factores for b in bases]
     if not total:
         return None, "sin_total"
     lo, hi = BANDA_CAPITAL
-    inband = [c for c in cands if lo * total <= c <= hi * total]
+    # Sin duplicados: las dos lecturas del separador pueden dar el MISMO número
+    # (1,370MILL = 1,37 millones = 1370 mil) y eso no es ambigüedad real.
+    inband = list(dict.fromkeys(c for c in cands if lo * total <= c <= hi * total))
     if not inband:
         return None, "fuera_banda"
     return round(inband[0], 2), ("ambiguo" if len(inband) > 1 else "ok")
@@ -341,11 +361,19 @@ def cruzar_fichas(creditos, indice_fichas, fichas):
         candidatos = indice_fichas.get(nombre_base(normalizar(c["nombre"])), [])
         por_saldo = [f for f in candidatos if f["saldo"] is not None
                      and abs(f["saldo"] - c["saldo"]) < 1]
+        # Ficha cuyo nombre COMPLETO coincide, sufijo numérico incluido: cuando
+        # una persona tiene varios créditos ("MARIA VILLA 2/3/4") y el saldo no
+        # alcanzó para desempatar, es mejor señal que el valor compartido (que
+        # se anula si las fichas hermanas no coinciden entre sí).
+        exactos = [f for f in candidatos
+                   if normalizar(f["nombre"]) == normalizar(c["nombre"])]
         elegido = None
         if len(candidatos) == 1:
             elegido = candidatos[0]
         elif len(por_saldo) == 1:
             elegido = por_saldo[0]
+        elif len(exactos) == 1:
+            elegido = exactos[0]
 
         # Fuente de fecha/capital: la ficha elegida, o —si quedó ambiguo (mismo
         # nombre y saldo, ej. "cuni 1"/"cuni 2")— el valor COMPARTIDO por los
