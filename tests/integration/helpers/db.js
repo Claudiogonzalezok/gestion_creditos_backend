@@ -96,6 +96,26 @@ const reseedSystemConfig = async () => {
 };
 
 /**
+ * Fija un parámetro de system_config para el test en curso e invalida el caché
+ * de `getValue` (sin esto el código bajo prueba sigue leyendo el valor anterior,
+ * porque getValue cachea con TTL de 5 minutos).
+ *
+ * No hace falta restaurar: `truncateAll` corre en cada beforeEach y vuelve a
+ * dejar los DEFAULT_VALUES.
+ *
+ * @param {string} key - Clave de system_config (debe existir en DEFAULT_VALUES).
+ * @param {string|number} value
+ */
+const setConfig = async (key, value) => {
+  const { rowCount } = await pool.query(
+    `UPDATE system_config SET value = $2 WHERE key = $1`,
+    [key, String(value)],
+  );
+  if (!rowCount) throw new Error(`setConfig: system_config no tiene la clave "${key}"`);
+  require("../../../src/utils/cache").clearAll();
+};
+
+/**
  * Pequeño helper: ejecuta una función con un client dedicado en transacción.
  * Útil para invocar queries que requieren `client` sin que el test maneje
  * el lock/release.
@@ -133,4 +153,4 @@ const setupTestSuite = () => {
   });
 };
 
-module.exports = { pool, truncateAll, withTestClient, setupTestSuite };
+module.exports = { pool, truncateAll, withTestClient, setupTestSuite, setConfig };
