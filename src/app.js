@@ -32,6 +32,16 @@ const envFlag = (value) => {
   );
 };
 
+// ── Proxy inverso ─────────────────────────────────────────────
+// Detrás de Nginx la IP real del cliente llega en X-Forwarded-For. Sin esto,
+// req.ip es siempre la del proxy y el rate limit cuenta a todos los usuarios
+// como uno solo. TRUST_PROXY = cantidad de proxies delante (ej. 1); sin definir
+// no se confía en ningún encabezado (desarrollo local).
+if (process.env.TRUST_PROXY) {
+  const hops = parseInt(process.env.TRUST_PROXY, 10);
+  app.set("trust proxy", Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
+}
+
 // ── Documentación API ─────────────────────────────────────────
 // CSP permisiva solo para esta ruta (swagger-ui necesita inline scripts/styles)
 app.use(
