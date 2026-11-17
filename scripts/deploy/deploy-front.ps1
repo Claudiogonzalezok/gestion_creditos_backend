@@ -21,6 +21,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Ejecutables de Windows con ruta fija: si el script se lanza desde Git Bash (por ejemplo con
+# el "!" de Claude Code) el PATH trae primero los de Git, cuyo ssh no usa el ssh-agent de
+# Windows y cuyo tar toma "D:" de la ruta como un host remoto.
+$ssh = "$env:WINDIR\System32\OpenSSH\ssh.exe"
+$scp = "$env:WINDIR\System32\OpenSSH\scp.exe"
+$tar = "$env:WINDIR\System32\tar.exe"
+foreach ($exe in @($ssh, $scp, $tar)) { if (-not (Test-Path $exe)) { Write-Host "ERROR: falta $exe" -ForegroundColor Red; exit 1 } }
+
 $publish = '~/apps/backend/scripts/deploy/publish-front.sh'
 $browserDir = Join-Path $FrontPath 'dist\gestion-creditos-f\browser'
 
@@ -36,7 +45,7 @@ function Get-MainBundle($html) {
 # -- Pre-chequeos ------------------------------------------------------------
 if (-not (Test-Path (Join-Path $FrontPath 'package.json'))) { Fail "No encuentro el repo del front en $FrontPath" }
 
-ssh -o BatchMode=yes -o ConnectTimeout=10 $SshHost true
+& $ssh -o BatchMode=yes -o ConnectTimeout=10 $SshHost true
 if ($LASTEXITCODE -ne 0) { Fail "No hay acceso SSH a '$SshHost'. Si la clave tiene passphrase, correr: ssh-add" }
 
 Push-Location $FrontPath
@@ -68,16 +77,16 @@ $tgz = Join-Path $env:TEMP "front-$stamp.tgz"
 $remoteTgz = "/tmp/front-$stamp.tgz"
 
 Step 'Empaquetando'
-tar -czf $tgz -C $browserDir .
+& $tar -czf $tgz -C $browserDir .
 if ($LASTEXITCODE -ne 0) { Fail 'Fallo tar.' }
 
 try {
   Step "Subiendo ($([math]::Round((Get-Item $tgz).Length / 1MB, 1)) MB)"
-  scp -q -o BatchMode=yes $tgz "${SshHost}:$remoteTgz"
+  & $scp -q -o BatchMode=yes $tgz "${SshHost}:$remoteTgz"
   if ($LASTEXITCODE -ne 0) { Fail 'Fallo scp.' }
 
   Step 'Publicando en el servidor'
-  ssh -o BatchMode=yes $SshHost "$publish $remoteTgz"
+  & $ssh -o BatchMode=yes $SshHost "$publish $remoteTgz"
   if ($LASTEXITCODE -ne 0) { Fail 'Fallo la publicacion en el servidor (el sitio sigue con el build anterior).' }
 } finally {
   Remove-Item $tgz -ErrorAction SilentlyContinue

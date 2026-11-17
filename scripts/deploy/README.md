@@ -26,8 +26,10 @@ Hace, en orden: backup de la base (`~/bin/backup-db.sh`) → `git merge --ff-onl
 Desde la PC, en la raíz de este repo:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\deploy\deploy-front.ps1
+powershell -ExecutionPolicy Bypass -File scripts/deploy/deploy-front.ps1
 ```
+
+(Con barras `/`: funciona igual en PowerShell y en el `!` de Claude Code, que corre en bash y se come las `\`.)
 
 Buildea `D:\gestion-creditos-f` en modo producción (`npm run build`, `/api` relativa), sube el
 contenido de `dist/gestion-creditos-f/browser` y lo publica con `publish-front.sh` como release
