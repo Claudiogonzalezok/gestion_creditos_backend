@@ -149,24 +149,40 @@ const preserveTable = (table) => {
   let snapshot = [];
 
   beforeAll(async () => {
-    snapshot = (await pool.query(`SELECT * FROM ${table}`)).rows;
+    snapshot = await snapshotTable(table);
   });
 
   afterAll(async () => {
-    assertTestDatabase();
-    // En una sola transacción: si algo falla, la tabla queda como estaba
-    // en vez de vacía o a medio restaurar.
-    await withTestClient(async (client) => {
-      await client.query(`DELETE FROM ${table}`);
-      for (const row of snapshot) {
-        const cols = Object.keys(row);
-        const params = cols.map((_, i) => `$${i + 1}`).join(", ");
-        await client.query(
-          `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${params})`,
-          cols.map((c) => row[c]),
-        );
-      }
-    });
+    await restoreTable(table, snapshot);
+  });
+};
+
+/**
+ * Devuelve todas las filas actuales de una tabla de referencia.
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ * @returns {Promise<Object[]>}
+ */
+const snapshotTable = async (table) =>
+  (await pool.query(`SELECT * FROM ${table}`)).rows;
+
+/**
+ * Reemplaza el contenido de la tabla por las filas del snapshot, en una sola
+ * transacción: si algo falla, la tabla queda como estaba (ni vacía ni a medias).
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ * @param {Object[]} snapshot - filas devueltas por snapshotTable
+ */
+const restoreTable = async (table, snapshot) => {
+  assertTestDatabase();
+  await withTestClient(async (client) => {
+    await client.query(`DELETE FROM ${table}`);
+    for (const row of snapshot) {
+      const cols = Object.keys(row);
+      const params = cols.map((_, i) => `$${i + 1}`).join(", ");
+      await client.query(
+        `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${params})`,
+        cols.map((c) => row[c]),
+      );
+    }
   });
 };
 
@@ -176,4 +192,6 @@ module.exports = {
   withTestClient,
   setupTestSuite,
   preserveTable,
+  snapshotTable,
+  restoreTable,
 };

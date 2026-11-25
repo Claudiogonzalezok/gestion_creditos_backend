@@ -74,7 +74,8 @@ module.exports = async () => {
       ran++;
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
-      client.release();
+      // release(true) descarta el client: puede haber quedado en estado roto.
+      client.release(true);
       // Cerrar el pool para no dejar el proceso colgado tras el fallo.
       await pool.end().catch(() => {});
       throw new Error(`Falló migración ${file}: ${err.message}`);
