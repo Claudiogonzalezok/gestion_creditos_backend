@@ -1,6 +1,7 @@
 jest.mock("./expenses.queries", () => ({
   findActiveCategoryById: jest.fn(),
   findRecentDuplicate: jest.fn(),
+  lockDuplicateGuard: jest.fn(),
   create: jest.fn(),
   findById: jest.fn(),
   findCompanyExpenseAccountId: jest.fn(),

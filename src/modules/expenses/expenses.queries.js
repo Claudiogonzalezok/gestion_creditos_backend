@@ -128,6 +128,21 @@ const findRecentDuplicate = async (
   return r.rows[0] || null;
 };
 
+/**
+ * Toma un advisory lock transaccional por la clave del gasto (usuario, monto,
+ * fecha, categoría). Debe llamarse con un client dentro de una transacción.
+ * @param {{ amount: number, categoryId: string|null, expenseDate: string, createdBy: string }} params
+ * @param {object} db - client transaccional
+ */
+const lockDuplicateGuard = async (
+  { amount, categoryId, expenseDate, createdBy },
+  db,
+) => {
+  await db.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [
+    `expense:${createdBy}:${amount}:${expenseDate}:${categoryId || ""}`,
+  ]);
+};
+
 const create = async (
   {
     amount,
@@ -210,6 +225,7 @@ module.exports = {
   findCompanyExpenseAccountId,
   hasCashRegister,
   findRecentDuplicate,
+  lockDuplicateGuard,
   create,
   update,
   remove,
