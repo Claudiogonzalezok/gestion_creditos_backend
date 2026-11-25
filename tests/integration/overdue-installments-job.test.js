@@ -5,8 +5,12 @@
 //
 // Defaults seedeados (vía DEFAULT_VALUES):
 //   penalty_grace_days = 3
-//   penalty_rate_daily = 0.005   (0.5% diario)
+//   penalty_rate_daily = 0       (mora automática deshabilitada en producción)
 //   penalty_max_rate   = 0.50    (50% del capital original)
+//
+// Los tests de cálculo fijan explícitamente penalty_rate_daily = 0.005 (0.5%
+// diario) en un beforeEach, para no depender del default de producción.
+// El último describe verifica el comportamiento con el default (tasa 0).
 //
 // Nota sobre primera corrida vs catch-up:
 //   El job detecta si nunca corrió antes (cron_execution_log vacío) y, en ese
@@ -24,8 +28,22 @@ const {
 } = require('./helpers/fixtures');
 const { today, daysAgo, daysFromNow } = require('./helpers/dates');
 const { markOverdueAndApplyPenalty } = require('../../src/jobs/overdueInstallments.job');
+const systemConfig = require('../../src/modules/systemConfig/systemConfig.queries');
 
 setupTestSuite();
+
+const TEST_PENALTY_RATE_DAILY = '0.005';
+
+/**
+ * Fija la tasa diaria de mora vía el módulo de configuración (invalida caché).
+ * Se registra después de setupTestSuite, así corre tras el truncate + reseed.
+ */
+const setPenaltyRateDaily = (value) =>
+  systemConfig.update('penalty_rate_daily', value, null);
+
+beforeEach(async () => {
+  await setPenaltyRateDaily(TEST_PENALTY_RATE_DAILY);
+});
 
 describe('A — overdueInstallments.job — primera corrida (M=1 por seguridad)', () => {
   it('aplica mora cuando due_date superó grace_days', async () => {
@@ -557,5 +575,26 @@ describe('A — overdueInstallments.job — respeto a pre-cargas PENDING', () =>
     const after = await reloadInstallment(inst.id);
     expect(after.penalty_amount).toBe(0);
     expect(after.last_penalty_applied_at).toBe(daysAgo(1));
+  });
+});
+
+describe('A — overdueInstallments.job — default de producción (penalty_rate_daily = 0)', () => {
+  beforeEach(async () => {
+    await setPenaltyRateDaily(systemConfig.DEFAULT_VALUES.penalty_rate_daily.value);
+  });
+
+  it('con tasa 0 marca OVERDUE pero no aplica mora', async () => {
+    const inst = await createInstallmentFixture({
+      due_date:        daysAgo(10),
+      original_amount: 1000,
+      status:          'PENDING',
+    });
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    expect(after.status).toBe('OVERDUE');
+    expect(after.penalty_amount).toBe(0);
+    expect(after.amount_due).toBeCloseTo(1000, 2);
   });
 });
