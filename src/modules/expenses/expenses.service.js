@@ -34,6 +34,18 @@ const create = async (data, requestingUser) => {
 
   const { withTransaction } = require("../../utils/transaction");
   return withTransaction(async (client) => {
+    // Issue #48: serializa en la base los envíos idénticos concurrentes del
+    // mismo usuario; sin este lock dos transacciones ven "sin duplicado" y
+    // ambas insertan. Se libera al terminar la transacción.
+    await queries.lockDuplicateGuard(
+      {
+        amount: parseFloat(data.amount),
+        categoryId: data.category_id || null,
+        expenseDate: data.expense_date,
+        createdBy: requestingUser.id,
+      },
+      client,
+    );
     const duplicate = await queries.findRecentDuplicate(
       {
         amount: parseFloat(data.amount),
