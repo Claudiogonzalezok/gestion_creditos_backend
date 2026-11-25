@@ -350,6 +350,15 @@ const _applyPaymentToInstallments = async (
     }
   }
 
+  // Excedente sin cuota a la que imputarse (#32): el saldo del crédito bajó entre
+  // la pre-carga y la aprobación. Se rechaza para no registrar en caja dinero que
+  // no queda asignado a ninguna deuda; el throw revierte la transacción completa.
+  if (remaining > 0)
+    throw {
+      status: 409,
+      message: `El monto supera el saldo pendiente actual del crédito en $${remaining.toFixed(2)}. Corregí el monto de la pre-carga antes de aprobar.`,
+    };
+
   // Si se adelantaron cuotas completas, recorrer vencimientos de las restantes.
   // Usamos freshInst.due_date — refleja cualquier shift previo dentro de esta misma
   // transacción si lo hubo.

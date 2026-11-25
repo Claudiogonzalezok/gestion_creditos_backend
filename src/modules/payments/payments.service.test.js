@@ -150,7 +150,10 @@ describe('payments.service holiday-related behavior', () => {
     queries.updateInstallment.mockResolvedValue('PAID');
     queries.getPendingInstallmentsFrom.mockResolvedValue([
       { id: 'inst-2', amount_due: 1000, amount_paid: 0 },
+      // Recibe el excedente parcial (500): todo el cobro queda imputado (#32).
+      { id: 'inst-3', amount_due: 1000, amount_paid: 0 },
     ]);
+    queries.createPartialAdvancePayment = jest.fn().mockResolvedValue(undefined);
     queries.markInstallmentAsPrepaid = jest.fn().mockResolvedValue(undefined);
 
     await service.approve('payment-1', 'admin-1');
