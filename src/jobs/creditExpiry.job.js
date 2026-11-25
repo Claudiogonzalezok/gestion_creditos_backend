@@ -5,9 +5,11 @@ const cron = require('node-cron');
 const pool = require('../config/db');
 const { getValue } = require('../modules/systemConfig/systemConfig.queries');
 const { runWithLogging, ts } = require('../utils/cronLogger');
+const { rollbackSafely, releaseClient } = require('../utils/transaction');
 
 const expireOldCredits = () => runWithLogging('creditExpiry', async () => {
   const client = await pool.connect();
+  let connectionErr = null;
   try {
     const days = parseInt(await getValue('credit_expiry_days') || '7');
 
@@ -55,10 +57,11 @@ const expireOldCredits = () => runWithLogging('creditExpiry', async () => {
       metadata: { expired_credits: expiredIds.length, freed_units: freedCount },
     };
   } catch (err) {
-    await client.query('ROLLBACK');
+    // Un ROLLBACK fallido no tapa el error original; la conexión rota se descarta.
+    connectionErr = await rollbackSafely(client);
     throw err;
   } finally {
-    client.release();
+    releaseClient(client, connectionErr);
   }
 });
 

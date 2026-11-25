@@ -10,8 +10,38 @@ jest.mock('../config/db', () => ({
   query: jest.fn(),
 }));
 
+// Por defecto el lock se obtiene; los tests de exclusión lo sobreescriben.
+jest.mock('./advisoryLock', () => ({
+  withAdvisoryLock: jest.fn(async (_name, fn) => ({ acquired: true, result: await fn() })),
+}));
+
 const pool = require('../config/db');
+const { withAdvisoryLock } = require('./advisoryLock');
 const { runWithLogging } = require('./cronLogger');
+
+describe('runWithLogging — exclusión entre procesos', () => {
+  it('toma el lock con el nombre del job', async () => {
+    mockInsertReturnsId(1);
+    mockUpdateOK();
+    await runWithLogging('jobLock', async () => 3);
+    expect(withAdvisoryLock).toHaveBeenCalledWith('jobLock', expect.any(Function));
+  });
+
+  it('si otra instancia tiene el lock, no ejecuta fn ni registra y devuelve { skipped: true }', async () => {
+    withAdvisoryLock.mockResolvedValueOnce({ acquired: false });
+    const fn = jest.fn();
+    expect(await runWithLogging('jobLock', fn)).toEqual({ skipped: true });
+    expect(fn).not.toHaveBeenCalled();
+    expect(pool.query).not.toHaveBeenCalled();
+  });
+
+  it('si no se puede tomar el lock (DB caída) no ejecuta fn ni lanza', async () => {
+    withAdvisoryLock.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    const fn = jest.fn();
+    await expect(runWithLogging('jobLock', fn)).resolves.toBeUndefined();
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
 
 // Silenciamos console.error en tests para que no ensucie el output.
 const originalError = console.error;
@@ -129,7 +159,6 @@ describe('runWithLogging — fn lanza', () => {
   it('si fn lanza un string, lo registra como error_message', async () => {
     mockInsertReturnsId(21);
     mockUpdateOK();
-    // eslint-disable-next-line prefer-promise-reject-errors
     const fn = jest.fn().mockRejectedValue('algo raro pasó');
 
     await runWithLogging('jobStrErr', fn);

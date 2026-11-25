@@ -24,6 +24,12 @@ const pool = new Pool({
   options:                 `-c TimeZone=${TIME_ZONE}`,
 });
 
+// Un cliente ocioso que pierde la conexión emite 'error' en el pool; sin este
+// listener el evento no manejado tira el proceso. El pool descarta el cliente.
+pool.on('error', (err) => {
+  console.error('🔴  Error en cliente ocioso de PostgreSQL:', err.message);
+});
+
 // Verificar conexión al iniciar
 pool.connect((err, client, release) => {
   if (err) {
@@ -31,7 +37,7 @@ pool.connect((err, client, release) => {
     process.exit(1);
   }
   release();
-  console.log('✅  Conectado a PostgreSQL →', process.env.DB_NAME);
+  console.warn('✅  Conectado a PostgreSQL →', process.env.DB_NAME);
 });
 
 module.exports = pool;

@@ -760,6 +760,24 @@ Tesorería (cash_accounts):
 Cada ejecución queda registrada en `cron_execution_log` (estado, duración, error si hubo).  
 `npm run cron:run` permite disparar un job manualmente en desarrollo.
 
+Cada corrida toma un advisory lock de PostgreSQL por job (`pg_try_advisory_lock(hashtext('cron:<job>'))`):
+si otra instancia (PM2 en cluster, `cron:run` manual) ya está ejecutando ese job, la corrida se saltea
+sin registrarse en `cron_execution_log`. Si no hay conexión para tomar el lock, la corrida no se ejecuta.
+
+---
+
+## Ciclo de vida del proceso
+
+- **Health check:** `GET /api/health` ejecuta `SELECT 1` con timeout (`HEALTH_DB_TIMEOUT_MS`, default 2000 ms).
+  Responde `200 { ok: true, db: "up" }` o `503 { ok: false, db: "down" }` si la base no responde. No reinicia el proceso.
+- **Cierre ordenado:** ante `SIGTERM`/`SIGINT` (PM2 stop/reload) el servidor deja de aceptar conexiones, espera a que
+  terminen las requests en curso, detiene los cron y cierra el pool. Si no termina en `SHUTDOWN_TIMEOUT_MS`
+  (default 10000 ms) sale forzado con código 1.
+- **Errores no manejados:** `unhandledRejection`/`uncaughtException` se loguean y disparan el mismo cierre con código 1
+  (PM2 reinicia el proceso). Un error de un cliente ocioso del pool (`pool.on('error')`) se loguea sin tirar el proceso.
+- **Transacciones:** si el `ROLLBACK` falla, se loguea, se relanza el error original y la conexión se libera con
+  error para que el pool la descarte (`withTransaction` y jobs con transacción manual).
+
 ---
 
 ## Seguridad

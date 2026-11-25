@@ -19,6 +19,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 
 const pool = require('../config/db');
+const { withAdvisoryLock } = require('./advisoryLock');
 
 /**
  * Timestamp ISO para prefijar logs de consola de los jobs — permite ubicar
@@ -44,7 +45,7 @@ const normalizeResult = (result) => {
  * @param {() => Promise<any>} fn - Lógica del job. Debe lanzar para señalar error.
  * @returns {Promise<any>} El valor devuelto por fn, o undefined si lanzó.
  */
-const runWithLogging = async (jobName, fn) => {
+const runLogged = async (jobName, fn) => {
   const startedAt = new Date();
 
   let logId = null;
@@ -92,6 +93,31 @@ const runWithLogging = async (jobName, fn) => {
     }
     // Intencionalmente no se re-propaga: los crons no deben tirar el servidor.
   }
+};
+
+/**
+ * Ejecuta un job de cron con exclusión mutua entre procesos (advisory lock por
+ * job) y registro en cron_execution_log. Si otra instancia ya está corriendo
+ * el mismo job, la corrida se saltea sin registrarse.
+ * @param {string} jobName - Identificador del job (ej. 'overdueInstallments').
+ * @param {() => Promise<any>} fn - Lógica del job. Debe lanzar para señalar error.
+ * @returns {Promise<any>} El valor devuelto por fn, { skipped: true } si otra
+ *   instancia tenía el lock, o undefined si fn lanzó o no se pudo tomar el lock.
+ */
+const runWithLogging = async (jobName, fn) => {
+  let outcome;
+  try {
+    outcome = await withAdvisoryLock(jobName, () => runLogged(jobName, fn));
+  } catch (err) {
+    // Sin conexión no se puede garantizar exclusión: no se ejecuta la corrida.
+    console.error(`[${ts()}] [CronLogger] No se pudo tomar el lock de ${jobName}: ${err.message}`);
+    return undefined;
+  }
+  if (!outcome.acquired) {
+    console.warn(`[${ts()}] [${jobName}] Salteado: otra instancia ya lo está ejecutando.`);
+    return { skipped: true };
+  }
+  return outcome.result;
 };
 
 module.exports = { runWithLogging, ts };
