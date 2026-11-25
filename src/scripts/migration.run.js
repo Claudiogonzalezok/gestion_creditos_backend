@@ -6,6 +6,29 @@ const path = require('path');
 const DB_NAME        = process.env.DB_NAME || 'gestion_creditos';
 const MIGRATIONS_DIR = path.join(__dirname, '../config/migrations');
 
+// Clave arbitraria y fija del advisory lock de migraciones.
+const MIGRATION_LOCK_KEY = 52052;
+
+// Prefijos repetidos ya aplicados en producción (001-049). No se renumeran:
+// _migrations los identifica por nombre completo y el orden es alfabético.
+const LEGACY_DUPLICATE_PREFIXES = new Set(['002', '006', '007', '033', '037']);
+
+/**
+ * Devuelve los prefijos numéricos repetidos que no están en la lista legacy.
+ * @param {string[]} files - nombres de archivo .sql
+ * @returns {string[]} prefijos repetidos no permitidos
+ */
+const findNewDuplicatePrefixes = (files) => {
+  const counts = new Map();
+  for (const file of files) {
+    const prefix = file.split('_')[0];
+    counts.set(prefix, (counts.get(prefix) || 0) + 1);
+  }
+  return [...counts]
+    .filter(([prefix, n]) => n > 1 && !LEGACY_DUPLICATE_PREFIXES.has(prefix))
+    .map(([prefix]) => prefix);
+};
+
 const run = async () => {
   console.log('');
   console.log('╔══════════════════════════════════════════════╗');
@@ -62,6 +85,20 @@ const run = async () => {
     return;
   }
 
+  // Numeración única (issue #52). Los prefijos repetidos históricos ya están
+  // aplicados en producción y se identifican por nombre completo en
+  // _migrations: no se renumeran. Cualquier prefijo repetido nuevo aborta.
+  const duplicated = findNewDuplicatePrefixes(files);
+  if (duplicated.length) {
+    console.error(`  ❌  Prefijos de migración repetidos: ${duplicated.join(', ')}. Usar el próximo número libre.`);
+    await pool.end();
+    process.exit(1);
+  }
+
+  // Lock de sesión: dos procesos de migración concurrentes no aplican el mismo archivo.
+  const lockClient = await pool.connect();
+  await lockClient.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS _migrations (
       filename   VARCHAR(255) PRIMARY KEY,
@@ -95,6 +132,7 @@ const run = async () => {
     } catch (err) {
       await client.query('ROLLBACK');
       console.error(`  ❌  Error en ${file}:`, err.message);
+      lockClient.release(true);
       await pool.end();
       process.exit(1);
     } finally {
@@ -112,7 +150,13 @@ const run = async () => {
   }
   console.log('');
 
+  await lockClient.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]);
+  lockClient.release();
   await pool.end();
 };
 
-run();
+if (require.main === module) {
+  run();
+}
+
+module.exports = { findNewDuplicatePrefixes, LEGACY_DUPLICATE_PREFIXES };

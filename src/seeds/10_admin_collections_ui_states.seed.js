@@ -18,8 +18,11 @@ const isoFromToday = (daysOffset) => {
 /**
  * Crea una planilla de prueba para ADMIN con cuotas en todos los estados
  * visuales (PENDING, OVERDUE, PARTIAL, PAID) para validar pintado de filas.
+ * Si la demo ya existe no hace nada, salvo `force` (refresco explícito, seed 11).
+ * @param {Object} [opts]
+ * @param {boolean} [opts.force=false] - regenerar la demo aunque ya exista
  */
-const seed = async () => {
+const seed = async ({ force = false } = {}) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -45,7 +48,6 @@ const seed = async () => {
          full_name = EXCLUDED.full_name,
          email = EXCLUDED.email,
          address = EXCLUDED.address,
-         password_hash = EXCLUDED.password_hash,
          status = 'ACTIVE'
        RETURNING id, full_name`,
       [
@@ -59,6 +61,22 @@ const seed = async () => {
 
     const collectorId = collectorUpsert.rows[0].id;
     const collectorName = collectorUpsert.rows[0].full_name;
+
+    // Idempotencia (issue #53): re-ejecutar el seed general no duplica la demo.
+    if (!force) {
+      const demo = await client.query(
+        `SELECT 1 FROM credits c
+         JOIN customers cu ON cu.id = c.customer_id
+         WHERE cu.dni LIKE '8444444%' AND cu.assigned_collector_id = $1
+         LIMIT 1`,
+        [collectorId]
+      );
+      if (demo.rows.length > 0) {
+        await client.query('COMMIT');
+        console.log('   ⏭️   Demo de planillas admin ya existe — omitida (usar seed 11 para refrescar).');
+        return;
+      }
+    }
 
     // PAID se incluye solo para demo inicial. Al regenerar, por regla de negocio,
     // findInstallmentsForSheet NO vuelve a incluir cuotas totalmente pagadas.

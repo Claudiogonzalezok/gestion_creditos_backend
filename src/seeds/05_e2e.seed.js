@@ -263,11 +263,12 @@ const seed = async () => {
       const status = isPast ? 'PAID' : 'PENDING';
       const paid = isPast ? amt1 : 0;
 
-      await client.query(
+      const instRes = await client.query(
         `INSERT INTO installments
            (credit_id, installment_number, due_date, amount_due, original_amount,
             amount_paid, status, payment_frequency, created_at)
-         VALUES ($1,$2,$3,$4,$4,$5,$6,'MONTHLY',$7)`,
+         VALUES ($1,$2,$3,$4,$4,$5,$6,'MONTHLY',$7)
+         RETURNING id`,
         [pendingCredit1Id, i + 1, dateStr(dueDate), amt1, paid, status, dateStr(addDays(TODAY, -10))]
       );
 
@@ -277,8 +278,8 @@ const seed = async () => {
           `INSERT INTO payments
              (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method,
               status, approved_by, approved_at, created_at)
-           VALUES (CURRVAL(),$1,$2,$2,0,'CASH','APPROVED',$3,$4,$4)`,
-          [collectorId, amt1, adminId, payDate]
+           VALUES ($5,$1,$2,$2,0,'CASH','APPROVED',$3,$4,$4)`,
+          [collectorId, amt1, adminId, payDate, instRes.rows[0].id]
         );
       }
     }
