@@ -287,15 +287,26 @@ const approve = async (
   installmentsCount,
   disbursementCashSessionId,
 ) => {
-  await client.query(
+  // UPDATE condicional (#48): la transición PENDING_APPROVAL → ACTIVE es
+  // atómica. Una aprobación concurrente queda bloqueada por el lock de fila y,
+  // al liberarse, no encuentra el crédito pendiente → 409 y ROLLBACK de todo
+  // lo hecho en su transacción (cuotas, egresos, enganche, comisión).
+  const r = await client.query(
     `UPDATE credits
      SET status = 'ACTIVE', approved_by = $1, approved_at = NOW(),
          interest_rate = $2, installments_count = $3,
          disbursement_cash_session_id = $5,
          updated_at = NOW()
-     WHERE id = $4`,
+     WHERE id = $4 AND status = 'PENDING_APPROVAL'`,
     [adminId, interestRate ?? null, installmentsCount, id, disbursementCashSessionId ?? null],
   );
+  if (r.rowCount === 0)
+    throw {
+      status: 409,
+      message:
+        "Solo se pueden aprobar créditos en estado PENDIENTE DE APROBACIÓN.",
+      code: "CREDIT_NOT_PENDING",
+    };
 };
 
 /**
