@@ -217,7 +217,11 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
        COUNT(p.id)::int                                                          AS total_payments,
        COUNT(p.id) FILTER (WHERE p.status = 'APPROVED')::int                    AS approved_count,
        COUNT(p.id) FILTER (WHERE p.status = 'REJECTED')::int                    AS rejected_count,
-       COALESCE(SUM(p.amount_received) FILTER (WHERE p.status = 'APPROVED'), 0)::float8 AS total_collected,
+       COALESCE(SUM(p.amount_received) FILTER (
+         WHERE p.status = 'APPROVED'
+           AND NOT p.is_reversal
+           AND NOT EXISTS (SELECT 1 FROM payments rev WHERE rev.reversed_by_payment_id = p.id)
+       ), 0)::float8 AS total_collected,
        COALESCE(ROUND(
          COUNT(p.id) FILTER (WHERE p.status = 'APPROVED')::numeric /
          NULLIF(COUNT(p.id), 0) * 100, 2

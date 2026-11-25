@@ -55,7 +55,10 @@ describe('T — TOCTOU sobre la caja activa de la jornada (V4)', () => {
     });
   });
 
-  it('expenses.create falla 409 si la caja activa transicionó a PENDING_RECONCILIATION', async () => {
+  // Nota: el cambio de estado ocurre ANTES de la llamada, así que este test
+  // verifica el rechazo con caja en PENDING_RECONCILIATION, no la carrera
+  // entre pre-check y lock (esa la cubre el test de lockActiveSession...).
+  it('expenses.create falla 409 si la caja ya está en PENDING_RECONCILIATION', async () => {
     const u = await createUserFixture({ role: 'ADMIN' });
     const session = await cashSessionsService.open({ opening_amount: 0 }, asUser(u));
 

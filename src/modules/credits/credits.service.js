@@ -320,9 +320,12 @@ const _notifyApprovalRequest = async (credit, creditType) => {
   }
 };
 
-const getAll = async (filters, requestingUser) => {
-  if (["SELLER", "SELLER_COLLECTOR"].includes(requestingUser.role))
-    filters = { ...filters, created_by: requestingUser.id };
+const getAll = async (filters) => {
+  // Todos los roles autorizados ven todos los créditos. El solo-lectura para
+  // vendedor/mixto se mantiene por otra vía: las mutaciones (aprobar, rechazar,
+  // refinanciar, etc.) siguen siendo solo-ADMIN y la info financiera sensible se
+  // enmascara en el front. Antes se forzaba created_by para SELLER/SELLER_COLLECTOR;
+  // el dueño pidió visibilidad total de la cartera.
   return queries.findAll(filters);
 };
 

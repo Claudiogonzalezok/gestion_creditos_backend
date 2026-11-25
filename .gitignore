@@ -5,3 +5,10 @@ dist/
 .DS_Store
 .claude/
 coverage/
+
+# Datos de migración inicial (información personal de clientes — NUNCA commitear)
+# Solo la carpeta de la raíz: los scripts en src/scripts/migracion/ SÍ se versionan.
+/migracion/
+
+# Cache de Python (extract.py de la migración)
+__pycache__/

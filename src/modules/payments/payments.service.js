@@ -7,6 +7,7 @@ const {
   getActiveJornadaDate,
 } = require("../businessDays/businessDays.service");
 const collectionsQueries = require("../collections/collections.queries");
+const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
 const notificationsService = require("../notifications/notifications.service");
@@ -119,6 +120,93 @@ const _normalizePaymentAmounts = (data) => {
     amountTransfer: paymentMethod === "TRANSFER" ? amountReceived : 0,
     paymentMethod,
   };
+};
+
+// ── Núcleo de renovación (compartido por los dos caminos de pago) ─────────────
+// Existe UNA sola operación de negocio RENEWAL, partida en dos primitivas puras
+// que recorren cualquiera de los dos pipelines de pago (directo y pre-carga):
+//   · _computeRenewalCharge: cálculo + validación ("cuánto y por qué").
+//   · _applyRenewalEffects:  efectos sobre el préstamo cuando el pago se aprueba.
+
+/**
+ * Valida que el préstamo sea renovable y calcula el cargo de la renovación.
+ * Compartido por el cobro directo (valida y cobra en el acto) y la pre-carga
+ * (valida y congela el monto al crearse).
+ *
+ * Interés del período = importe CONGELADO de la cuota (capital + interés original)
+ * − capital. Se usa original_amount, NO amount_due: applyPenalty suma la mora a
+ * amount_due (invariante amount_due = original_amount + penalty_amount), así que
+ * amount_due está contaminado por la mora. El interés se calcula siempre sobre el
+ * interés original congelado en la operación, sin capitalización ni tasa nueva.
+ * La mora manual acumulada se cobra junto con el interés (una sola vez).
+ *
+ * @param {object} loan - Fila de getRenewableLoan (crédito + cuota única).
+ * @returns {{ interest:number, mora:number, total:number }} Desglose del cargo.
+ * @throws {{ status:409, message }} si el préstamo no es renovable o no tiene interés.
+ */
+const _computeRenewalCharge = (loan) => {
+  if (loan.type !== "LOAN" || loan.installments_count !== 1)
+    throw {
+      status: 409,
+      message: "La renovación solo aplica a préstamos de una sola cuota.",
+    };
+  if (loan.credit_status !== "ACTIVE")
+    throw {
+      status: 409,
+      message: `No se puede renovar un crédito en estado ${loan.credit_status}.`,
+    };
+  if (loan.installment_status === "PAID")
+    throw {
+      status: 409,
+      message: "La cuota ya fue pagada; no se puede renovar.",
+    };
+
+  const frozenAmount =
+    loan.original_amount != null
+      ? loan.original_amount
+      : loan.amount_due - (loan.penalty_amount || 0);
+  const interest = _round2(frozenAmount - loan.total_amount);
+  if (interest <= 0)
+    throw { status: 409, message: "El préstamo no tiene interés a renovar." };
+  const mora = _round2(loan.penalty_amount || 0);
+  const total = _round2(interest + mora);
+  return { interest, mora, total };
+};
+
+/**
+ * Aplica los efectos de la renovación sobre el préstamo, en el momento en que el
+ * pago queda APROBADO (cobro directo: de inmediato; pre-carga: al aprobar). Es la
+ * segunda mitad de la operación RENEWAL, compartida por ambos caminos.
+ *   · renewInstallment: corre el vencimiento un período (consecutivo desde el
+ *     vencimiento anterior), resetea la mora (penalty_amount = 0) y restaura
+ *     amount_due = original_amount, dejando la cuota como un préstamo nuevo.
+ *   · anula la próxima visita agendada (queda obsoleta al correr el vencimiento).
+ * NO aplica el pago a la cuota: el capital sigue debiéndose igual.
+ *
+ * @param {object} client - Cliente de transacción activa.
+ * @param {string} installmentId - Cuota única del préstamo.
+ * @param {string} paymentFrequency - Frecuencia del crédito.
+ * @param {number} graceDays - Días de gracia (system_config).
+ * @param {string} userId - Usuario que concreta la renovación (aprueba/cobra).
+ */
+const _applyRenewalEffects = async (
+  client,
+  installmentId,
+  paymentFrequency,
+  graceDays,
+  userId,
+) => {
+  await queries.renewInstallment(
+    client,
+    installmentId,
+    paymentFrequency,
+    graceDays,
+  );
+  await collectionAttemptsQueries.voidScheduledVisitsForInstallment(
+    client,
+    installmentId,
+    userId,
+  );
 };
 
 /**
@@ -382,6 +470,76 @@ const getById = async (id, requestingUser) => {
 };
 
 /**
+ * Registra una PRE-CARGA de renovación (nace PENDING). Recorre el mismo pipeline
+ * de pre-carga que un cobro normal, pero con la lógica de negocio RENEWAL: valida
+ * y calcula el cargo con _computeRenewalCharge, congela el monto y NO toca el
+ * préstamo (los efectos se aplican en approve). El monto lo fija el server; el
+ * enviado por el cliente debe coincidir exactamente (evita descuadres de UI).
+ * @param {object} data - Body del POST /payments (installment_id + medio de pago).
+ * @param {object} requestingUser - Quien registra (admin; a futuro, cobrador).
+ * @returns {Promise<object>} La pre-carga creada (PENDING).
+ */
+const _createRenewalPrecarga = async (data, requestingUser) => {
+  const instRow = await pool.query(
+    `SELECT credit_id FROM installments WHERE id = $1`,
+    [data.installment_id],
+  );
+  if (!instRow.rows.length)
+    throw { status: 404, message: "Cuota no encontrada." };
+
+  const loan = await queries.getRenewableLoan(instRow.rows[0].credit_id);
+  if (!loan) throw { status: 404, message: "Crédito no encontrado." };
+
+  // Núcleo compartido: valida que sea renovable y calcula interés + mora = total.
+  const { interest, mora, total: totalToCharge } = _computeRenewalCharge(loan);
+
+  // Guarda: una sola pre-carga pendiente por cuota. Evita dos renovaciones
+  // pendientes o mezclar una renovación con un cobro normal ya pendiente.
+  const pending = await queries.getPendingCommittedAmount(loan.installment_id);
+  if (pending > 0)
+    throw {
+      status: 409,
+      message: "La cuota ya tiene una pre-carga pendiente de aprobación.",
+    };
+
+  // El monto lo fija el server (interés + mora). Se normaliza igual que un cobro
+  // y se valida que coincida exactamente con el cargo calculado.
+  const amounts = _normalizePaymentAmounts(data);
+  if (_round2(amounts.amountReceived) !== totalToCharge)
+    throw {
+      status: 422,
+      message: `El monto debe ser exactamente el total a cobrar ($${totalToCharge.toLocaleString("es-AR")}: interés $${interest.toLocaleString("es-AR")} + mora $${mora.toLocaleString("es-AR")}).`,
+    };
+
+  // Nace PENDING con generation_type=RENEWAL, SIN tocar la cuota. cash_session_id
+  // queda NULL: se imputa a la caja al aprobar (como cualquier pre-carga).
+  const payment = await queries.create({
+    installment_id: loan.installment_id,
+    collector_id: requestingUser.id,
+    amount_received: amounts.amountReceived,
+    amount_cash: amounts.amountCash,
+    amount_transfer: amounts.amountTransfer,
+    payment_method: amounts.paymentMethod,
+    transfer_reference: data.transfer_reference,
+    notes: "Pago por renovación",
+    next_visit_date: null,
+    cash_session_id: null,
+    generation_type: "RENEWAL",
+  });
+
+  // Hooks best-effort (idénticos a la pre-carga normal): avisar a los admins y
+  // reflejar la gestión en la planilla del día del cobrador (VISITED).
+  await _notifyApprovalRequest(payment);
+  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+    requestingUser.id,
+    loan.installment_id,
+    "VISITED",
+  );
+
+  return payment;
+};
+
+/**
  * Registra una pre-carga de cobro validando el saldo disponible del crédito.
  * Permite montos que cubran varias cuotas siempre que no superen el saldo pendiente total.
  * @param {object} data - Datos validados del cobro.
@@ -389,6 +547,11 @@ const getById = async (id, requestingUser) => {
  * @returns {Promise<object>} Pre-carga creada en estado pendiente.
  */
 const create = async (data, requestingUser) => {
+  // Camino pre-carga de la renovación: misma operación de negocio RENEWAL, pero
+  // por el pipeline de pre-carga (nace PENDING; los efectos van en approve).
+  if (data.generation_type === "RENEWAL")
+    return _createRenewalPrecarga(data, requestingUser);
+
   const instCheck = await pool.query(
     `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id FROM installments WHERE id = $1`,
     [data.installment_id],
@@ -531,27 +694,56 @@ const approve = async (id, adminId) => {
         message: "Solo se pueden aprobar cobros en estado PENDIENTE.",
       };
 
-    const amountDue = parseFloat(payment.amount_due);
-    const amountPaid = parseFloat(payment.amount_paid);
+    const isRenewal = payment.generation_type === "RENEWAL";
 
-    if (amountPaid >= amountDue)
-      throw {
-        status: 409,
-        message: "Esta cuota ya se encuentra totalmente pagada.",
-      };
+    if (isRenewal) {
+      // Renovación: revalidar la cuota bajo lock (no debe estar ya pagada) y
+      // aplicar los efectos (correr vencimiento, resetear mora/amount_due, anular
+      // la próxima visita). NO se aplica el pago a la cuota ni se evalúa liquidación.
+      const lockedInst = await queries.lockAndGetInstallment(
+        client,
+        payment.installment_id,
+      );
+      if (!lockedInst) throw { status: 404, message: "Cuota no encontrada." };
+      if (lockedInst.status === "PAID")
+        throw {
+          status: 409,
+          message: "La cuota ya fue pagada; no se puede renovar.",
+        };
 
-    // 1. Marcar el payment como APPROVED + imputar a la caja activa de la jornada.
-    await queries.approve(client, id, adminId, activeSession.id);
+      // 1. Marcar APPROVED + imputar a la caja activa de la jornada.
+      await queries.approve(client, id, adminId, activeSession.id);
+      // 2. Efectos de la renovación (misma primitiva que el cobro directo).
+      await _applyRenewalEffects(
+        client,
+        payment.installment_id,
+        lockedInst.payment_frequency,
+        graceDays,
+        adminId,
+      );
+    } else {
+      const amountDue = parseFloat(payment.amount_due);
+      const amountPaid = parseFloat(payment.amount_paid);
 
-    // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
-    await _applyPaymentToInstallments(
-      client,
-      payment,
-      parseFloat(payment.amount_received),
-      adminId,
-      id,
-      graceDays,
-    );
+      if (amountPaid >= amountDue)
+        throw {
+          status: 409,
+          message: "Esta cuota ya se encuentra totalmente pagada.",
+        };
+
+      // 1. Marcar el payment como APPROVED + imputar a la caja activa de la jornada.
+      await queries.approve(client, id, adminId, activeSession.id);
+
+      // 2. Distribuir el monto sobre la cuota principal y siguientes si hay excedente
+      await _applyPaymentToInstallments(
+        client,
+        payment,
+        parseFloat(payment.amount_received),
+        adminId,
+        id,
+        graceDays,
+      );
+    }
 
     // 3. Registrar movimiento(s) contable(s) en caja — uno por medio con monto > 0.
     //    Se usa la fecha de la jornada activa, no localDate(), para que los cobros
@@ -565,8 +757,9 @@ const approve = async (id, adminId) => {
       userId: adminId,
     });
 
-    // 4. Verificar si el crédito quedó totalmente liquidado (con lock sobre credits)
-    await _checkAndSettleCredit(client, payment.credit_id);
+    // 4. Verificar si el crédito quedó totalmente liquidado (con lock sobre credits).
+    //    Una renovación nunca liquida el crédito — se omite en ese caso.
+    if (!isRenewal) await _checkAndSettleCredit(client, payment.credit_id);
 
     // 5. Hook: reflejar el resultado en la planilla del día del cobrador.
     // Si la cuota quedó PAID, marcamos PAID; si quedó parcial, VISITED.
@@ -764,6 +957,143 @@ const adminDirect = async (data, adminId) => {
   });
 
   return queries.findById(newPaymentId);
+};
+
+/**
+ * Renueva un préstamo LOAN de una sola cuota: el cliente paga solo el interés del
+ * período para extender el vencimiento. Es un caso particular del cobro directo —
+ * reutiliza los mismos primitivos (createApproved + registro en caja) — pero NO
+ * aplica el pago a la cuota (el capital sigue debiéndose) y, en su lugar, corre el
+ * vencimiento un período. El pago se etiqueta generation_type='RENEWAL'.
+ *
+ * @param {string} creditId - Préstamo a renovar.
+ * @param {object} data - Medio de pago del interés (payment_method + split mixto).
+ * @param {string} adminId - Admin que registra la renovación.
+ * @returns {Promise<object>} El pago de renovación creado.
+ */
+const renew = async (creditId, data, adminId) => {
+  const jornadaDate = await getActiveJornadaDate();
+  await _validateCajaOpen(jornadaDate);
+  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+
+  const loan = await queries.getRenewableLoan(creditId);
+  if (!loan) throw { status: 404, message: "Crédito no encontrado." };
+
+  // Núcleo de renovación compartido: valida que sea renovable y calcula el cargo
+  // (interés congelado + mora). Misma lógica que recorre la pre-carga.
+  const { interest, mora, total: totalToCharge } = _computeRenewalCharge(loan);
+
+  // Guarda anti-duplicado: no renovar en directo si la cuota ya tiene una pre-carga
+  // pendiente (una renovación o un cobro sin aprobar), para no encimar operaciones.
+  const pendingPrecarga = await queries.getPendingCommittedAmount(
+    loan.installment_id,
+  );
+  if (pendingPrecarga > 0)
+    throw {
+      status: 409,
+      message: "La cuota ya tiene una pre-carga pendiente de aprobación.",
+    };
+
+  // El monto SIEMPRE es el total a cobrar (fijo). Se reutiliza el normalizador de
+  // montos: para un solo medio se imputa todo el total; en mixto, el split debe
+  // sumar exactamente el total (interés + mora).
+  const amounts =
+    data.payment_method === "MIXED"
+      ? _normalizePaymentAmounts({
+          amount_cash: data.amount_cash,
+          amount_transfer: data.amount_transfer,
+        })
+      : _normalizePaymentAmounts({
+          amount_received: totalToCharge,
+          payment_method: data.payment_method,
+        });
+  if (_round2(amounts.amountReceived) !== totalToCharge)
+    throw {
+      status: 422,
+      message: `El monto debe ser exactamente el total a cobrar ($${totalToCharge.toLocaleString("es-AR")}: interés $${interest.toLocaleString("es-AR")} + mora $${mora.toLocaleString("es-AR")}).`,
+    };
+
+  let newPaymentId;
+  await withTransaction(async (client) => {
+    const activeSession =
+      await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+    if (!activeSession)
+      throw {
+        status: 409,
+        message:
+          "No hay caja operativa abierta. Abrí una caja para registrar la renovación.",
+        code: "NO_ACTIVE_SESSION",
+      };
+
+    const lockedInst = await queries.lockAndGetInstallment(
+      client,
+      loan.installment_id,
+    );
+    if (!lockedInst) throw { status: 404, message: "Cuota no encontrada." };
+    if (lockedInst.status === "PAID")
+      throw {
+        status: 409,
+        message: "La cuota ya fue pagada; no se puede renovar.",
+      };
+
+    const created = await queries.createApproved(client, {
+      installmentId: loan.installment_id,
+      adminId,
+      amountReceived: amounts.amountReceived,
+      amountCash: amounts.amountCash,
+      amountTransfer: amounts.amountTransfer,
+      paymentMethod: amounts.paymentMethod,
+      transferReference: data.transfer_reference,
+      notes: "Pago por renovación",
+      cashSessionId: activeSession.id,
+      generationType: "RENEWAL",
+    });
+    newPaymentId = created.id;
+
+    // Efectos de la renovación (los mismos que aplicará la pre-carga al aprobarse):
+    // correr el vencimiento un período, resetear mora/amount_due y anular la
+    // próxima visita. El pago NO se aplica a la cuota: el capital sigue debiéndose.
+    await _applyRenewalEffects(
+      client,
+      loan.installment_id,
+      loan.payment_frequency,
+      graceDays,
+      adminId,
+    );
+
+    await _registerSplitCashMovements(client, {
+      paymentId: newPaymentId,
+      amountCash: amounts.amountCash,
+      amountTransfer: amounts.amountTransfer,
+      movementType: "PAYMENT",
+      registerDate: jornadaDate,
+      userId: adminId,
+    });
+  });
+
+  return queries.findById(newPaymentId);
+};
+
+/**
+ * Cotización de renovación de un préstamo: dice si es renovable y cuánto se
+ * cobraría (interés + mora). Reusa getRenewableLoan + _computeRenewalCharge para
+ * que el monto salga del MISMO lugar que el cobro real (una sola fórmula, sin
+ * duplicarla en la planilla). No lanza cuando no es renovable: devuelve
+ * { renewable: false } para que la UI lo trate suave (ocultar/deshabilitar).
+ * @param {string} creditId - Préstamo a cotizar.
+ * @returns {Promise<{renewable:boolean, interest?:number, mora?:number, total?:number}>}
+ */
+const renewalQuote = async (creditId) => {
+  const loan = await queries.getRenewableLoan(creditId);
+  if (!loan) return { renewable: false };
+  try {
+    const { interest, mora, total } = _computeRenewalCharge(loan);
+    return { renewable: true, interest, mora, total };
+  } catch (err) {
+    // 409 = no renovable / sin interés → cotización negativa, no un error de API.
+    if (err.status === 409) return { renewable: false };
+    throw err;
+  }
 };
 
 /**
@@ -1047,6 +1377,8 @@ module.exports = {
   reject,
   getByCredit,
   adminDirect,
+  renew,
+  renewalQuote,
   reverse,
   generatePrepaidInstallmentPayments,
   // Núcleo exportado para reutilización en nuevos flujos

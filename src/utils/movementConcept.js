@@ -13,8 +13,9 @@
 //   1. Reversión de venta de contado   (reversa de un SALE de contado)
 //   2. Reversión de cobro              (cualquier otra reversa)
 //   3. Venta de contado                (payment_condition = 'CASH')
-//   4. Cobro de cuota adelantada       (generation_type = 'ADVANCE_DISTRIBUTION')
-//   5. Cobro de cuota                  (cobro normal)
+//   4. Renovación                      (generation_type = 'RENEWAL')
+//   5. Cobro de cuota adelantada       (generation_type = 'ADVANCE_DISTRIBUTION')
+//   6. Cobro de cuota                  (cobro normal)
 //
 // @param {string} p  - alias de la tabla payments en la query (default 'p').
 // @param {string} cr - alias de la tabla credits en la query (default 'cr').
@@ -28,6 +29,8 @@ const movementConceptCase = (p = "p", cr = "cr") => `
       THEN 'Reversión de cobro'
     WHEN ${cr}.payment_condition = 'CASH'
       THEN 'Venta de contado'
+    WHEN ${p}.generation_type = 'RENEWAL'
+      THEN 'Renovación'
     WHEN ${p}.generation_type = 'ADVANCE_DISTRIBUTION'
       THEN 'Cobro de cuota adelantada'
     ELSE 'Cobro de cuota'

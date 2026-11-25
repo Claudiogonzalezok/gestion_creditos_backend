@@ -1,4 +1,5 @@
 const service = require("./credits.service");
+const paymentsService = require("../payments/payments.service");
 const response = require("../../utils/response");
 const irQueries = require("../interestRates/interestRates.queries");
 const prQueries = require("../productRates/productRates.queries");
@@ -184,6 +185,37 @@ const approve = async (req, res) => {
   }
 };
 
+const renew = async (req, res) => {
+  try {
+    const payment = await paymentsService.renew(
+      req.params.id,
+      req.body,
+      req.user.id,
+    );
+    return response.created(
+      res,
+      payment,
+      "Renovación registrada. Vencimiento extendido un período.",
+    );
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    if (err.status === 409)
+      return response.conflict(res, err.message, null, err.code);
+    if (err.status === 422)
+      return response.unprocessableEntity(res, err.message);
+    return response.serverError(res, err);
+  }
+};
+
+const renewalQuote = async (req, res) => {
+  try {
+    const quote = await paymentsService.renewalQuote(req.params.id);
+    return response.success(res, quote);
+  } catch (err) {
+    return response.serverError(res, err);
+  }
+};
+
 const changeSeller = async (req, res) => {
   try {
     const credit = await service.changeSeller(
@@ -311,6 +343,8 @@ module.exports = {
   simulate,
   simulateAll,
   approve,
+  renew,
+  renewalQuote,
   changeSeller,
   reject,
   earlySettlement,
