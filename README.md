@@ -228,8 +228,8 @@ Para SALE con múltiples productos, la cuota se calcula por producto de forma pr
 ## Instalación
 
 ```bash
-# 1. Instalar dependencias
-npm install
+# 1. Instalar dependencias (respeta package-lock.json; también instala los hooks de git)
+npm ci
 
 # 2. Configurar variables de entorno
 cp .env.example .env
@@ -280,6 +280,10 @@ ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 | `npm run dev:e2e`                | Servidor sin rate limit en login + test routes activas     |
 | `npm start`                      | Servidor en modo producción                                |
 | `npm run test:unit`              | Tests unitarios con Jest (mock de BD)                      |
+| `npm run test:unit:ci`           | Unitarios con cobertura y umbral mínimo (como en CI)       |
+| `npm run test:scope`             | Tests del script que decide el alcance de CI               |
+| `npm run lint -- <archivos>`     | ESLint sobre archivos puntuales (sin warnings permitidos)  |
+| `npm run format -- <archivos>`   | Prettier sobre archivos puntuales                          |
 | `npm run test:integration`       | Tests de integración con BD real (Docker)                  |
 | `npm run test:integration:local` | Tests de integración con BD local (sin Docker)             |
 | `npm run test:all`               | Unit + integration en secuencia                            |
@@ -312,6 +316,29 @@ Usan Jest con mocks de `../../config/db`. Cada suite hace `cache.clearAll()` en 
 ### Integración (`test:integration`)
 
 Corren contra una BD PostgreSQL real levantada en Docker (`docker-compose.test.yml`). Requieren `npm run test:db:up` antes de ejecutarlos. Usan `supertest` sobre la app Express completa.
+
+---
+
+## Calidad y CI
+
+**Hooks de git** (Husky, se instalan con `npm ci`; en producción con `--omit=dev` se omiten sin error):
+- `pre-commit`: ESLint (`--max-warnings 0`) y Prettier (`--write`) solo sobre los archivos staged.
+- `pre-push`: tests del script de alcance y suite unitaria (`npm run test:unit`).
+
+**Lint incremental:** no se reformatea el repo de una vez. Cada archivo que tocás tiene que quedar limpio. Reglas: `eslint:recommended`, sin `console.log` (se permiten `console.warn` y `console.error`; los scripts, seeds, jobs y tests quedan exentos). La regla "sin `any`" no aplica: el backend es JavaScript.
+
+**Workflow `.github/workflows/ci.yml`** corre solo lo que el PR tocó. El alcance lo decide `scripts/ci-scope.mjs`:
+
+| Qué se tocó | Qué corre |
+|---|---|
+| Solo docs (`*.md`, `docs/`) o los hooks `.husky/pre-*` | Nada de tests |
+| Un módulo (`src/modules/<x>`) | Lint de los cambiados + unitarios relacionados (`jest --findRelatedTests`) + tests de integración que referencian ese módulo o a los módulos que lo importan |
+| Un test (`tests/unit/*`, `tests/integration/*.test.js`) | Ese test |
+| Código compartido (`src/config/`, `src/utils/`, `src/middlewares/`, `src/app.js`, `src/jobs/`, `package*.json`, `tests/integration/helpers/`, configs de jest/eslint, `docker-compose.test.yml`, `.env.test`, `.github/`, `.husky/install.mjs`), un archivo de módulo borrado o movido, o cualquier otro archivo no listado | Suite completa: unitarios con umbral de cobertura + integración |
+
+- La suite completa también corre al mergear a `main`, todas las noches (si falla, abre o actualiza un issue con la etiqueta `ci:nightly`) y en un PR con la etiqueta `ci:full`.
+- El umbral de cobertura está en `jest.unit.config.js` (53% de líneas, base del 2026-11-25). Subilo cuando la cobertura crezca; nunca lo bajes.
+- Para que el workflow bloquee el merge hay que marcar el check `Lint, unit and integration tests` como requerido en la protección de la rama `main` (configuración de GitHub, no del repo).
 
 ---
 

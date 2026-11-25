@@ -61,6 +61,13 @@ npm run test:db:down
 npm run test:db:up && npm run test:all && npm run test:db:down
 ```
 
+En GitHub Actions (`.github/workflows/ci.yml`) un PR corre solo los tests
+afectados (ver "Calidad y CI" en el README raíz). La suite completa usa
+`npm run test:unit:ci`, que exige el umbral de cobertura de
+`jest.unit.config.js`. Al agregar un test de integración de un módulo, importá
+el código desde `src/modules/<módulo>/`: CI usa esa referencia para decidir qué
+tests de integración corre cuando cambia el módulo.
+
 ## Cómo escribir un test de integration
 
 ```javascript

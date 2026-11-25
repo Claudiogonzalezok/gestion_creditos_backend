@@ -1,0 +1,135 @@
+name: CI
+
+# Corre solo lo que el PR tocó; la suite completa corre en main, todas las noches,
+# cuando cambia código compartido o cuando el PR tiene la etiqueta `ci:full`.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # El evento va en la clave para que un push a main no desplace a la corrida nightly
+  # en cola (GitHub conserva una sola corrida pendiente por grupo).
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # Solo se cancelan en curso las corridas de PR reemplazadas.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  checks:
+    name: Lint, unit and integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve scope
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FORCE_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            # --no-renames lista la ruta vieja y la nueva de un archivo movido.
+            git diff --name-only --no-renames "$BASE_SHA"...HEAD > changed.txt
+          else
+            : > changed.txt
+          fi
+          FLAG=""
+          if [ "$EVENT" != "pull_request" ] || [ "$FORCE_LABEL" = "true" ]; then FLAG="--full"; fi
+          node scripts/ci-scope.mjs $FLAG < changed.txt > scope.json
+          cat scope.json
+          echo "mode=$(node -p "require('./scope.json').mode")" >> "$GITHUB_OUTPUT"
+          echo "unit=$(node -p "require('./scope.json').unitFiles.filter(f => require('fs').existsSync(f)).join(' ')")" >> "$GITHUB_OUTPUT"
+          echo "integration=$(node -p "require('./scope.json').integrationTests.filter(f => require('fs').existsSync(f)).join(' ')")" >> "$GITHUB_OUTPUT"
+          echo "lint=$(node -p "require('./scope.json').lintFiles.filter(f => require('fs').existsSync(f)).join(' ')")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.scope.outputs.mode != 'none'
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        if: steps.scope.outputs.mode != 'none'
+        run: npm ci
+
+      - name: Scope script tests
+        if: steps.scope.outputs.mode != 'none'
+        run: npm run test:scope
+
+      - name: Lint changed files
+        if: steps.scope.outputs.mode != 'none'
+        env:
+          EVENT: ${{ github.event_name }}
+          FILES: ${{ steps.scope.outputs.lint }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "El lint corre solo sobre el diff del PR (adopción incremental)."
+          elif [ -n "$FILES" ]; then
+            npx eslint --max-warnings 0 $FILES
+          else
+            echo "No hay archivos lintables cambiados."
+          fi
+
+      - name: Unit tests (full, with coverage threshold)
+        if: steps.scope.outputs.mode == 'full'
+        run: npm run test:unit:ci
+
+      - name: Unit tests (related to changed files)
+        if: steps.scope.outputs.mode == 'affected' && steps.scope.outputs.unit != ''
+        env:
+          NODE_ENV: test
+          FILES: ${{ steps.scope.outputs.unit }}
+        run: npx jest --config jest.unit.config.js --runInBand --passWithNoTests --findRelatedTests $FILES
+
+      - name: Start test database
+        if: steps.scope.outputs.mode == 'full' || steps.scope.outputs.integration != ''
+        run: npm run test:db:up
+
+      - name: Integration tests (full)
+        if: steps.scope.outputs.mode == 'full'
+        run: npm run test:integration
+
+      - name: Integration tests (affected modules)
+        if: steps.scope.outputs.mode == 'affected' && steps.scope.outputs.integration != ''
+        env:
+          FILES: ${{ steps.scope.outputs.integration }}
+        run: npx jest --config jest.integration.config.js --runInBand $FILES
+
+  nightly-report:
+    name: Report nightly failure
+    needs: checks
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const title = 'Nightly CI failing';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: 'ci:nightly',
+            });
+            const existing = open.find((i) => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: existing.number, body: `Still failing: ${run}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                ...context.repo, title, labels: ['ci:nightly'], body: `The nightly full suite failed: ${run}`,
+              });
+            }
