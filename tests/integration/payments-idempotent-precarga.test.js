@@ -22,11 +22,28 @@ const KEY_A = '7f1c2e9a-3b4d-4c5e-8f6a-1b2c3d4e5f60';
 const KEY_B = '0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d';
 
 const countPayments = async (installmentId) => {
-  const r = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM payments WHERE installment_id = $1`,
-    [installmentId],
-  );
+  const r = await pool.query(`SELECT COUNT(*)::int AS n FROM payments WHERE installment_id = $1`, [
+    installmentId,
+  ]);
   return r.rows[0].n;
+};
+
+/**
+ * Espera hasta que alguna sesión de Postgres quede bloqueada por `pid`
+ * (pg_blocking_pids). Hace polling corto y falla explícitamente si no ocurre.
+ * @param {number} pid - Backend que retiene el lock.
+ */
+const waitUntilBlockedBy = async (pid, timeoutMs = 5000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const r = await pool.query(
+      `SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1`,
+      [pid],
+    );
+    if (r.rows.length) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`Ninguna sesión quedó bloqueada por el backend ${pid}`);
 };
 
 const body = (installmentId, extra = {}) => ({
@@ -94,7 +111,10 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
 
     await paymentsService.create(body(inst.id, { client_request_id: KEY_A }), user);
     await expect(
-      paymentsService.create(body(inst.id, { generation_type: 'RENEWAL', client_request_id: KEY_A }), user),
+      paymentsService.create(
+        body(inst.id, { generation_type: 'RENEWAL', client_request_id: KEY_A }),
+        user,
+      ),
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
     expect(await countPayments(inst.id)).toBe(1);
   });
@@ -128,7 +148,10 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
 
     await paymentsService.create(body(inst.id, { ...half, client_request_id: KEY_A }), user);
     await expect(
-      paymentsService.create(body(inst.id, { amount_received: 400, next_visit_date: today(), client_request_id: KEY_A }), user),
+      paymentsService.create(
+        body(inst.id, { amount_received: 400, next_visit_date: today(), client_request_id: KEY_A }),
+        user,
+      ),
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
 
     expect(await countPayments(inst.id)).toBe(1);
@@ -140,7 +163,10 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
     const half = { amount_received: 500, next_visit_date: today() };
 
     await paymentsService.create(body(inst.id, { ...half, client_request_id: KEY_A }), user);
-    await paymentsService.create(body(inst.id, { ...half, client_request_id: KEY_A }), { id: other.id, role: other.role });
+    await paymentsService.create(body(inst.id, { ...half, client_request_id: KEY_A }), {
+      id: other.id,
+      role: other.role,
+    });
 
     expect(await countPayments(inst.id)).toBe(2);
   });
@@ -161,16 +187,22 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
     const tx = await pool.connect();
     let pending;
     try {
+      const txPid = (await tx.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
       await tx.query('BEGIN');
       await tx.query(
         `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, payment_method, client_request_id)
          VALUES ($1, $2, 1000, 1000, 'CASH', $3)`,
         [inst.id, collector.id, KEY_A],
       );
-      pending = paymentsService
-        .create(body(inst2.id, { client_request_id: KEY_A }), user)
-        .then((v) => ({ status: 'fulfilled', value: v }), (e) => ({ status: 'rejected', reason: e }));
-      await new Promise((r) => setTimeout(r, 300));
+      pending = paymentsService.create(body(inst2.id, { client_request_id: KEY_A }), user).then(
+        (v) => ({ status: 'fulfilled', value: v }),
+        (e) => ({ status: 'rejected', reason: e }),
+      );
+      // Orden controlado (sin dormir a ciegas): se confirma recién cuando
+      // Postgres reporta que otra sesión está bloqueada esperando a `tx`, es
+      // decir, cuando el INSERT de la segunda request ya chocó con la fila
+      // no confirmada del índice UNIQUE.
+      await waitUntilBlockedBy(txPid);
       await tx.query('COMMIT');
     } finally {
       tx.release();
@@ -194,8 +226,9 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
     expect(a.client_request_id).toBeNull();
     expect(await countPayments(inst.id)).toBe(2);
     // Saldo ya comprometido: una tercera se rechaza como antes.
-    await expect(paymentsService.create(body(inst.id, half), user))
-      .rejects.toMatchObject({ status: 409 });
+    await expect(paymentsService.create(body(inst.id, half), user)).rejects.toMatchObject({
+      status: 409,
+    });
   });
 });
 
