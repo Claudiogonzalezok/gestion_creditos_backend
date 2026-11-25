@@ -53,8 +53,16 @@ const hasCashRegister = async (date) => {
   return r.rows.length > 0;
 };
 
-const findById = async (id) => {
-  const r = await pool.query(
+/**
+ * Busca un gasto por id. Con `forUpdate` bloquea la fila del gasto (FOR UPDATE OF e)
+ * para serializar ediciones/bajas concurrentes; requiere un client transaccional.
+ * @param {string} id
+ * @param {object} [db=pool]
+ * @param {{ forUpdate?: boolean }} [opts]
+ * @returns {Promise<object|null>}
+ */
+const findById = async (id, db = pool, { forUpdate = false } = {}) => {
+  const r = await db.query(
     `SELECT e.id, e.amount::float8, e.description, e.expense_date,
             e.payment_method, e.transfer_reference, e.source, e.created_at,
             e.cash_session_id,
@@ -65,10 +73,28 @@ const findById = async (id) => {
      JOIN users u ON u.id = e.created_by
      LEFT JOIN expense_categories ec ON ec.id = e.category_id
      LEFT JOIN cash_sessions cs ON cs.id = e.cash_session_id
-     WHERE e.id = $1`,
+     WHERE e.id = $1${forUpdate ? " FOR UPDATE OF e" : ""}`,
     [id],
   );
   return r.rows[0] || null;
+};
+
+/**
+ * Devuelve la cuenta de tesorería desde la que salió un gasto COMPANY
+ * (movimiento EXPENSE original), o null si no existe.
+ * @param {string} expenseId
+ * @param {object} [db=pool]
+ * @returns {Promise<string|null>} cash_account_id
+ */
+const findCompanyExpenseAccountId = async (expenseId, db = pool) => {
+  const r = await db.query(
+    `SELECT cash_account_id FROM cash_account_movements
+     WHERE movement_type = 'EXPENSE' AND reference_type = 'EXPENSE' AND reference_id = $1
+     ORDER BY created_at
+     LIMIT 1`,
+    [expenseId],
+  );
+  return r.rows[0]?.cash_account_id || null;
 };
 
 const findActiveCategoryById = async (id) => {
@@ -145,8 +171,8 @@ const update = async ({
   paymentMethod,
   transferReference,
   categoryId,
-}) => {
-  const r = await pool.query(
+}, db = pool) => {
+  const r = await db.query(
     `UPDATE expenses
      SET amount = $2,
          description = $3,
@@ -169,8 +195,8 @@ const update = async ({
   return r.rows[0] || null;
 };
 
-const remove = async (id) => {
-  const r = await pool.query(
+const remove = async (id, db = pool) => {
+  const r = await db.query(
     `DELETE FROM expenses WHERE id = $1 RETURNING id`,
     [id],
   );
@@ -181,6 +207,7 @@ module.exports = {
   findAll,
   findById,
   findActiveCategoryById,
+  findCompanyExpenseAccountId,
   hasCashRegister,
   findRecentDuplicate,
   create,
