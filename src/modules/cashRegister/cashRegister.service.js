@@ -84,6 +84,23 @@ const close = async (data, adminId) => {
   try {
     await client.query("BEGIN");
 
+    // Guarda de concurrencia (#48, legacy): cash_registers no tiene índice
+    // único por fecha. Se serializa por fecha con un advisory lock
+    // transaccional y se re-verifica dentro de la transacción.
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtext('cash_registers.close'), hashtext($1::text))",
+      [registerDate],
+    );
+    const dup = await client.query(
+      "SELECT 1 FROM cash_registers WHERE register_date = $1 LIMIT 1",
+      [registerDate],
+    );
+    if (dup.rowCount > 0)
+      throw {
+        status: 409,
+        message: `Ya existe un cierre de caja para el ${registerDate}.`,
+      };
+
     const register = await queries.create(client, {
       registerDate,
       cashAmount,
