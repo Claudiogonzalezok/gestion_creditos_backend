@@ -1,6 +1,7 @@
 const pool   = require('../../config/db');
 const queries          = require('./collectionAttempts.queries');
 const collectionsQueries = require('../collections/collections.queries');
+const { withTransaction } = require('../../utils/transaction');
 
 /**
  * Registra una gestión de cobranza (NO_PAYMENT, NOT_FOUND o SCHEDULED_VISIT).
@@ -95,28 +96,32 @@ const create = async (data, requestingUser) => {
     ? inst.tomorrow_date
     : data.next_visit_date;
 
-  const attempt = await queries.create({
-    installmentId:  data.installment_id,
-    collectorId:    ownerCollectorId,
-    createdBy:      requestingUser.id,
-    attemptType:    data.attempt_type,
-    reason:         data.reason,
-    nextVisitDate,
-    notes:          data.notes,
+  // Intento + hook de planilla en una sola transacción (#49): si el hook
+  // falla no queda un intento registrado sin reflejar en la planilla.
+  return withTransaction(async (client) => {
+    const attempt = await queries.create({
+      installmentId:  data.installment_id,
+      collectorId:    ownerCollectorId,
+      createdBy:      requestingUser.id,
+      attemptType:    data.attempt_type,
+      reason:         data.reason,
+      nextVisitDate,
+      notes:          data.notes,
+    }, client);
+
+    // Hook: reflejar el intento en la planilla activa del día del cobrador.
+    // No falla si no hay planilla del día (no-op silencioso).
+    // La visita programada es trabajo a futuro, NO una gestión "de hoy": no debe
+    // alterar el management_status de la planilla del día del cobrador.
+    if (!isScheduledVisit) {
+      const newStatus = data.attempt_type === 'NOT_FOUND' ? 'NOT_FOUND' : 'NO_PAYMENT';
+      await collectionsQueries.updateManagementStatusForActiveTodaySheet(
+        requestingUser.id, data.installment_id, newStatus, client,
+      );
+    }
+
+    return attempt;
   });
-
-  // Hook: reflejar el intento en la planilla activa del día del cobrador.
-  // No falla si no hay planilla del día (no-op silencioso).
-  // La visita programada es trabajo a futuro, NO una gestión "de hoy": no debe
-  // alterar el management_status de la planilla del día del cobrador.
-  if (!isScheduledVisit) {
-    const newStatus = data.attempt_type === 'NOT_FOUND' ? 'NOT_FOUND' : 'NO_PAYMENT';
-    await collectionsQueries.updateManagementStatusForActiveTodaySheet(
-      requestingUser.id, data.installment_id, newStatus,
-    );
-  }
-
-  return attempt;
 };
 
 /**
@@ -172,24 +177,23 @@ const voidAttempt = async (id, requestingUser) => {
       throw { status: 403, message: 'Solo quien registró el intento puede anularlo.' };
   }
 
-  // Solo mismo día calendario (created_at::date = current_date)
-  const created = new Date(attempt.created_at);
-  const today = new Date();
-  const sameDay =
-    created.getFullYear() === today.getFullYear() &&
-    created.getMonth() === today.getMonth() &&
-    created.getDate() === today.getDate();
-  if (!sameDay)
+  // Solo mismo día calendario, según la fecha de la BD (created_at::date =
+  // CURRENT_DATE), no el reloj del proceso Node (#49).
+  if (!attempt.created_today)
     throw { status: 409, message: 'Solo se pueden anular intentos registrados en el día actual.' };
 
-  await queries.markVoided(id, requestingUser.id);
+  await withTransaction(async (client) => {
+    // UPDATE condicional: si otra request lo anuló en paralelo, 409.
+    const voided = await queries.markVoided(id, requestingUser.id, client);
+    if (!voided) throw { status: 409, message: 'Este intento ya fue anulado.' };
 
-  // Hook: el intento anulado deja de ser gestión vigente. Recalcular el
-  // management_status de la planilla del día para que vuelva a PENDING (o
-  // refleje la gestión viva restante) y el cobrador pueda gestionar de nuevo.
-  await collectionsQueries.recalcManagementStatusForActiveTodaySheet(
-    attempt.collector_id, attempt.installment_id,
-  );
+    // Hook: el intento anulado deja de ser gestión vigente. Recalcular el
+    // management_status de la planilla del día para que vuelva a PENDING (o
+    // refleje la gestión viva restante) y el cobrador pueda gestionar de nuevo.
+    await collectionsQueries.recalcManagementStatusForActiveTodaySheet(
+      attempt.collector_id, attempt.installment_id, client,
+    );
+  });
 
   return queries.findById(id);
 };

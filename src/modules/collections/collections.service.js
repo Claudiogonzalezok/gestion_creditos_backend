@@ -117,6 +117,22 @@ const buildOverdueNextVisitsAlert = (items, date) =>
  * @param {string} adminId - ID del administrador que genera la planilla.
  * @returns {Promise<{ sheet: object, alerts: object }>} Planilla generada más alertas del sistema.
  */
+/**
+ * Relee una planilla ya confirmada. Si la relectura falla, devuelve el id
+ * mínimo en lugar de propagar el error: la planilla existe y un reintento
+ * del cliente la regeneraría (#49).
+ * @param {string} sheetId
+ * @returns {Promise<object>} detalle completo, o `{ id, partial: true }`.
+ */
+const readSheetAfterCommit = async (sheetId) => {
+  try {
+    return (await queries.findById(sheetId)) || { id: sheetId, partial: true };
+  } catch (err) {
+    console.error('[collections] relectura post-commit fallida', sheetId, err.message);
+    return { id: sheetId, partial: true };
+  }
+};
+
 const generate = async (data, adminId) => {
   const { collector_id, date, filter, skip_if_exists } = data;
   const selectedFilter = filter || 'ALL_PENDING';
@@ -131,13 +147,14 @@ const generate = async (data, adminId) => {
   }
 
   // La transacción ya cerró; leemos detalle completo con JOINs
-  const full = await queries.findById(result.sheetId);
+  const full = await readSheetAfterCommit(result.sheetId);
 
   return {
     sheet: full,
     alerts: {
       overdue_next_visits:  buildOverdueNextVisitsAlert(result.items, date),
-      unassigned_customers: await queries.findUnassignedCustomersWithPending(),
+      // Alerta informativa post-commit: si falla, no invalida la generación.
+      unassigned_customers: await queries.findUnassignedCustomersWithPending().catch(() => []),
     },
   };
 };
@@ -162,28 +179,32 @@ const generateBatch = async (data, adminId) => {
 
   const results = [];
   for (const collectorId of collector_ids) {
+    // Solo la transacción puede reportar error: lo posterior al COMMIT no
+    // debe informar "fallo" de una planilla que sí se creó (#49).
+    let result;
     try {
-      const result = await generateSheetTransaction(collectorId, date, selectedFilter, skip_if_exists, adminId);
-
-      if (result.skipped) {
-        results.push({ collector_id: collectorId, skipped: true, existing_sheet: result.existing_sheet });
-        continue;
-      }
-
-      results.push({
-        collector_id: collectorId,
-        sheet: await queries.findById(result.sheetId),
-        alerts: {
-          overdue_next_visits:  buildOverdueNextVisitsAlert(result.items, date),
-          unassigned_customers: unassignedCustomers,
-        },
-      });
+      result = await generateSheetTransaction(collectorId, date, selectedFilter, skip_if_exists, adminId);
     } catch (err) {
       results.push({
         collector_id: collectorId,
         error: { status: err.status || 500, message: err.message || 'Error inesperado al generar la planilla.' },
       });
+      continue;
     }
+
+    if (result.skipped) {
+      results.push({ collector_id: collectorId, skipped: true, existing_sheet: result.existing_sheet });
+      continue;
+    }
+
+    results.push({
+      collector_id: collectorId,
+      sheet: await readSheetAfterCommit(result.sheetId),
+      alerts: {
+        overdue_next_visits:  buildOverdueNextVisitsAlert(result.items, date),
+        unassigned_customers: unassignedCustomers,
+      },
+    });
   }
 
   return { results };

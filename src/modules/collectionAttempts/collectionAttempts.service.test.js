@@ -8,6 +8,11 @@ jest.mock("../collections/collections.queries", () => ({
   updateManagementStatusForActiveTodaySheet: jest.fn(),
   recalcManagementStatusForActiveTodaySheet: jest.fn(),
 }));
+// create corre en transacción (#49): el client es un objeto opaco del mock.
+const TX_CLIENT = { tx: true };
+jest.mock("../../utils/transaction", () => ({
+  withTransaction: jest.fn((cb) => cb({ tx: true })),
+}));
 
 const pool = require("../../config/db");
 const queries = require("./collectionAttempts.queries");
@@ -131,6 +136,7 @@ describe("collectionAttempts.create — SCHEDULED_VISIT (gestión admin)", () =>
         nextVisitDate: "2026-06-30",
         notes: "Cliente pasa a pagar el lunes",
       }),
+      TX_CLIENT,
     );
     // La visita futura NO es gestión del día → no debe tocar la planilla.
     expect(
@@ -155,6 +161,7 @@ describe("collectionAttempts.create — SCHEDULED_VISIT (gestión admin)", () =>
 
     expect(queries.create).toHaveBeenCalledWith(
       expect.objectContaining({ collectorId: "admin-1", createdBy: "admin-1" }),
+      TX_CLIENT,
     );
   });
 
@@ -174,6 +181,7 @@ describe("collectionAttempts.create — SCHEDULED_VISIT (gestión admin)", () =>
 
     expect(queries.create).toHaveBeenCalledWith(
       expect.objectContaining({ collectorId: "col-1", createdBy: "sel-1" }),
+      TX_CLIENT,
     );
     expect(
       collectionsQueries.updateManagementStatusForActiveTodaySheet,
@@ -197,6 +205,7 @@ describe("collectionAttempts.create — SCHEDULED_VISIT (gestión admin)", () =>
     // No lanza 403 por cartera; la visita se imputa al cobrador asignado real.
     expect(queries.create).toHaveBeenCalledWith(
       expect.objectContaining({ collectorId: "col-9", createdBy: "selcol-1" }),
+      TX_CLIENT,
     );
   });
 });
@@ -220,10 +229,11 @@ describe("collectionAttempts.create — compat flujo cobrador (NO_PAYMENT)", () 
 
     expect(queries.create).toHaveBeenCalledWith(
       expect.objectContaining({ collectorId: "col-1", attemptType: "NO_PAYMENT" }),
+      TX_CLIENT,
     );
     expect(
       collectionsQueries.updateManagementStatusForActiveTodaySheet,
-    ).toHaveBeenCalledWith("col-1", "inst-1", "NO_PAYMENT");
+    ).toHaveBeenCalledWith("col-1", "inst-1", "NO_PAYMENT", TX_CLIENT);
   });
 
   it("NOT_FOUND agenda automáticamente la próxima visita para el día siguiente", async () => {
@@ -242,10 +252,11 @@ describe("collectionAttempts.create — compat flujo cobrador (NO_PAYMENT)", () 
         attemptType: "NOT_FOUND",
         nextVisitDate: "2026-06-24",
       }),
+      TX_CLIENT,
     );
     // Sigue reflejando la gestión del día en la planilla.
     expect(
       collectionsQueries.updateManagementStatusForActiveTodaySheet,
-    ).toHaveBeenCalledWith("col-1", "inst-1", "NOT_FOUND");
+    ).toHaveBeenCalledWith("col-1", "inst-1", "NOT_FOUND", TX_CLIENT);
   });
 });

@@ -1,6 +1,7 @@
 const bcrypt  = require('bcryptjs');
 const pool    = require('../../config/db');
 const queries = require('./users.queries');
+const { withTransaction } = require('../../utils/transaction');
 const { generateTempPassword } = require('../../utils/tempPassword');
 
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10');
@@ -32,7 +33,16 @@ const create = async ({ full_name, dni, email = null, address = null, role }) =>
 
   const tempPassword  = generateTempPassword();
   const password_hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
-  const user          = await queries.create({ full_name, dni, email, address, password_hash, role });
+  let user;
+  try {
+    user = await queries.create({ full_name, dni, email, address, password_hash, role });
+  } catch (err) {
+    // Alta concurrente con el mismo DNI: el chequeo previo pasó en ambas, la
+    // unique constraint frena la segunda (#49) → 409, no 500.
+    if (err.code === '23505')
+      throw { status: 409, message: 'Ya existe un usuario registrado con ese DNI.' };
+    throw err;
+  }
 
   return { user, tempPassword };
 };
@@ -96,16 +106,16 @@ const updateOwnProfile = async (id, data) => {
   return queries.updateOwnProfile(id, data);
 };
 
+/**
+ * Desactiva un usuario. La guarda del último admin corre en una transacción
+ * con lock sobre los admins activos (#49): dos desactivaciones cruzadas en
+ * paralelo se serializan y nunca dejan el sistema con 0 admins activos.
+ * @param {string} id
+ */
 const deactivate = async (id) => {
   const user = await queries.findById(id);
   if (!user) throw { status: 404, message: 'Usuario no encontrado.' };
   if (user.status === 'INACTIVE') throw { status: 409, message: 'El usuario ya está inactivo.' };
-
-  if (user.role === 'ADMIN') {
-    const admins = await queries.countActiveAdmins();
-    if (admins <= 1)
-      throw { status: 409, message: 'No es posible desactivar el único administrador activo del sistema.' };
-  }
 
   if (['COLLECTOR','SELLER_COLLECTOR'].includes(user.role)) {
     const { rows } = await pool.query(
@@ -116,7 +126,16 @@ const deactivate = async (id) => {
       throw { status: 409, message: 'No es posible desactivar el usuario porque tiene clientes asignados. Reasignelos primero.' };
   }
 
-  await queries.deactivate(id);
+  await withTransaction(async (client) => {
+    if (user.role === 'ADMIN') {
+      await queries.lockActiveAdmins(client);
+      const admins = await queries.countActiveAdmins(client);
+      if (admins <= 1)
+        throw { status: 409, message: 'No es posible desactivar el único administrador activo del sistema.' };
+    }
+    const done = await queries.deactivate(id, client);
+    if (!done) throw { status: 409, message: 'El usuario ya está inactivo.' };
+  });
 };
 
 const activate = async (id) => {
