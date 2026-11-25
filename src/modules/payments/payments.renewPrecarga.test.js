@@ -57,7 +57,6 @@ jest.mock("../notifications/notifications.queries", () => ({
 
 jest.mock("../../utils/transaction", () => ({ withTransaction: jest.fn() }));
 
-const pool = require("../../config/db");
 const queries = require("./payments.queries");
 const cashMovementsQueries = require("./cash_movements.queries");
 const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
