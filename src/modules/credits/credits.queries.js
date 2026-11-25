@@ -986,7 +986,39 @@ const createWriteOffRecord = async (
   return r.rows[0];
 };
 
+/**
+ * Indica si un COLLECTOR puede ver un crédito: el cliente le está asignado
+ * (misma regla que el listado de clientes) o el crédito figura en una planilla
+ * suya (snapshot inmutable que sobrevive a una reasignación del cliente).
+ * Devuelve false también si el crédito no existe, para no revelar su existencia.
+ * @param {string} creditId
+ * @param {string} collectorId
+ * @returns {Promise<boolean>}
+ */
+const isVisibleToCollector = async (creditId, collectorId) => {
+  const r = await pool.query(
+    `SELECT 1
+       FROM credits c
+       JOIN customers cu ON cu.id = c.customer_id
+      WHERE c.id = $1
+        AND (
+          cu.assigned_collector_id = $2
+          OR EXISTS (
+            SELECT 1
+              FROM collection_sheet_details d
+              JOIN collection_sheets s ON s.id = d.sheet_id
+              JOIN installments i      ON i.id = d.installment_id
+             WHERE i.credit_id = c.id
+               AND s.collector_id = $2
+          )
+        )`,
+    [creditId, collectorId],
+  );
+  return r.rows.length > 0;
+};
+
 module.exports = {
+  isVisibleToCollector,
   findAll,
   findById,
   findCreditUnits,

@@ -69,9 +69,21 @@ const getAll = async (filters, requestingUser) => {
   return results.map((c) => stripFieldsByRole(c, requestingUser));
 };
 
+/**
+ * Devuelve el detalle de un cliente. Un COLLECTOR puro solo ve sus clientes
+ * asignados (misma regla que getAll); si no le corresponde → 404.
+ * @param {string} id
+ * @param {{ role: string, id: string }} requestingUser
+ */
 const getById = async (id, requestingUser) => {
   const customer = await queries.findById(id);
   if (!customer) throw { status: 404, message: "Cliente no encontrado." };
+  if (
+    requestingUser.role === "COLLECTOR" &&
+    customer.collector_id !== requestingUser.id
+  ) {
+    throw { status: 404, message: "Cliente no encontrado." };
+  }
   return stripFieldsByRole(customer, requestingUser);
 };
 

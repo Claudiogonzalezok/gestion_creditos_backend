@@ -816,10 +816,15 @@ const reject = async (id, rejectionReason, adminId) => {
 };
 
 /**
- * Devuelve el historial de pagos aprobados de un crédito.
+ * Devuelve el historial de pagos aprobados de un crédito. Un COLLECTOR puro
+ * solo lo ve si el crédito le corresponde (404 en caso contrario).
  * @param {string} creditId
+ * @param {{ id: string, role: string }} requestingUser
  */
-const getByCredit = async (creditId) => {
+const getByCredit = async (creditId, requestingUser) => {
+  // require diferido: credits.service ya importa este módulo (dependencia circular).
+  const { assertCreditVisible } = require("../credits/credits.service");
+  await assertCreditVisible(creditId, requestingUser);
   return queries.findPaymentsByCredit(creditId);
 };
 

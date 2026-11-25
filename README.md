@@ -378,7 +378,7 @@ PATCH  /api/users/me/change-password
 
 ```
 GET    /api/customers
-GET    /api/customers/:id
+GET    /api/customers/:id            → COLLECTOR: solo clientes asignados (404 si no)
 POST   /api/customers
 PUT    /api/customers/:id
 PATCH  /api/customers/:id/deactivate | activate
@@ -465,7 +465,8 @@ PATCH  /api/interest-rates/:id/deactivate | activate
 ```
 POST   /api/credits/simulate          → Cotizador (sin token)
 GET    /api/credits
-GET    /api/credits/:id
+GET    /api/credits/:id            → COLLECTOR: solo créditos de clientes asignados o de su planilla (404 si no)
+GET    /api/credits/:creditId/payments → Historial de cobros; mismo alcance que el detalle
 POST   /api/credits
 PATCH  /api/credits/:id/approve
 PATCH  /api/credits/:id/reject
@@ -529,7 +530,7 @@ POST   /api/collections
 GET    /api/collection-attempts?collector_id=uuid&installment_id=uuid
 GET    /api/collection-attempts/:id
 POST   /api/collection-attempts
-PATCH  /api/collection-attempts/:id/void
+PATCH  /api/collection-attempts/:id/void → Solo quien lo creó (created_by) o ADMIN; si no, 403
 ```
 
 ### Comisiones

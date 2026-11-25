@@ -76,8 +76,11 @@ const reverse = async (req, res) => {
 
 const getByCredit = async (req, res) => {
   try {
-    return response.success(res, await service.getByCredit(req.params.creditId));
-  } catch (err) { return response.serverError(res, err); }
+    return response.success(res, await service.getByCredit(req.params.creditId, req.user));
+  } catch (err) {
+    if (err.status === 404) return response.notFound(res, err.message);
+    return response.serverError(res, err);
+  }
 };
 
 module.exports = { getAll, getById, create, approve, reject, adminDirect, reverse, getByCredit };

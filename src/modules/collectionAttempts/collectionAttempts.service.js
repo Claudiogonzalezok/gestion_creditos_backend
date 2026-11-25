@@ -148,7 +148,7 @@ const getById = async (id, requestingUser) => {
 
 /**
  * Anula un intento de cobranza (supersede pattern). Reglas:
- *   - Solo el cobrador que lo registró puede anularlo (excepto ADMIN).
+ *   - Solo quien lo registró (created_by) puede anularlo (excepto ADMIN).
  *   - Solo el mismo día calendario en que fue registrado.
  *   - No se puede anular un intento ya anulado.
  *   - Nunca se elimina físicamente: queda voided_at / voided_by para auditoría.
@@ -164,10 +164,12 @@ const voidAttempt = async (id, requestingUser) => {
   if (attempt.voided_at)
     throw { status: 409, message: 'Este intento ya fue anulado.' };
 
-  // ADMIN puede anular siempre; cobradores solo lo suyo
+  // ADMIN puede anular siempre; el resto solo lo que creó. Se valida
+  // created_by y no collector_id: una visita programada por el ADMIN queda
+  // imputada al cobrador asignado, pero él no debe poder anularla.
   if (requestingUser.role !== 'ADMIN') {
-    if (attempt.collector_id !== requestingUser.id)
-      throw { status: 403, message: 'Solo el cobrador que registró el intento puede anularlo.' };
+    if (attempt.created_by !== requestingUser.id)
+      throw { status: 403, message: 'Solo quien registró el intento puede anularlo.' };
   }
 
   // Solo mismo día calendario (created_at::date = current_date)
