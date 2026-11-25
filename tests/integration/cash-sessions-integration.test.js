@@ -27,7 +27,7 @@ setupTestSuite();
 const asUser = (u) => ({ id: u.id, role: u.role });
 
 const seedCollectorWithInstallment = async () => {
-  const collector = await createUserFixture({ role: 'ADMIN' });
+  const collector = await createUserFixture({ role: 'COLLECTOR' });
   const customer  = await createCustomerFixture();
   await pool.query(
     `UPDATE customers SET assigned_collector_id = $1 WHERE id = $2`,

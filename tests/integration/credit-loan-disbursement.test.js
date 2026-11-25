@@ -7,7 +7,7 @@
 //   · sin caja abierta, la aprobación se rechaza y no muta nada.
 //   · si el préstamo supera el efectivo disponible, se rechaza y no muta nada.
 
-const { pool, setupTestSuite } = require("./helpers/db");
+const { pool, setupTestSuite, preserveTable } = require("./helpers/db");
 const {
   createUserFixture,
   createCreditFixture,
@@ -16,6 +16,7 @@ const cashSessionsService = require("../../src/modules/cashSessions/cashSessions
 const cashSessionsQueries = require("../../src/modules/cashSessions/cashSessions.queries");
 const creditsService = require("../../src/modules/credits/credits.service");
 
+preserveTable("interest_rates");
 setupTestSuite();
 
 const asUser = (u) => ({ id: u.id, role: u.role });

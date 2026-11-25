@@ -149,6 +149,19 @@ daysFromNow(5)    // 'YYYY-MM-DD' en 5 días
 isoDate(new Date()) // formatea cualquier Date
 ```
 
+Las fechas se calculan en la zona horaria de la sesión de PostgreSQL
+(`TZ` o, si no está, `America/Argentina/Buenos_Aires`, igual que
+`src/config/db.js`), así coinciden con `CURRENT_DATE` aunque Node corra en otra
+zona. La suite debe pasar igual con `TZ=UTC` y con `TZ=America/Argentina/Buenos_Aires`.
+
+## Tablas de referencia
+
+`interest_rates` y otras tablas de referencia no se truncan entre tests. Si una
+suite las modifica, llamá `preserveTable("interest_rates")` antes de
+`setupTestSuite()`: guarda las filas al inicio de la suite y las restaura al final.
+Los `jest.spyOn` se restauran en un `finally` o `afterEach`, nunca solo al final
+del test.
+
 ## Troubleshooting
 
 **"[integration] Abortado: ..."**

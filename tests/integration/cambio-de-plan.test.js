@@ -4,7 +4,7 @@
 // y —crítico— que las cuotas PLAN_CHANGE_CANCELLED queden EXCLUIDAS del saldo
 // pendiente (getTotalPendingBalance), que es el riesgo principal de la feature.
 
-const { pool, setupTestSuite } = require("./helpers/db");
+const { pool, setupTestSuite, preserveTable } = require("./helpers/db");
 const {
   createUserFixture,
   createCreditFixture,
@@ -14,6 +14,7 @@ const creditsService = require("../../src/modules/credits/credits.service");
 const paymentsQueries = require("../../src/modules/payments/payments.queries");
 const { today } = require("./helpers/dates");
 
+preserveTable("interest_rates");
 setupTestSuite();
 
 // Crea un crédito LOAN ACTIVE de 6 cuotas (100000 capital, 20%) con `paid`

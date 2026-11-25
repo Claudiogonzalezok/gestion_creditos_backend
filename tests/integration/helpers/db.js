@@ -137,4 +137,39 @@ const setupTestSuite = () => {
   });
 };
 
-module.exports = { pool, truncateAll, withTestClient, setupTestSuite };
+/**
+ * Preserva una tabla de referencia (no truncada entre tests) que una suite
+ * modifica: guarda sus filas en beforeAll y las restaura en afterAll, para que
+ * los cambios no se filtren a otras suites. Llamar antes de setupTestSuite(),
+ * así su afterAll corre antes del cierre del pool.
+ * Solo para tablas sin FKs entrantes (p.ej. interest_rates).
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ */
+const preserveTable = (table) => {
+  let snapshot = [];
+
+  beforeAll(async () => {
+    snapshot = (await pool.query(`SELECT * FROM ${table}`)).rows;
+  });
+
+  afterAll(async () => {
+    assertTestDatabase();
+    await pool.query(`DELETE FROM ${table}`);
+    for (const row of snapshot) {
+      const cols = Object.keys(row);
+      const params = cols.map((_, i) => `$${i + 1}`).join(", ");
+      await pool.query(
+        `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${params})`,
+        cols.map((c) => row[c]),
+      );
+    }
+  });
+};
+
+module.exports = {
+  pool,
+  truncateAll,
+  withTestClient,
+  setupTestSuite,
+  preserveTable,
+};
