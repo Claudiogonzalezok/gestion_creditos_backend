@@ -11,12 +11,15 @@ const path = require("path");
 const fs = require("fs");
 const { Pool } = require("pg");
 
-require("dotenv").config({ path: path.join(__dirname, "../../.env.test") });
+const { loadTestEnv } = require("./helpers/testDbGuard");
 
 const MIGRATIONS_DIR = path.join(__dirname, "../../src/config/migrations");
 
 module.exports = async () => {
   console.log("\n[integration:setup] Configurando DB de test...");
+
+  // Aborta antes de crear el pool si la base no es de test.
+  loadTestEnv();
 
   const pool = new Pool({
     host: process.env.DB_HOST,
@@ -70,11 +73,13 @@ module.exports = async () => {
       await client.query("COMMIT");
       ran++;
     } catch (err) {
-      await client.query("ROLLBACK");
-      throw new Error(`Falló migración ${file}: ${err.message}`);
-    } finally {
+      await client.query("ROLLBACK").catch(() => {});
       client.release();
+      // Cerrar el pool para no dejar el proceso colgado tras el fallo.
+      await pool.end().catch(() => {});
+      throw new Error(`Falló migración ${file}: ${err.message}`);
     }
+    client.release();
   }
   console.log(
     `[integration:setup] Migraciones aplicadas: ${ran} nuevas (total ${files.length}).`,

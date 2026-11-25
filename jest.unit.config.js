@@ -4,7 +4,7 @@
 
 module.exports = {
   testEnvironment: 'node',
-  roots:           ['<rootDir>/src'],
+  roots:           ['<rootDir>/src', '<rootDir>/tests/unit'],
   testMatch:       ['**/*.test.js'],
   // Excluye explícitamente la carpeta de integration para evitar mezclas.
   testPathIgnorePatterns: ['/node_modules/', '/tests/integration/'],

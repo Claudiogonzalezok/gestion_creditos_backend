@@ -13,11 +13,12 @@
 //       });
 //     });
 
-const path = require("path");
 
 // Importante: cargar .env.test ANTES de require('src/config/db'),
 // porque el pool se crea al momento del require leyendo process.env.
-require("dotenv").config({ path: path.join(__dirname, "../../../.env.test") });
+// La guarda aborta si la base no es de test, antes de crear el pool.
+const { loadTestEnv, assertTestDatabase } = require("./testDbGuard");
+loadTestEnv();
 
 const pool = require("../../../src/config/db");
 
@@ -68,6 +69,8 @@ const TRANSACTIONAL_TABLES = [
  * fallen al leer parámetros financieros.
  */
 const truncateAll = async () => {
+  // Re-verificación defensiva justo antes del TRUNCATE CASCADE.
+  assertTestDatabase();
   await pool.query(
     `TRUNCATE TABLE ${TRANSACTIONAL_TABLES.join(", ")} RESTART IDENTITY CASCADE`,
   );
@@ -128,8 +131,9 @@ const setupTestSuite = () => {
   });
 
   afterAll(async () => {
-    // El pool global se cierra en globalTeardown, pero si una suite quiere
-    // forzar limpieza inmediata, este afterAll lo deja a salvo.
+    // Cada test file tiene su propio registro de módulos y por lo tanto su
+    // propio pool: se cierra acá (globalTeardown corre en otro contexto).
+    await pool.end().catch(() => {});
   });
 };
 
