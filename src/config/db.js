@@ -12,6 +12,9 @@ types.setTypeParser(1082, (val) => val); // 1082 = OID del tipo DATE en PostgreS
 // flight". Esta forma es semánticamente equivalente y libre de race.
 const TIME_ZONE = process.env.TZ || 'America/Argentina/Buenos_Aires';
 
+// En producción no hay fallback a superusuario sin contraseña (#54).
+require('./secureConfig').validateSecureConfig();
+
 const pool = new Pool({
   host:     process.env.DB_HOST     || 'localhost',
   port:     parseInt(process.env.DB_PORT || '5432'),

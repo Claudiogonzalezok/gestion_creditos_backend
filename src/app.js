@@ -8,6 +8,14 @@ const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./config/swagger");
+const {
+  validateSecureConfig,
+  isDocsEnabled,
+  areTestRoutesEnabled,
+} = require("./config/secureConfig");
+
+// Falla el arranque en producción con flags inseguros o sin credenciales de BD.
+validateSecureConfig();
 
 const app = express();
 
@@ -43,22 +51,25 @@ if (process.env.TRUST_PROXY) {
 }
 
 // ── Documentación API ─────────────────────────────────────────
-// CSP permisiva solo para esta ruta (swagger-ui necesita inline scripts/styles)
-app.use(
-  "/api/docs",
-  (req, res, next) => {
-    res.setHeader(
-      "Content-Security-Policy",
-      "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;",
-    );
-    next();
-  },
-  swaggerUi.serve,
-  swaggerUi.setup(swaggerSpec, {
-    customSiteTitle: "API Gestión Créditos",
-    swaggerOptions: { persistAuthorization: true },
-  }),
-);
+// Solo fuera de producción (#34). CSP permisiva solo para esta ruta
+// (swagger-ui necesita inline scripts/styles).
+if (isDocsEnabled()) {
+  app.use(
+    "/api/docs",
+    (req, res, next) => {
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:;",
+      );
+      next();
+    },
+    swaggerUi.serve,
+    swaggerUi.setup(swaggerSpec, {
+      customSiteTitle: "API Gestión Créditos",
+      swaggerOptions: { persistAuthorization: true },
+    }),
+  );
+}
 
 // ── Seguridad y CORS ──────────────────────────────────────────
 app.use(helmet());
@@ -204,14 +215,11 @@ app.use(
 );
 app.use("/api/reports", require("./modules/reports/reports.routes"));
 app.use("/api/portal", require("./modules/portal/portal.routes"));
-app.use(
-  "/api/notifications",
-  require("./modules/notifications/notifications.routes"),
-);
 app.use("/api/admin/cron-logs", require("./modules/cronLogs/cronLogs.routes"));
 
 // ── Rutas de testing (solo E2E, ver guarda en test.routes.js) ──
-if (process.env.ENABLE_TEST_ROUTES === "true") {
+// Nunca en producción: validateSecureConfig ya aborta el arranque si el flag está.
+if (areTestRoutesEnabled()) {
   app.use("/api/test", require("./modules/test/test.routes"));
 }
 
