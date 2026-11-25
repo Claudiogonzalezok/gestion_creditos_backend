@@ -214,7 +214,14 @@ describe("#35 · bloqueo de login", () => {
     const err = await caught(authService.loginInternal(admin.dni, "mala"));
     expect(err.code).toBeUndefined();
     const { rows } = await pool.query("SELECT locked_until FROM users WHERE id = $1", [admin.id]);
-    expect(new Date(rows[0].locked_until).getTime()).toBeLessThan(Date.now());
+    expect(rows[0].locked_until).toBeNull();
+
+    // Pero N fallos más tras el vencimiento vuelven a bloquear (conteo reinicia y acumula).
+    await caught(authService.loginInternal(admin.dni, "mala"));
+    const relock = await caught(authService.loginInternal(admin.dni, "mala"));
+    expect(relock.code).toBe("ACCOUNT_TEMP_LOCKED");
+    const again = await pool.query("SELECT locked_until FROM users WHERE id = $1", [admin.id]);
+    expect(new Date(again.rows[0].locked_until).getTime()).toBeGreaterThan(Date.now());
   });
 
   it("no-ADMIN: el bloqueo sigue siendo permanente con code ACCOUNT_LOCKED", async () => {

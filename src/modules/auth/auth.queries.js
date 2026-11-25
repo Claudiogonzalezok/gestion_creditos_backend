@@ -48,6 +48,8 @@ const registerFailedAttempt = async (userId, maxAttempts, lockMinutes) => {
            ELSE u.force_relogin_at END,
          locked_until = CASE
            WHEN u.role = 'ADMIN' AND n.next_attempts >= $2 THEN NOW() + make_interval(mins => $3::int)
+           -- Bloqueo vencido: se limpia para que el conteo siga acumulando y vuelva a bloquear.
+           WHEN u.locked_until IS NOT NULL AND u.locked_until <= NOW() THEN NULL
            ELSE u.locked_until END,
          updated_at = NOW()
      FROM (
