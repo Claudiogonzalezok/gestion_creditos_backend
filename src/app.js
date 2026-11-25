@@ -93,14 +93,8 @@ if (process.env.NODE_ENV !== "test") {
 }
 
 // ── Health check ──────────────────────────────────────────────
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    message: "API funcionando correctamente.",
-    version: "1.0.0",
-    env: process.env.NODE_ENV,
-  });
-});
+// Verifica la base (SELECT 1 con timeout): 503 si no responde.
+app.use("/api/health", require("./modules/health/health.routes"));
 
 // ── Rate limiting — endpoints de login ───────────────────────
 const disableLoginRateLimit = envFlag(process.env.DISABLE_LOGIN_RATE_LIMIT);
@@ -262,24 +256,9 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ ok: false, message: "Error interno del servidor." });
 });
 
+// Arranque + cron + cierre ordenado (SIGTERM/SIGINT, errores no manejados).
 if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    // eslint-disable-next-line no-console -- log de arranque
-    console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
-    // eslint-disable-next-line no-console -- log de arranque
-    console.log(`📋  Ambiente: ${process.env.NODE_ENV || "development"}`);
-
-    // Iniciar cron jobs solo fuera del entorno de tests
-    if (process.env.NODE_ENV !== "test") {
-      require("./jobs/overdueInstallments.job").start();
-      require("./jobs/creditExpiry.job").start();
-      require("./jobs/weeklyCommissionCycle.job").start();
-      require("./jobs/tokenCleanup.job").start();
-      require("./jobs/installmentDueSoon.job").start();
-      require("./jobs/cashRegisterReminder.job").start();
-    }
-  });
+  require("./utils/lifecycle").startServer(app);
 }
 
 module.exports = app;

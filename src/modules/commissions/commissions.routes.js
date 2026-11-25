@@ -56,7 +56,8 @@ router.put('/salary/:userId',
     body('weekly_amount')
       .custom(val => {
         const n = parseFloat(val);
-        if (isNaN(n) || n < 0) throw new Error('El sueldo semanal debe ser un número mayor o igual a 0.');
+        // Debe coincidir con el CHECK salaries_weekly_amount_check (> 0) de la DB.
+        if (isNaN(n) || n <= 0) throw new Error('El sueldo semanal debe ser un número mayor a 0.');
         return true;
       }),
   ],

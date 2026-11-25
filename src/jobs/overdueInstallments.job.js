@@ -61,6 +61,7 @@ const cron = require("node-cron");
 const pool = require("../config/db");
 const { getValue } = require("../modules/systemConfig/systemConfig.queries");
 const { runWithLogging, ts } = require("../utils/cronLogger");
+const { rollbackSafely, releaseClient } = require("../utils/transaction");
 const notificationsService = require("../modules/notifications/notifications.service");
 const notificationsQueries = require("../modules/notifications/notifications.queries");
 
@@ -118,6 +119,7 @@ const getLastSuccessfulRunDate = async (client) => {
 const markOverdueAndApplyPenalty = () =>
   runWithLogging("overdueInstallments", async () => {
     const client = await pool.connect();
+    let connectionErr = null;
     try {
       await client.query("BEGIN");
 
@@ -249,10 +251,11 @@ const markOverdueAndApplyPenalty = () =>
         },
       };
     } catch (err) {
-      await client.query("ROLLBACK");
+      // Un ROLLBACK fallido no tapa el error original; la conexión rota se descarta.
+      connectionErr = await rollbackSafely(client);
       throw err;
     } finally {
-      client.release();
+      releaseClient(client, connectionErr);
     }
   });
 
