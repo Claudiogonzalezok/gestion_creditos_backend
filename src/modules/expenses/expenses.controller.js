@@ -36,7 +36,7 @@ const create = async (req, res) => {
  */
 const update = async (req, res) => {
   try {
-    const result = await service.update(req.params.id, req.body);
+    const result = await service.update(req.params.id, req.body, req.user);
     return response.success(res, result, 'Gasto actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
@@ -48,7 +48,7 @@ const update = async (req, res) => {
 
 const remove = async (req, res) => {
   try {
-    await service.remove(req.params.id);
+    await service.remove(req.params.id, req.user);
     return response.success(res, null, 'Gasto eliminado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);

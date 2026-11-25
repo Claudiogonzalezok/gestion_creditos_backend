@@ -268,6 +268,10 @@ ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 
 > `JWT_EXPIRY_INTERNAL` y `JWT_EXPIRY_PORTAL` son valores por defecto. Los valores reales se leen dinámicamente de `system_config` en cada login.
 
+> **Configuración segura en producción** (`NODE_ENV=production`, ver `src/config/secureConfig.js`):
+> - El arranque falla si `ENABLE_TEST_ROUTES=true` o si falta `DB_USER` / `DB_PASSWORD` (no hay fallback a `postgres` sin contraseña).
+> - La documentación Swagger (`/api/docs`) no se monta y responde 404. En desarrollo sigue disponible.
+
 ### Scripts npm
 
 | Comando                          | Descripción                                                |
@@ -288,6 +292,12 @@ ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 | `npm run test:integration:local` | Tests de integración con BD local (sin Docker)             |
 | `npm run test:all`               | Unit + integration en secuencia                            |
 | `npm run test:db:up`             | Levanta BD PostgreSQL de test en Docker                    |
+
+**Setup re-ejecutable.** `migration:run` y `seed` se pueden correr las veces que haga falta:
+
+- Las migraciones aplicadas se registran por nombre en `_migrations` y no se repiten. Un advisory lock evita que dos procesos migren a la vez. Los prefijos repetidos históricos (002, 006, 007, 033, 037) ya están aplicados en producción y no se renumeran; un prefijo repetido nuevo aborta el runner. Las correcciones van en migraciones nuevas (p. ej. 051 bloquea el `DELETE` físico de planillas).
+- Las semillas abortan con `NODE_ENV=production`, no cambian contraseñas de usuarios existentes y no duplican datos. La demo de planillas admin solo se regenera a mano con `node src/seeds/11_admin_collections_ui_refresh.seed.js`.
+- `tests/integration/idempotent-setup.test.js` corre migraciones y semillas dos veces sobre una BD vacía y compara `password_hash` y conteos.
 | `npm run test:db:down`           | Baja y elimina el contenedor de test                       |
 | `npm run cron:run`               | Ejecuta un cron job manualmente                            |
 | `npm run db:studio`              | Explorador de BD liviano en consola                        |

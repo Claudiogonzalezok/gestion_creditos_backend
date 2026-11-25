@@ -11,18 +11,9 @@ const seed = async () => {
   const existing = await pool.query(`SELECT id FROM users WHERE dni = '00000000'`);
 
   if (existing.rows.length > 0) {
-    console.log('   ⚠️   Admin ya existe — actualizando contraseña y desbloqueando...');
-    await pool.query(
-      `UPDATE users
-       SET password_hash    = $1,
-           is_temp_password = TRUE,
-           failed_attempts  = 0,
-           locked_at        = NULL,
-           force_relogin_at = NULL,
-           updated_at       = NOW()
-       WHERE dni = '00000000'`,
-      [hash]
-    );
+    // Re-ejecutar el seed NO toca credenciales existentes (issue #53).
+    console.log('   ⏭️   Admin ya existe — se conserva su contraseña.');
+    return;
   } else {
     await pool.query(
       `INSERT INTO users (full_name, dni, email, password_hash, role, status, is_temp_password)

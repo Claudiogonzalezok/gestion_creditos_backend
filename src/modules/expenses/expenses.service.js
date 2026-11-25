@@ -137,9 +137,10 @@ const create = async (data, requestingUser) => {
 
 /**
  * IMP-7: un gasto queda inmutable cuando su caja contable (cash_session) está
- * CLOSED — fuente de verdad post-Fase 2/3. Se mantiene además el check legacy
- * sobre cash_registers para gastos pre-Fase 2 que pudieran no tener
- * cash_session_id asociado.
+ * CLOSED — fuente de verdad post-Fase 2/3. El check legacy sobre
+ * cash_registers aplica SOLO a gastos DAILY pre-Fase 2 sin cash_session_id:
+ * un gasto COMPANY nunca pasó por la caja operativa (sale de Caja General), y
+ * un gasto con cash_session_id ya queda cubierto por el estado de su sesión.
  */
 const assertExpenseMutable = async (expense) => {
   if (expense.cash_session_id && expense.cash_session_status === "CLOSED")
@@ -147,6 +148,7 @@ const assertExpenseMutable = async (expense) => {
       status: 409,
       message: "No se puede modificar un gasto cuya caja ya fue cerrada.",
     };
+  if (expense.cash_session_id || expense.source === "COMPANY") return;
   const closedLegacy = await queries.hasCashRegister(
     expense.expense_date || expense.created_at,
   );
@@ -159,17 +161,51 @@ const assertExpenseMutable = async (expense) => {
 };
 
 /**
+ * Issue #50: compensa en la Caja General la diferencia de monto de un gasto
+ * COMPANY con un movimiento ADJUSTMENT (OUT si aumenta, IN si disminuye).
+ * insertMovementWithBalance bloquea la cuenta y rechaza saldo negativo (409).
+ * @param {object} client - client transaccional
+ * @param {{ expense: object, delta: number, description: string, userId: string }} params
+ *   expense: gasto original bloqueado; delta: nuevo monto menos monto original.
+ */
+const adjustCompanyLedger = async (
+  client,
+  { expense, delta, description, userId },
+) => {
+  const amount = Number(Math.abs(delta).toFixed(2));
+  if (expense.source !== "COMPANY" || amount === 0) return;
+
+  const accountId =
+    (await queries.findCompanyExpenseAccountId(expense.id, client)) ||
+    (await cashAccountsQueries.findGeneralCashAccount(client))?.id;
+  if (!accountId)
+    throw {
+      status: 409,
+      message: "No existe una Caja General activa.",
+      code: "NO_GENERAL_CASH_ACCOUNT",
+    };
+
+  await cashAccountsService.insertMovementWithBalance(client, {
+    cashAccountId: accountId,
+    movementType: "ADJUSTMENT",
+    direction: delta > 0 ? "OUT" : "IN",
+    amount,
+    description,
+    referenceType: "EXPENSE",
+    referenceId: expense.id,
+    createdBy: userId,
+  });
+};
+
+/**
  * Actualiza un gasto validando que no pertenezca a una caja ya cerrada.
+ * Si es COMPANY, ajusta el saldo de la Caja General en la misma transacción.
  * @param {string} id
  * @param {{ amount: number|string, description: string, expense_date?: string, payment_method: 'CASH'|'TRANSFER', transfer_reference?: string|null, category_id?: string|null }} data
+ * @param {{ id: string }} requestingUser
  * @returns {Promise<object>}
  */
-const update = async (id, data) => {
-  const expense = await queries.findById(id);
-  if (!expense) throw { status: 404, message: "Gasto no encontrado." };
-
-  await assertExpenseMutable(expense);
-
+const update = async (id, data, requestingUser) => {
   if (data.category_id) {
     const category = await queries.findActiveCategoryById(data.category_id);
     if (!category)
@@ -179,24 +215,59 @@ const update = async (id, data) => {
       };
   }
 
-  return queries.update({
-    id,
-    amount: parseFloat(data.amount),
-    description: data.description,
-    expenseDate: data.expense_date,
-    paymentMethod: data.payment_method,
-    transferReference: data.transfer_reference || null,
-    categoryId: data.category_id || null,
+  const { withTransaction } = require("../../utils/transaction");
+  return withTransaction(async (client) => {
+    const expense = await queries.findById(id, client, { forUpdate: true });
+    if (!expense) throw { status: 404, message: "Gasto no encontrado." };
+
+    await assertExpenseMutable(expense);
+
+    const amount = parseFloat(data.amount);
+    await adjustCompanyLedger(client, {
+      expense,
+      delta: amount - expense.amount,
+      description: `Ajuste por edición de gasto: ${data.description}`,
+      userId: requestingUser.id,
+    });
+
+    return queries.update(
+      {
+        id,
+        amount,
+        description: data.description,
+        expenseDate: data.expense_date,
+        paymentMethod: data.payment_method,
+        transferReference: data.transfer_reference || null,
+        categoryId: data.category_id || null,
+      },
+      client,
+    );
   });
 };
 
-const remove = async (id) => {
-  const expense = await queries.findById(id);
-  if (!expense) throw { status: 404, message: "Gasto no encontrado." };
+/**
+ * Elimina un gasto. Si es COMPANY, devuelve su monto a la Caja General en la
+ * misma transacción.
+ * @param {string} id
+ * @param {{ id: string }} requestingUser
+ */
+const remove = async (id, requestingUser) => {
+  const { withTransaction } = require("../../utils/transaction");
+  await withTransaction(async (client) => {
+    const expense = await queries.findById(id, client, { forUpdate: true });
+    if (!expense) throw { status: 404, message: "Gasto no encontrado." };
 
-  await assertExpenseMutable(expense);
+    await assertExpenseMutable(expense);
 
-  await queries.remove(id);
+    await adjustCompanyLedger(client, {
+      expense,
+      delta: -expense.amount,
+      description: `Ajuste por eliminación de gasto: ${expense.description}`,
+      userId: requestingUser.id,
+    });
+
+    await queries.remove(id, client);
+  });
 };
 
 module.exports = { getAll, getById, create, update, remove };

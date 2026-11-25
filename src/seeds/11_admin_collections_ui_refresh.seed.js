@@ -6,7 +6,7 @@ const seed10 = require('./10_admin_collections_ui_states.seed');
  * Reejecuta la semilla 10 y deja el escenario listo para probar colores/estados.
  */
 const seed = async () => {
-  await seed10();
+  await seed10({ force: true });
   console.log('   OK seed 11: demo de planillas admin refrescada.');
 };
 

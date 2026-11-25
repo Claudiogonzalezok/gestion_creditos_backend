@@ -1,5 +1,15 @@
 // Semilla puntual — SOLO usuarios (admin + operativos), sin datos demo (productos, clientes, créditos)
 // Uso: node src/seeds/seed-users-only.js
+require('dotenv').config();
+
+// Abortar antes de abrir conexiones si el entorno es producción (issue #53).
+try {
+  require('./guard').assertSeedAllowed();
+} catch (err) {
+  console.error(`❌  ${err.message}`);
+  process.exit(1);
+}
+
 const bcrypt = require('bcryptjs');
 const pool = require('../config/db');
 const seedAdmin = require('./01_admin.seed');
@@ -10,19 +20,8 @@ const seedOperationalUsers = async () => {
   const hash = await bcrypt.hash(operationalPassword, 10);
 
   if (check.rows.length > 0) {
-    console.log('   ⚠️   Usuarios operativos ya existen — actualizando credenciales...');
-    await pool.query(
-      `UPDATE users
-       SET password_hash = $1,
-           is_temp_password = FALSE,
-           failed_attempts = 0,
-           locked_at = NULL,
-           force_relogin_at = NULL,
-           updated_at = NOW()
-       WHERE dni IN ('11111111', '22222222', '33333333')`,
-      [hash]
-    );
-    console.log('   ✅  Credenciales de SELLER / COLLECTOR / SELLER_COLLECTOR actualizadas a 123456.');
+    // Re-ejecutar NO toca credenciales existentes (issue #53).
+    console.log('   ⏭️   Usuarios operativos ya existen — se conservan sus contraseñas.');
     return;
   }
 
