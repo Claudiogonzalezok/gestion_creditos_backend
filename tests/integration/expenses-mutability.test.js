@@ -32,7 +32,7 @@ describe('S — IMP-7: expenses respeta cash_sessions.status', () => {
 
     await expect(expensesService.update(expense.id, {
       amount: 300, description: 'modificado', payment_method: 'CASH',
-    })).rejects.toMatchObject({ status: 409 });
+    }, asUser(admin))).rejects.toMatchObject({ status: 409 });
   });
 
   it('remove bloqueado con 409 si la cash_session está CLOSED', async () => {
@@ -48,7 +48,7 @@ describe('S — IMP-7: expenses respeta cash_sessions.status', () => {
       declared: [{ payment_method: 'CASH', declared_amount: 850 }],
     }, asUser(admin));
 
-    await expect(expensesService.remove(expense.id))
+    await expect(expensesService.remove(expense.id, asUser(admin)))
       .rejects.toMatchObject({ status: 409 });
 
     // El expense sigue existiendo
@@ -68,7 +68,7 @@ describe('S — IMP-7: expenses respeta cash_sessions.status', () => {
     const updated = await expensesService.update(expense.id, {
       amount: 175, description: 'modificado OK',
       expense_date: today(), payment_method: 'CASH',
-    });
+    }, asUser(admin));
     expect(updated.amount).toBe(175);
   });
 });

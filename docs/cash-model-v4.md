@@ -100,6 +100,8 @@ El frontend (`cash-register.component`, `expense-side-panel.component`) deshabil
 
 **Gasto (`POST /api/expenses`, `source: 'COMPANY'`):** ver `expenses.service.create`. Inserta `EXPENSE OUT` directo en `cash_account_movements` vía `insertMovementWithBalance`, sin tocar `cash_sessions`.
 
+**Edición/baja de un gasto `COMPANY` (`PUT`/`DELETE /api/expenses/:id`, issue #50):** en la misma transacción (fila del gasto bloqueada `FOR UPDATE`) se registra un `ADJUSTMENT` con `reference_type = 'EXPENSE'` sobre la cuenta del movimiento original: `OUT` por la diferencia si el monto sube (409 `INSUFFICIENT_BALANCE` si dejaría saldo negativo), `IN` si baja, `IN` por el monto completo al eliminar. El chequeo legacy de `cash_registers` aplica solo a gastos `DAILY` sin `cash_session_id`; los gastos `DAILY` no tocan la Caja General.
+
 **Ingreso manual a Caja General:** no tiene endpoint dedicado — se usa el genérico `POST /api/cash-accounts/:id/movements` con `movement_type: 'MANUAL_INCOME'` (frontend: `CashRegisterService.createManualIncomeCompany`).
 
 **Conversión (`POST /api/cash-register/conversions`, `criteria: 'COMPANY'`):** ver `cashRegister.service.createConversion`. Como `current_balance` es un pool único, una conversión CASH↔TRANSFER en Caja General tiene **delta neto 0** — no inserta ningún movimiento en `cash_account_movements`, solo valida que el monto no supere el saldo disponible. Por eso una conversión COMPANY **no aparece** en el reporte de Movimientos de Caja General (§5.3): no generó ningún movimiento real, solo se validó. Sigue visible en el tab "Cash Conversions Report" (que lee de otra fuente).

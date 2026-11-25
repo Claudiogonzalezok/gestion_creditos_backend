@@ -2,6 +2,11 @@ jest.mock("./expenses.queries", () => ({
   findActiveCategoryById: jest.fn(),
   findRecentDuplicate: jest.fn(),
   create: jest.fn(),
+  findById: jest.fn(),
+  findCompanyExpenseAccountId: jest.fn(),
+  hasCashRegister: jest.fn(),
+  update: jest.fn(),
+  remove: jest.fn(),
 }));
 
 jest.mock("../cashSessions/cashSessions.queries", () => ({
@@ -31,6 +36,8 @@ const {
   getActiveJornadaDate,
 } = require("../businessDays/businessDays.service");
 const { withTransaction } = require("../../utils/transaction");
+const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
+const cashAccountsService = require("../cashAccounts/cashAccounts.service");
 const service = require("./expenses.service");
 
 describe("expenses.service", () => {
@@ -82,5 +89,60 @@ describe("expenses.service", () => {
       }),
       client,
     );
+  });
+
+  describe("update/remove — issue #50", () => {
+    const user = { id: "admin-1" };
+    const data = { amount: 350, description: "proveedor", payment_method: "TRANSFER" };
+
+    it("COMPANY: edita con ADJUSTMENT OUT por la diferencia sobre la cuenta original", async () => {
+      queries.findById.mockResolvedValue({ id: "e1", amount: 200, source: "COMPANY" });
+      queries.findCompanyExpenseAccountId.mockResolvedValue("acc-1");
+      queries.update.mockResolvedValue({ id: "e1", amount: 350 });
+
+      await service.update("e1", data, user);
+
+      expect(queries.findById).toHaveBeenCalledWith("e1", client, { forUpdate: true });
+      expect(queries.hasCashRegister).not.toHaveBeenCalled();
+      expect(cashAccountsService.insertMovementWithBalance).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({
+          cashAccountId: "acc-1", movementType: "ADJUSTMENT", direction: "OUT",
+          amount: 150, referenceType: "EXPENSE", referenceId: "e1", createdBy: "admin-1",
+        }),
+      );
+      expect(queries.update).toHaveBeenCalledWith(expect.objectContaining({ amount: 350 }), client);
+    });
+
+    it("COMPANY sin movimiento original: usa la Caja General; sin ella responde 409", async () => {
+      queries.findById.mockResolvedValue({ id: "e1", amount: 200, source: "COMPANY" });
+      queries.findCompanyExpenseAccountId.mockResolvedValue(null);
+      cashAccountsQueries.findGeneralCashAccount.mockResolvedValueOnce({ id: "gen" });
+
+      await service.remove("e1", user);
+      expect(cashAccountsService.insertMovementWithBalance).toHaveBeenCalledWith(
+        client,
+        expect.objectContaining({ cashAccountId: "gen", direction: "IN", amount: 200 }),
+      );
+      expect(queries.remove).toHaveBeenCalledWith("e1", client);
+
+      cashAccountsQueries.findGeneralCashAccount.mockResolvedValueOnce(null);
+      await expect(service.remove("e1", user)).rejects.toMatchObject({
+        status: 409, code: "NO_GENERAL_CASH_ACCOUNT",
+      });
+    });
+
+    it("DAILY legacy sin caja: aplica el chequeo de cash_registers y no toca Caja General", async () => {
+      queries.findById.mockResolvedValue({ id: "e2", amount: 100, source: "DAILY", expense_date: "2026-01-01" });
+      queries.hasCashRegister.mockResolvedValue(true);
+
+      await expect(service.update("e2", data, user)).rejects.toMatchObject({ status: 409 });
+      expect(cashAccountsService.insertMovementWithBalance).not.toHaveBeenCalled();
+    });
+
+    it("inexistente responde 404", async () => {
+      queries.findById.mockResolvedValue(null);
+      await expect(service.remove("nope", user)).rejects.toMatchObject({ status: 404 });
+    });
   });
 });
