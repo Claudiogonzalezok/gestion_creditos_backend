@@ -434,7 +434,7 @@ PATCH  /api/product-categories/:id/deactivate | activate → ADMIN
 GET    /api/product-variants?product_id=uuid&status=ACTIVE
 GET    /api/product-variants/:id
 POST   /api/product-variants                → ADMIN
-POST   /api/product-variants/bulk           → ADMIN (creación masiva)
+POST   /api/product-variants/bulk           → ADMIN (creación masiva, todo o nada en una transacción)
 PUT    /api/product-variants/:id            → ADMIN
 PATCH  /api/product-variants/:id/deactivate | activate → ADMIN
 ```

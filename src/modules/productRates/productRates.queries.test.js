@@ -24,6 +24,20 @@ describe("productRates.queries — caché", () => {
     cache.clearAll();
   });
 
+  describe("invalidateCache", () => {
+    it("tras invalidar, findAll vuelve a consultar y refleja el nombre nuevo", async () => {
+      pool.query.mockResolvedValueOnce({ rows: [ROW] });
+      await queries.findAll();
+
+      queries.invalidateCache();
+      pool.query.mockResolvedValueOnce({ rows: [{ ...ROW, product_name: "Renombrado" }] });
+      const result = await queries.findAll();
+
+      expect(pool.query).toHaveBeenCalledTimes(2);
+      expect(result[0].product_name).toBe("Renombrado");
+    });
+  });
+
   describe("findAll", () => {
     it("consulta la BD en el primer llamado y devuelve las filas", async () => {
       pool.query.mockResolvedValue({ rows: [ROW] });
