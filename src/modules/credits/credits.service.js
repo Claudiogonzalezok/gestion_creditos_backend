@@ -329,7 +329,26 @@ const getAll = async (filters) => {
   return queries.findAll(filters);
 };
 
-const getById = async (id) => {
+/**
+ * Lanza 404 si el usuario es COLLECTOR puro y el crédito no le corresponde
+ * (ver credits.queries.isVisibleToCollector). SELLER, SELLER_COLLECTOR y ADMIN
+ * ven toda la cartera (decisión del dueño, commit af1c17d).
+ * @param {string} creditId
+ * @param {{ id: string, role: string }} requestingUser
+ */
+const assertCreditVisible = async (creditId, requestingUser) => {
+  if (requestingUser?.role !== "COLLECTOR") return;
+  if (!(await queries.isVisibleToCollector(creditId, requestingUser.id)))
+    throw { status: 404, message: "Crédito no encontrado." };
+};
+
+/**
+ * Devuelve el detalle de un crédito respetando el alcance por rol.
+ * @param {string} id
+ * @param {{ id: string, role: string }} requestingUser
+ */
+const getById = async (id, requestingUser) => {
+  await assertCreditVisible(id, requestingUser);
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: "Crédito no encontrado." };
   const chain = await queries.getRefinancingChain(id);
@@ -1998,6 +2017,7 @@ const writeOffCredit = async (
 module.exports = {
   getAll,
   getById,
+  assertCreditVisible,
   create,
   simulate,
   simulateAll,
