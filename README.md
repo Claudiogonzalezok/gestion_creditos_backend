@@ -516,6 +516,22 @@ Soporta cobros con método mixto (efectivo + transferencia): campos `amount_cash
 
 El endpoint `approve` detecta automáticamente si `amount_received` supera el saldo de la cuota actual y aplica el excedente a las siguientes cuotas en orden. Si se pagan cuotas adicionales completas, sus fechas se recorren con `shiftInstallmentDates`.
 
+#### Pre-carga idempotente: `client_request_id`
+
+`POST /api/payments` acepta un campo opcional `client_request_id` en el **body** para que un doble toque o un reintento de red no cree dos pre-cargas por el mismo cobro.
+
+| Aspecto | Contrato |
+|---|---|
+| Campo | `client_request_id` en el body JSON (no header). UUID (cualquier versión; se recomienda v4). Otro formato → `400`. |
+| Quién lo genera | El cliente, **uno por intento de cobro**. Se reutiliza en los reintentos de ese mismo intento; un cobro nuevo lleva una clave nueva. |
+| Alcance de unicidad | Por cobrador: `(collector_id, client_request_id)`. Dos cobradores no colisionan. Índice UNIQUE parcial en `payments` (migración 049). |
+| Primera request | `201` con la pre-carga creada (incluye `client_request_id`). |
+| Reintento con la misma clave, misma cuota y mismo monto | `200` con la pre-carga **existente** (en su estado actual, aunque ya esté aprobada o rechazada) y `idempotent_replay: true`. No crea otra fila ni repite notificaciones. |
+| Misma clave con otra cuota u otro monto | `409` con `code: "IDEMPOTENCY_KEY_REUSED"`. No crea nada. |
+| Sin `client_request_id` | Comportamiento anterior (sin deduplicación), compatible con clientes viejos. |
+
+Además, la creación corre en una transacción que bloquea la cuota y el crédito (`SELECT ... FOR UPDATE`) antes de recalcular el saldo disponible: dos pre-cargas concurrentes que juntas superan el saldo dejan pasar una sola; la otra recibe `409`/`422`. No se bloquea la caja (el cobrador no opera caja).
+
 ### Planillas
 
 ```

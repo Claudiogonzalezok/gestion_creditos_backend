@@ -20,10 +20,13 @@ const getById = async (req, res) => {
 const create = async (req, res) => {
   try {
     const result = await service.create(req.body, req.user);
+    // P08: reintento con el mismo client_request_id → 200 con la pre-carga existente.
+    if (result.idempotent_replay)
+      return response.success(res, result, 'Pre-carga ya registrada (reintento idempotente).');
     return response.created(res, result, 'Pre-carga registrada correctamente. Pendiente de aprobación.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code || null);
     if (err.status === 422) return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);
   }

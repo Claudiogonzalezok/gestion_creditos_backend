@@ -14,6 +14,8 @@ jest.mock("./payments.queries", () => ({
   lockAndGetPayment: jest.fn(),
   approve: jest.fn(),
   lockAndGetInstallment: jest.fn(),
+  lockAndGetCredit: jest.fn(),
+  findByClientRequestId: jest.fn(),
   renewInstallment: jest.fn(),
   updateInstallment: jest.fn(), // no debe llamarse en una renovación
   settleCredit: jest.fn(), // una renovación nunca liquida el crédito
@@ -55,7 +57,6 @@ jest.mock("../notifications/notifications.queries", () => ({
 
 jest.mock("../../utils/transaction", () => ({ withTransaction: jest.fn() }));
 
-const pool = require("../../config/db");
 const queries = require("./payments.queries");
 const cashMovementsQueries = require("./cash_movements.queries");
 const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
@@ -85,7 +86,11 @@ describe("payments.service.create — PRE-CARGA de renovación (RENEWAL)", () =>
 
   beforeEach(() => {
     jest.clearAllMocks();
-    pool.query.mockResolvedValue({ rows: [{ credit_id: "credit-1" }] });
+    // P08: create corre en una transacción que bloquea cuota → crédito.
+    withTransaction.mockImplementation(async (cb) => cb({ query: jest.fn() }));
+    queries.lockAndGetInstallment.mockResolvedValue({ id: "inst-1", credit_id: "credit-1", status: "PENDING" });
+    queries.lockAndGetCredit.mockResolvedValue({ id: "credit-1", status: "ACTIVE" });
+    queries.findByClientRequestId.mockResolvedValue(null);
     queries.getRenewableLoan.mockResolvedValue(validLoan());
     queries.getPendingCommittedAmount.mockResolvedValue(0);
     queries.create.mockResolvedValue({
@@ -119,6 +124,7 @@ describe("payments.service.create — PRE-CARGA de renovación (RENEWAL)", () =>
         cash_session_id: null,
         notes: "Pago por renovación",
       }),
+      expect.anything(),
     );
     // La pre-carga NO corre el vencimiento: los efectos van en approve.
     expect(queries.renewInstallment).not.toHaveBeenCalled();
@@ -144,6 +150,7 @@ describe("payments.service.create — PRE-CARGA de renovación (RENEWAL)", () =>
         payment_method: "MIXED",
         generation_type: "RENEWAL",
       }),
+      expect.anything(),
     );
   });
 
@@ -198,7 +205,7 @@ describe("payments.service.create — PRE-CARGA de renovación (RENEWAL)", () =>
   });
 
   it("rechaza 404 si la cuota no existe", async () => {
-    pool.query.mockResolvedValue({ rows: [] });
+    queries.lockAndGetInstallment.mockResolvedValue(null);
 
     await expect(
       service.create(
