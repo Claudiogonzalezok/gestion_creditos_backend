@@ -18,7 +18,10 @@
 #   RCLONE_REMOTE     destino rclone, p. ej. gdrive:finflow-backups
 #   KEEP_LOCAL_DAYS   días que se guardan en el VPS (default: 7)
 #   KEEP_REMOTE_DAYS  días que se guardan en Drive (default: 30)
+#   HEALTHCHECK_URL   opcional: se pinguea <URL> al terminar bien y <URL>/fail al
+#                     fallar (p. ej. healthchecks.io), para enterarse si deja de correr
 set -euo pipefail
+umask 077
 
 CONFIG_FILE="${BACKUP_CONFIG:-/etc/finflow-backup.env}"
 # shellcheck source=/dev/null
@@ -31,6 +34,7 @@ PASSPHRASE_FILE="${PASSPHRASE_FILE:-/root/.finflow-backup-passphrase}"
 RCLONE_REMOTE="${RCLONE_REMOTE:-}"
 KEEP_LOCAL_DAYS="${KEEP_LOCAL_DAYS:-7}"
 KEEP_REMOTE_DAYS="${KEEP_REMOTE_DAYS:-30}"
+HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
 LOG_FILE="${BACKUP_LOG:-/var/log/finflow-backup.log}"
 
 UPLOAD=1
@@ -42,6 +46,23 @@ while [[ $# -gt 0 ]]; do
 done
 
 log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_FILE"; }
+
+ping_health() {
+  [[ -n "$HEALTHCHECK_URL" ]] || return 0
+  curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECK_URL$1" || log "AVISO: no se pudo avisar a HEALTHCHECK_URL"
+}
+
+# Toda salida con error (también las de set -e) deja una línea ERROR y avisa.
+on_exit() {
+  local code=$?
+  rm -f "${tmp_dump:-}" "${partial:-}"
+  if (( code != 0 )); then
+    log "ERROR: backup terminó con código $code"
+    ping_health /fail
+  fi
+}
+trap on_exit EXIT
+
 fail() { log "ERROR: $*"; exit 1; }
 
 # Corre un comando de Postgres como PG_AS_USER (peer auth) o como el usuario actual.
@@ -64,22 +85,24 @@ flock -n 9 || fail "Ya hay un backup en curso"
 
 stamp="$(date '+%F_%H%M')"
 final="$BACKUP_DIR/${DB_NAME}_${stamp}.dump.gpg"
+partial="$final.part"
 tmp_dump="$(mktemp "$BACKUP_DIR/.tmp.XXXXXX")"
-trap 'rm -f "$tmp_dump"' EXIT
 
 log "Backup de $DB_NAME → $final"
 
 # pg_dump escribe por stdout: el archivo temporal queda en manos de root.
-pg pg_dump --format=custom --no-owner --dbname="$DB_NAME" > "$tmp_dump" \
+# (--no-owner no se pasa: pg_dump lo ignora en formato custom; se aplica al restaurar.)
+pg pg_dump --format=custom --dbname="$DB_NAME" > "$tmp_dump" \
   || fail "pg_dump falló"
 
 # Un dump que pg_restore no puede listar está corrupto: no se guarda.
 pg_restore --list "$tmp_dump" > /dev/null || fail "El dump no es legible por pg_restore"
 
+# Se cifra a .part y se renombra al final: un gpg cortado no deja un backup con nombre válido.
 gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
-  --passphrase-file "$PASSPHRASE_FILE" --output "$final" "$tmp_dump" \
+  --passphrase-file "$PASSPHRASE_FILE" --output "$partial" "$tmp_dump" \
   || fail "Cifrado con gpg falló"
-chmod 600 "$final"
+mv "$partial" "$final"
 log "OK local: $(du -h "$final" | cut -f1)"
 
 if (( UPLOAD )); then
@@ -89,5 +112,7 @@ if (( UPLOAD )); then
     || log "AVISO: no se pudo aplicar la retención remota"
 fi
 
-find "$BACKUP_DIR" -maxdepth 1 -name "${DB_NAME}_*.dump.gpg" -mtime +"$KEEP_LOCAL_DAYS" -delete
+# -mmin (no -mtime): -mtime +N redondea a días enteros y guarda un día de más.
+find "$BACKUP_DIR" -maxdepth 1 -name "${DB_NAME}_*.dump.gpg" -mmin +$(( KEEP_LOCAL_DAYS * 1440 )) -delete
+ping_health ""
 log "Listo"

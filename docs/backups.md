@@ -48,16 +48,22 @@ Scripts: [`scripts/backup/backup-db.sh`](../scripts/backup/backup-db.sh) (VPS) y
    RCLONE_REMOTE=gdrive:finflow-backups
    KEEP_LOCAL_DAYS=7
    KEEP_REMOTE_DAYS=30
+   HEALTHCHECK_URL=https://hc-ping.com/<uuid>   # ver paso 5
    ```
 
 4. Primera corrida a mano y cron:
 
    ```bash
    /opt/finflow-backup/backup-db.sh && rclone ls gdrive:finflow-backups
-   ( crontab -l 2>/dev/null; echo '0 3 * * * /opt/finflow-backup/backup-db.sh >/dev/null 2>&1' ) | crontab -
+   ( crontab -l 2>/dev/null; echo '0 3 * * * /opt/finflow-backup/backup-db.sh >> /var/log/finflow-backup.log 2>&1' ) | crontab -
    ```
 
-Log: `/var/log/finflow-backup.log`. Cada corrida termina en `Listo` o en una línea `ERROR:`.
+5. Aviso si el backup deja de correr: crear un check gratis en [healthchecks.io](https://healthchecks.io)
+   (período 1 día, gracia 2 h, aviso por mail) y poner su URL en `HEALTHCHECK_URL`. El script
+   lo pinguea al terminar bien y pinguea `/fail` al fallar; si un día no llega nada, también avisa.
+
+Log: `/var/log/finflow-backup.log`. Una corrida buena termina en `Listo`; una con error deja
+`ERROR: ...` (incluye las fallas inesperadas, y el stderr de pg_dump/gpg/rclone va al mismo log).
 
 ## Verificar que el backup corre
 
@@ -86,15 +92,25 @@ En la PC, con Docker y gpg (Git Bash trae gpg):
 Solo si la base de producción se perdió o se corrompió. Restaurar en una base nueva y recién
 después cambiarla, así la base vieja queda para analizar.
 
+Como root. El bloque corta en el primer error (no renombra nada si el restore falló) y el dump
+descifrado pasa por un pipe: nunca queda en claro en el disco.
+
 ```bash
+BACKUP=/var/backups/finflow/finflow_<fecha>.dump.gpg   # o el bajado de Drive
+bash -euo pipefail <<EOF
 pm2 stop finflow-backend
-gpg --decrypt --output /tmp/finflow.dump /var/backups/finflow/finflow_<fecha>.dump.gpg   # o el bajado de Drive
+sudo -u postgres dropdb --if-exists finflow_restored
 sudo -u postgres createdb -O finflow_user finflow_restored
-sudo -u postgres pg_restore --no-owner --role=finflow_user -d finflow_restored /tmp/finflow.dump
-sudo -u postgres psql -c 'ALTER DATABASE finflow RENAME TO finflow_broken_<fecha>'
-sudo -u postgres psql -c 'ALTER DATABASE finflow_restored RENAME TO finflow'
-pm2 start finflow-backend && rm /tmp/finflow.dump
+gpg --batch --decrypt --passphrase-file /root/.finflow-backup-passphrase "$BACKUP" \
+  | sudo -u postgres pg_restore --exit-on-error --no-owner --role=finflow_user -d finflow_restored
+sudo -u postgres psql -v ON_ERROR_STOP=1 -c 'ALTER DATABASE finflow RENAME TO finflow_broken_$(date +%Y%m%d_%H%M)'
+sudo -u postgres psql -v ON_ERROR_STOP=1 -c 'ALTER DATABASE finflow_restored RENAME TO finflow'
+pm2 start finflow-backend
+EOF
 ```
+
+Si falla antes del primer `RENAME`, producción sigue intacta: `pm2 start finflow-backend` y revisar.
+El `RENAME` de `finflow` falla si quedan conexiones abiertas: cerrarlas (o esperar) y repetir.
 
 Todo lo cargado después del backup se pierde (RPO): avisar a quien opere el sistema.
 

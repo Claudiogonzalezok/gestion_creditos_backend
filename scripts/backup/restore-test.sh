@@ -37,11 +37,13 @@ gpg "${gpg_args[@]}" "$BACKUP"
 
 echo "→ Levantando $IMAGE descartable"
 docker run -d --name "$CONTAINER" -e POSTGRES_PASSWORD=restore -e POSTGRES_DB="$DB" "$IMAGE" >/dev/null
+# Por TCP: durante el init la imagen levanta un server temporal solo en el socket Unix,
+# que pg_isready por socket daría como listo antes de tiempo.
 for _ in $(seq 1 30); do
-  docker exec "$CONTAINER" pg_isready -U postgres -d "$DB" >/dev/null 2>&1 && break
+  docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d "$DB" >/dev/null 2>&1 && break
   sleep 1
 done
-docker exec "$CONTAINER" pg_isready -U postgres -d "$DB" >/dev/null || { echo "Postgres no arrancó" >&2; exit 1; }
+docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d "$DB" >/dev/null || { echo "Postgres no arrancó" >&2; exit 1; }
 
 echo "→ Restaurando"
 started=$(date +%s)
