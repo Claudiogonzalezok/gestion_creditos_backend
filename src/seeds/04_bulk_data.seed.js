@@ -38,19 +38,8 @@ const seed = async () => {
   const operationalPassword = '123456';
   const hash = await bcrypt.hash(operationalPassword, 10);
   if (check.rows.length > 0) {
-    console.log('   ⚠️   Semilla 04 ya ejecutada — actualizando credenciales operativas...');
-    await pool.query(
-      `UPDATE users
-       SET password_hash = $1,
-           is_temp_password = FALSE,
-           failed_attempts = 0,
-           locked_at = NULL,
-           force_relogin_at = NULL,
-           updated_at = NOW()
-       WHERE dni IN ('11111111', '22222222', '33333333')`,
-      [hash]
-    );
-    console.log('   ✅  Credenciales de SELLER / COLLECTOR / SELLER_COLLECTOR actualizadas a 123456.');
+    // Re-ejecutar NO toca credenciales existentes (issue #53).
+    console.log('   ⏭️   Semilla 04 ya ejecutada — se conservan las contraseñas.');
     return;
   }
 

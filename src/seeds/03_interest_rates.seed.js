@@ -150,12 +150,20 @@ const rates = [
 const seed = async () => {
   console.log('  Cargando tasas de interés...');
 
+  // ON CONFLICT no detecta duplicados con max_amount NULL (en un UNIQUE los
+  // NULL son distintos): se usa NOT EXISTS con IS NOT DISTINCT FROM (issue #53).
   for (const r of rates) {
     await pool.query(
       `INSERT INTO interest_rates
          (installments_count, payment_frequency, rate, active, min_amount, max_amount)
-       VALUES ($1, $2, $3, TRUE, $4, $5)
-       ON CONFLICT (payment_frequency, installments_count, min_amount, max_amount) DO NOTHING`,
+       SELECT $1::smallint, $2::varchar, $3::numeric, TRUE, $4::numeric, $5::numeric
+       WHERE NOT EXISTS (
+         SELECT 1 FROM interest_rates
+         WHERE payment_frequency  = $2::varchar
+           AND installments_count = $1::smallint
+           AND min_amount         = $4::numeric
+           AND max_amount IS NOT DISTINCT FROM $5::numeric
+       )`,
       [r.installments_count, r.payment_frequency, r.rate, r.min_amount, r.max_amount]
     );
   }
