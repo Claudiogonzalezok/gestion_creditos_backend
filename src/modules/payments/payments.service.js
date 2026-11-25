@@ -574,8 +574,9 @@ const _insertCollectionPrecarga = async (
   if (inst.status === "PAID")
     throw { status: 409, message: "Esta cuota ya fue pagada." };
 
-  // La FK cuota → crédito hace imposible un crédito ausente; igual se
-  // conserva la tolerancia del código previo (sin crédito, no se bloquea).
+  // La FK cuota → crédito hace inalcanzable un crédito ausente. Se mantiene
+  // la misma guarda que tenía create antes de P08 (`creditInfo && ...`):
+  // sin fila de crédito no se valida el estado, igual que antes.
   if (credit && credit.status !== "ACTIVE")
     throw {
       status: 409,

@@ -75,7 +75,7 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
     expect(await countNotifs()).toBe(afterFirst);
   });
 
-  it('replay con installment_id en mayúsculas → mismo cobro (200 replay, no 409)', async () => {
+  it('replay con installment_id y client_request_id en mayúsculas → mismo cobro (200 replay, no 409)', async () => {
     const { inst, user } = await setup();
 
     const first = await paymentsService.create(body(inst.id, { client_request_id: KEY_A }), user);
