@@ -332,6 +332,19 @@ const _applyPaymentToInstallments = async (
           parseFloat(inst.amount_paid),
           graceDays,
         );
+        // El excedente parcial queda registrado como sub-pago del cobro cabecera:
+        // así la reversión sabe exactamente cuánto restarle a esta cuota (#41).
+        if (paymentId) {
+          await queries.createPartialAdvancePayment(client, {
+            installmentId: inst.id,
+            adminId,
+            amount: remaining,
+            cashRatio,
+            paymentMethod: payment.payment_method,
+            transferReference: payment.transfer_reference,
+            parentPaymentId: paymentId,
+          });
+        }
         remaining = 0;
       }
     }
@@ -340,13 +353,22 @@ const _applyPaymentToInstallments = async (
   // Si se adelantaron cuotas completas, recorrer vencimientos de las restantes.
   // Usamos freshInst.due_date — refleja cualquier shift previo dentro de esta misma
   // transacción si lo hubo.
+  // El estado previo de las fechas corridas se guarda en el cobro cabecera para
+  // que la reversión pueda restaurarlas exactamente (#41).
   if (paidCount > 0) {
-    await queries.shiftInstallmentDates(
+    const previousDueDates = await queries.shiftInstallmentDates(
       client,
       freshInst.credit_id,
       freshInst.payment_frequency,
       freshInst.due_date,
     );
+    if (paymentId && previousDueDates && previousDueDates.length > 0) {
+      await queries.saveAdvanceDueDatesSnapshot(
+        client,
+        paymentId,
+        previousDueDates,
+      );
+    }
   }
 };
 
@@ -1193,10 +1215,22 @@ const reverse = async (id, reason, adminId) => {
       originalPaymentId: payment.id,
     });
 
+    // A la cuota cabecera solo se le resta lo que el cobro le imputó a ELLA:
+    // el resto del amount_received fue a las cuotas hijas (adelantadas o con
+    // excedente parcial), que se restauran abajo con su propio monto (#41).
+    // Restar el total borraba los pagos parciales previos de la cabecera.
+    const childrenTotal = children.reduce(
+      (sum, c) => sum + parseFloat(c.amount_received),
+      0,
+    );
+    const headerApplied = _round2(
+      parseFloat(payment.amount_received) - childrenTotal,
+    );
+
     await queries.restoreInstallmentFromReversal(
       client,
       payment.installment_id,
-      payment.amount_received,
+      headerApplied,
       graceDays,
     );
 
@@ -1237,6 +1271,14 @@ const reverse = async (id, reason, adminId) => {
         child.amount_received,
         graceDays,
       );
+    }
+
+    // Vencimientos corridos por el adelanto: vuelven a su fecha previa (incluido
+    // original_due_date) y se recalcula el status con esa fecha. Cobros
+    // históricos sin snapshot no restauran fechas (comportamiento previo).
+    const dueDatesSnapshot = payment.advance_due_dates_snapshot;
+    if (Array.isArray(dueDatesSnapshot) && dueDatesSnapshot.length > 0) {
+      await queries.restoreAdvanceDueDates(client, dueDatesSnapshot, graceDays);
     }
 
     // Si el crédito estaba SETTLED, reabrirlo
