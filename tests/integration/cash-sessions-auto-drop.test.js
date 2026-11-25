@@ -124,20 +124,23 @@ describe("Auto-drop a Caja General al cerrar caja operativa — close()", () => 
         message: "Cuenta inactiva (simulado)",
       });
 
-    await expect(
-      cashSessions.close(
-        cs.id,
-        {
-          declared: [
-            { payment_method: "CASH", declared_amount: 500 },
-            { payment_method: "TRANSFER", declared_amount: 200 },
-          ],
-        },
-        asUser(admin),
-      ),
-    ).rejects.toMatchObject({ status: 409 });
-
-    spy.mockRestore();
+    try {
+      await expect(
+        cashSessions.close(
+          cs.id,
+          {
+            declared: [
+              { payment_method: "CASH", declared_amount: 500 },
+              { payment_method: "TRANSFER", declared_amount: 200 },
+            ],
+          },
+          asUser(admin),
+        ),
+      ).rejects.toMatchObject({ status: 409 });
+    } finally {
+      // Restaurar aunque la aserción falle, para no contaminar otros tests.
+      spy.mockRestore();
+    }
 
     // La sesión sigue OPEN (rollback completo, no quedó en CLOSED).
     const after = await cashSessions.getById(cs.id);

@@ -7,10 +7,11 @@ integration tests con Postgres real para lógica financiera y SQL crítico.
 
 ```
 src/**/*.test.js              # Unit tests (jest.unit.config.js) — mocks, sin DB
+tests/unit/**/*.test.js       # Unit tests de la infraestructura de tests (sin DB)
 tests/integration/**/*.test.js # Integration tests (jest.integration.config.js) — Postgres real
-tests/integration/helpers/    # db, fixtures, dates, jobs
-tests/integration/globalSetup.js     # Migrations + seed (una vez por run)
-tests/integration/globalTeardown.js  # Cierra pool al final
+tests/integration/helpers/    # db, fixtures, dates, jobs, testDbGuard
+tests/integration/globalSetup.js     # Guarda + migrations + seed (una vez por run)
+tests/integration/globalTeardown.js  # No-op: cada suite cierra su pool en setupTestSuite()
 ```
 
 ## Qué se mockea y qué NO
@@ -114,6 +115,15 @@ En vez de usar opciones de jest config (que cambiaron de nombre entre versiones)
 cada test file invoca `setupTestSuite()` al tope. Explícito, robusto, sin
 acoplarse a un release específico de jest.
 
+### Guarda de base de test
+
+Antes de crear cualquier pool, `globalSetup` y `helpers/db.js` llaman a
+`helpers/testDbGuard.js`, que aborta si `NODE_ENV` no es `test` o si `DB_NAME`
+no termina en `_test`. `truncateAll()` lo vuelve a verificar antes del
+`TRUNCATE ... CASCADE`. Si falta `.env.test` o el entorno apunta a una base
+real, la suite falla sin ejecutar ninguna query. `.env.test` se carga sin pisar
+variables ya definidas, para que los scripts `:local` y `DB_PORT=...` funcionen.
+
 ### Por qué `.env.test` está commiteado
 
 Las credenciales apuntan al Postgres del `docker-compose.test.yml` (puerto 5433,
@@ -139,7 +149,28 @@ daysFromNow(5)    // 'YYYY-MM-DD' en 5 días
 isoDate(new Date()) // formatea cualquier Date
 ```
 
+Las fechas se calculan en la zona horaria de la sesión de PostgreSQL
+(`TZ` o, si no está, `America/Argentina/Buenos_Aires`, igual que
+`src/config/db.js`), así coinciden con `CURRENT_DATE` aunque Node corra en otra
+zona. La suite debe pasar igual con `TZ=UTC` y con `TZ=America/Argentina/Buenos_Aires`.
+
+## Tablas de referencia
+
+`interest_rates` y otras tablas de referencia no se truncan entre tests. Si una
+suite las modifica, llamá `preserveTable("interest_rates")` antes de
+`setupTestSuite()`: guarda las filas al inicio de la suite y las restaura al final.
+Los `jest.spyOn` se restauran en un `finally` o `afterEach`, nunca solo al final
+del test.
+
 ## Troubleshooting
+
+**"[integration] Abortado: ..."**
+La guarda detectó que la base no es de test. Verificá que exista `.env.test`, o
+que `NODE_ENV=test` y que `DB_NAME` termine en `_test`.
+
+**Windows: el puerto 5433 lo ocupa un Postgres nativo**
+Levantá la base de test en otro puerto y pasalo por variable:
+`npx cross-env DB_PORT=5434 jest --config jest.integration.config.js`.
 
 **"No se pudo conectar a la DB de test"**
 Levantá el contenedor: `npm run test:db:up`. Esperá ~3 segundos al primer arranque.

@@ -1,15 +1,7 @@
 // Global teardown ejecutado UNA SOLA VEZ después de toda la suite.
-// Cierra el pool global que la app usa (src/config/db.js) si quedó abierto,
-// para que jest pueda terminar limpiamente sin warnings de handles abiertos.
+// No cierra pools: globalTeardown corre en un contexto distinto al de los
+// test files, así que hacer require('src/config/db') acá crearía (y conectaría)
+// un pool NUEVO en vez de cerrar el de los tests. Cada suite cierra su propio
+// pool en el afterAll de setupTestSuite (helpers/db.js).
 
-module.exports = async () => {
-  try {
-    // Solo intentamos cerrarlo si fue cargado en algún momento.
-    const pool = require('../../src/config/db');
-    if (pool && typeof pool.end === 'function') {
-      await pool.end();
-    }
-  } catch (err) {
-    // Si ya estaba cerrado o nunca se cargó, ignoramos.
-  }
-};
+module.exports = async () => {};

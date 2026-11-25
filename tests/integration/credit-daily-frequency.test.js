@@ -11,7 +11,7 @@
 // addFrequencyPeriods (rama +1 día) y la exención de
 // applyBusinessDayRuleToDueDates.
 
-const { pool, setupTestSuite } = require("./helpers/db");
+const { pool, setupTestSuite, preserveTable } = require("./helpers/db");
 const {
   createUserFixture,
   createCreditFixture,
@@ -19,6 +19,7 @@ const {
 const cashSessionsService = require("../../src/modules/cashSessions/cashSessions.service");
 const creditsService = require("../../src/modules/credits/credits.service");
 
+preserveTable("interest_rates");
 setupTestSuite();
 
 const asUser = (u) => ({ id: u.id, role: u.role });

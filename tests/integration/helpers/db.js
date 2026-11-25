@@ -13,11 +13,12 @@
 //       });
 //     });
 
-const path = require("path");
 
 // Importante: cargar .env.test ANTES de require('src/config/db'),
 // porque el pool se crea al momento del require leyendo process.env.
-require("dotenv").config({ path: path.join(__dirname, "../../../.env.test") });
+// La guarda aborta si la base no es de test, antes de crear el pool.
+const { loadTestEnv, assertTestDatabase } = require("./testDbGuard");
+loadTestEnv();
 
 const pool = require("../../../src/config/db");
 
@@ -68,6 +69,8 @@ const TRANSACTIONAL_TABLES = [
  * fallen al leer parámetros financieros.
  */
 const truncateAll = async () => {
+  // Re-verificación defensiva justo antes del TRUNCATE CASCADE.
+  assertTestDatabase();
   await pool.query(
     `TRUNCATE TABLE ${TRANSACTIONAL_TABLES.join(", ")} RESTART IDENTITY CASCADE`,
   );
@@ -148,9 +151,71 @@ const setupTestSuite = () => {
   });
 
   afterAll(async () => {
-    // El pool global se cierra en globalTeardown, pero si una suite quiere
-    // forzar limpieza inmediata, este afterAll lo deja a salvo.
+    // Cada test file tiene su propio registro de módulos y por lo tanto su
+    // propio pool: se cierra acá (globalTeardown corre en otro contexto).
+    await pool.end().catch(() => {});
   });
 };
 
-module.exports = { pool, truncateAll, withTestClient, setupTestSuite, setConfig };
+/**
+ * Preserva una tabla de referencia (no truncada entre tests) que una suite
+ * modifica: guarda sus filas en beforeAll y las restaura en afterAll, para que
+ * los cambios no se filtren a otras suites. Llamar antes de setupTestSuite(),
+ * así su afterAll corre antes del cierre del pool.
+ * Solo para tablas sin FKs entrantes (p.ej. interest_rates).
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ */
+const preserveTable = (table) => {
+  // null = el snapshot no llegó a tomarse. En ese caso NO se restaura:
+  // restaurar un snapshot vacío borraría toda la tabla.
+  let snapshot = null;
+
+  beforeAll(async () => {
+    snapshot = await snapshotTable(table);
+  });
+
+  afterAll(async () => {
+    if (snapshot === null) return;
+    await restoreTable(table, snapshot);
+  });
+};
+
+/**
+ * Devuelve todas las filas actuales de una tabla de referencia.
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ * @returns {Promise<Object[]>}
+ */
+const snapshotTable = async (table) =>
+  (await pool.query(`SELECT * FROM ${table}`)).rows;
+
+/**
+ * Reemplaza el contenido de la tabla por las filas del snapshot, en una sola
+ * transacción: si algo falla, la tabla queda como estaba (ni vacía ni a medias).
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ * @param {Object[]} snapshot - filas devueltas por snapshotTable
+ */
+const restoreTable = async (table, snapshot) => {
+  assertTestDatabase();
+  await withTestClient(async (client) => {
+    await client.query(`DELETE FROM ${table}`);
+    for (const row of snapshot) {
+      const cols = Object.keys(row);
+      const params = cols.map((_, i) => `$${i + 1}`).join(", ");
+      await client.query(
+        `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${params})`,
+        cols.map((c) => row[c]),
+      );
+    }
+  });
+};
+
+module.exports = {
+  pool,
+  truncateAll,
+  withTestClient,
+  setupTestSuite,
+  preserveTable,
+  snapshotTable,
+  restoreTable,
+  setConfig,
+};

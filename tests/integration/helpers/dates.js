@@ -12,19 +12,41 @@
 // due_date = daysAgo(10) y se corre el job. El job ve la diferencia real.
 
 /**
- * Devuelve una fecha en formato 'YYYY-MM-DD' (PostgreSQL date).
+ * Zona horaria de la sesión de PostgreSQL: misma regla que src/config/db.js
+ * (`-c TimeZone=${process.env.TZ || 'America/Argentina/Buenos_Aires'}`).
+ * Calcular las fechas en esta zona hace que coincidan con CURRENT_DATE aunque
+ * el proceso Node corra en otra zona (por ejemplo, un runner de CI en UTC).
+ * @returns {string}
+ */
+const dbTimeZone = () => process.env.TZ || 'America/Argentina/Buenos_Aires';
+
+/**
+ * Devuelve la fecha calendario de `d` en la zona de la BD, formato 'YYYY-MM-DD'.
  * @param {Date} d
  * @returns {string}
  */
-const isoDate = (d) => {
-  const y  = d.getFullYear();
-  const m  = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
+const isoDate = (d) =>
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: dbTimeZone(),
+    year:     'numeric',
+    month:    '2-digit',
+    day:      '2-digit',
+  }).format(d);
+
+/**
+ * Suma N días a una fecha 'YYYY-MM-DD' con aritmética UTC (sin efectos de DST).
+ * @param {string} ymd
+ * @param {number} n
+ * @returns {string}
+ */
+const addDays = (ymd, n) => {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 };
 
 /**
- * Fecha de hoy en 'YYYY-MM-DD'.
+ * Fecha de hoy en 'YYYY-MM-DD', según la zona de la BD.
  * @returns {string}
  */
 const today = () => isoDate(new Date());
@@ -34,21 +56,13 @@ const today = () => isoDate(new Date());
  * @param {number} n
  * @returns {string}
  */
-const daysAgo = (n) => {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return isoDate(d);
-};
+const daysAgo = (n) => addDays(today(), -n);
 
 /**
  * Devuelve la fecha N días en el futuro, formato 'YYYY-MM-DD'.
  * @param {number} n
  * @returns {string}
  */
-const daysFromNow = (n) => {
-  const d = new Date();
-  d.setDate(d.getDate() + n);
-  return isoDate(d);
-};
+const daysFromNow = (n) => addDays(today(), n);
 
 module.exports = { isoDate, today, daysAgo, daysFromNow };
