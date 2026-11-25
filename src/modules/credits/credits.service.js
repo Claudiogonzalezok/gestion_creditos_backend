@@ -337,7 +337,10 @@ const getAll = async (filters) => {
  * @param {{ id: string, role: string }} requestingUser
  */
 const assertCreditVisible = async (creditId, requestingUser) => {
-  if (requestingUser?.role !== "COLLECTOR") return;
+  // Falla cerrado: sin usuario no hay alcance que evaluar.
+  if (!requestingUser?.role)
+    throw { status: 404, message: "Crédito no encontrado." };
+  if (requestingUser.role !== "COLLECTOR") return;
   if (!(await queries.isVisibleToCollector(creditId, requestingUser.id)))
     throw { status: 404, message: "Crédito no encontrado." };
 };
