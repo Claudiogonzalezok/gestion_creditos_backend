@@ -268,6 +268,10 @@ ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 
 > `JWT_EXPIRY_INTERNAL` y `JWT_EXPIRY_PORTAL` son valores por defecto. Los valores reales se leen dinámicamente de `system_config` en cada login.
 
+> **Configuración segura en producción** (`NODE_ENV=production`, ver `src/config/secureConfig.js`):
+> - El arranque falla si `ENABLE_TEST_ROUTES=true` o si falta `DB_USER` / `DB_PASSWORD` (no hay fallback a `postgres` sin contraseña).
+> - La documentación Swagger (`/api/docs`) no se monta y responde 404. En desarrollo sigue disponible.
+
 ### Scripts npm
 
 | Comando                          | Descripción                                                |
