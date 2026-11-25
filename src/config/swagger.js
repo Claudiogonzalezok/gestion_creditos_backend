@@ -1171,6 +1171,37 @@ const swaggerSpec = {
       },
     },
 
+    '/payments/admin-direct': {
+      post: {
+        tags: ['Payments'], summary: 'Cobro directo sin pre-carga (solo ADMIN)', security: [{ internalAuth: [] }],
+        description: 'Saltea el doble control: el pago nace APPROVED (admin_direct = true) y se imputa a la caja activa de la jornada. Solo rol ADMIN.',
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['installment_id'], properties: {
+          installment_id:     { $ref: '#/components/schemas/UUID' },
+          amount_received:    { type: 'number', description: 'Formato simple, junto con payment_method' },
+          payment_method:     { type: 'string', enum: ['CASH', 'TRANSFER'] },
+          amount_cash:        { type: 'number', description: 'Formato mixto' },
+          amount_transfer:    { type: 'number', description: 'Formato mixto' },
+          transfer_reference: { type: 'string', maxLength: 100 },
+          notes:              { type: 'string', maxLength: 500 },
+        } } } } },
+        responses: {
+          201: { description: 'Cobro registrado y aprobado' },
+          403: { $ref: '#/components/responses/Forbidden' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { description: 'Sin caja activa, cuota ya pagada o crédito liquidado' },
+        },
+      },
+    },
+
+    '/payments/{id}/reverse': {
+      post: {
+        tags: ['Payments'], summary: 'Revertir cobro aprobado (solo ADMIN)', security: [{ internalAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['reason'], properties: { reason: { type: 'string', minLength: 5, maxLength: 500 } } } } } },
+        responses: { 200: { description: 'Cobro revertido' }, 403: { $ref: '#/components/responses/Forbidden' }, 409: { $ref: '#/components/responses/Conflict' } },
+      },
+    },
+
     // ════════════════════════════════════════════════════════════
     // COLLECTIONS
     // ════════════════════════════════════════════════════════════

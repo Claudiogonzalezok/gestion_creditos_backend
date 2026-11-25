@@ -520,7 +520,21 @@ GET    /api/payments/:id
 POST   /api/payments                  → Registrar pre-carga
 PATCH  /api/payments/:id/approve      → Aprueba y aplica adelanto automático si sobra saldo
 PATCH  /api/payments/:id/reject
+POST   /api/payments/admin-direct     → Cobro directo sin pre-carga (solo ADMIN)
+POST   /api/payments/:id/reverse      → Revertir cobro aprobado (solo ADMIN)
 ```
+
+#### Cobro directo: `POST /api/payments/admin-direct`
+
+Es la única vía de cobro que **saltea el doble control** (pre-carga del cobrador → aprobación del Admin): el pago nace `APPROVED` y se aplica a la cuota en el acto. Por eso está restringido:
+
+- **Rol:** solo `ADMIN` (`authorize('ADMIN')` en la ruta; cualquier otro rol recibe `403`).
+- **Caja:** requiere una caja operativa activa en la jornada; si no hay → `409`. El monto se imputa a esa caja.
+- **Body:** `installment_id` (UUID, obligatorio) y los montos con el mismo formato que la pre-carga (`amount_received` + `payment_method`, o `amount_cash` / `amount_transfer`), `transfer_reference` y `notes` opcionales.
+- **Trazabilidad:** el pago queda con `admin_direct = true` y `approved_by` = el Admin que lo registró.
+- Cuota ya `PAID` o crédito `SETTLED` → `409`. El excedente se aplica como adelanto, igual que en `approve`.
+
+La reversión (`POST /api/payments/:id/reverse`, body `reason` de 5 a 500 caracteres) también es solo `ADMIN` y nunca borra el pago original: genera un contramovimiento.
 
 Soporta cobros con método mixto (efectivo + transferencia): campos `amount_cash` / `amount_transfer` opcionales.
 
@@ -683,6 +697,8 @@ GET    /api/system-config/:key
 PUT    /api/system-config/:key
 POST   /api/system-config/:key/reset
 ```
+
+`PUT /api/system-config/:key` valida el `value` de forma estricta: debe ser un decimal simple (`"5"`, `"0.08"`, o un número JSON). Se rechazan con `400` los valores con texto (`"12abc"`), notación científica o hexadecimal, vacíos, `NaN`/`Infinity`, tipos no escalares y cualquier negativo; además cada clave conocida tiene su rango. El valor se guarda normalizado (`" 7 "` → `"7"`).
 
 ### Portal público
 
