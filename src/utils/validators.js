@@ -869,6 +869,9 @@ const payments = {
       .isLength({ max: 500 })
       .withMessage("Las observaciones no pueden superar los 500 caracteres."),
     isDate("next_visit_date", "La fecha de próxima visita", false),
+    // P08: clave de idempotencia opcional generada por el cliente por intento
+    // de cobro. Ausente = comportamiento anterior (sin deduplicación).
+    isUUID("client_request_id", "La clave de idempotencia (client_request_id)", false),
   ],
   reject: [
     isUUIDParam("id", "El ID de cobro"),

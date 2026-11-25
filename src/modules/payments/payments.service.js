@@ -492,24 +492,20 @@ const getById = async (id, requestingUser) => {
 };
 
 /**
- * Registra una PRE-CARGA de renovación (nace PENDING). Recorre el mismo pipeline
+ * Inserta una PRE-CARGA de renovación (nace PENDING) dentro de la transacción de
+ * `create`, con el crédito y la cuota ya bloqueados. Recorre el mismo pipeline
  * de pre-carga que un cobro normal, pero con la lógica de negocio RENEWAL: valida
  * y calcula el cargo con _computeRenewalCharge, congela el monto y NO toca el
  * préstamo (los efectos se aplican en approve). El monto lo fija el server; el
  * enviado por el cliente debe coincidir exactamente (evita descuadres de UI).
+ * @param {object} client - Cliente de transacción pg.
  * @param {object} data - Body del POST /payments (installment_id + medio de pago).
  * @param {object} requestingUser - Quien registra (admin; a futuro, cobrador).
+ * @param {object} inst - Cuota bloqueada (lockAndGetInstallment).
  * @returns {Promise<object>} La pre-carga creada (PENDING).
  */
-const _createRenewalPrecarga = async (data, requestingUser) => {
-  const instRow = await pool.query(
-    `SELECT credit_id FROM installments WHERE id = $1`,
-    [data.installment_id],
-  );
-  if (!instRow.rows.length)
-    throw { status: 404, message: "Cuota no encontrada." };
-
-  const loan = await queries.getRenewableLoan(instRow.rows[0].credit_id);
+const _insertRenewalPrecarga = async (client, data, requestingUser, inst) => {
+  const loan = await queries.getRenewableLoan(inst.credit_id, client);
   if (!loan) throw { status: 404, message: "Crédito no encontrado." };
 
   // Núcleo compartido: valida que sea renovable y calcula interés + mora = total.
@@ -517,7 +513,10 @@ const _createRenewalPrecarga = async (data, requestingUser) => {
 
   // Guarda: una sola pre-carga pendiente por cuota. Evita dos renovaciones
   // pendientes o mezclar una renovación con un cobro normal ya pendiente.
-  const pending = await queries.getPendingCommittedAmount(loan.installment_id);
+  const pending = await queries.getPendingCommittedAmount(
+    loan.installment_id,
+    client,
+  );
   if (pending > 0)
     throw {
       status: 409,
@@ -535,68 +534,57 @@ const _createRenewalPrecarga = async (data, requestingUser) => {
 
   // Nace PENDING con generation_type=RENEWAL, SIN tocar la cuota. cash_session_id
   // queda NULL: se imputa a la caja al aprobar (como cualquier pre-carga).
-  const payment = await queries.create({
-    installment_id: loan.installment_id,
-    collector_id: requestingUser.id,
-    amount_received: amounts.amountReceived,
-    amount_cash: amounts.amountCash,
-    amount_transfer: amounts.amountTransfer,
-    payment_method: amounts.paymentMethod,
-    transfer_reference: data.transfer_reference,
-    notes: "Pago por renovación",
-    next_visit_date: null,
-    cash_session_id: null,
-    generation_type: "RENEWAL",
-  });
-
-  // Hooks best-effort (idénticos a la pre-carga normal): avisar a los admins y
-  // reflejar la gestión en la planilla del día del cobrador (VISITED).
-  await _notifyApprovalRequest(payment);
-  await collectionsQueries.updateManagementStatusForActiveTodaySheet(
-    requestingUser.id,
-    loan.installment_id,
-    "VISITED",
+  return queries.create(
+    {
+      installment_id: loan.installment_id,
+      collector_id: requestingUser.id,
+      amount_received: amounts.amountReceived,
+      amount_cash: amounts.amountCash,
+      amount_transfer: amounts.amountTransfer,
+      payment_method: amounts.paymentMethod,
+      transfer_reference: data.transfer_reference,
+      notes: "Pago por renovación",
+      next_visit_date: null,
+      cash_session_id: null,
+      generation_type: "RENEWAL",
+      client_request_id: data.client_request_id,
+    },
+    client,
   );
-
-  return payment;
 };
 
 /**
- * Registra una pre-carga de cobro validando el saldo disponible del crédito.
- * Permite montos que cubran varias cuotas siempre que no superen el saldo pendiente total.
+ * Inserta una pre-carga de cobro normal (COLLECTION) dentro de la transacción de
+ * `create`, con el crédito y la cuota ya bloqueados: el saldo disponible se
+ * recalcula viendo las pre-cargas ya confirmadas por requests concurrentes.
+ * @param {object} client - Cliente de transacción pg.
  * @param {object} data - Datos validados del cobro.
  * @param {object} requestingUser - Cobrador autenticado que registra la pre-carga.
- * @returns {Promise<object>} Pre-carga creada en estado pendiente.
+ * @param {object} inst - Cuota bloqueada (lockAndGetInstallment).
+ * @param {object} credit - Crédito bloqueado (lockAndGetCredit).
+ * @returns {Promise<object>} Pre-carga creada (PENDING).
  */
-const create = async (data, requestingUser) => {
-  // Camino pre-carga de la renovación: misma operación de negocio RENEWAL, pero
-  // por el pipeline de pre-carga (nace PENDING; los efectos van en approve).
-  if (data.generation_type === "RENEWAL")
-    return _createRenewalPrecarga(data, requestingUser);
-
-  const instCheck = await pool.query(
-    `SELECT id, status, amount_due::float8, amount_paid::float8, credit_id FROM installments WHERE id = $1`,
-    [data.installment_id],
-  );
-  if (!instCheck.rows.length)
-    throw { status: 404, message: "Cuota no encontrada." };
-  const inst = instCheck.rows[0];
+const _insertCollectionPrecarga = async (
+  client,
+  data,
+  requestingUser,
+  inst,
+  credit,
+) => {
   if (inst.status === "PAID")
     throw { status: 409, message: "Esta cuota ya fue pagada." };
 
-  const creditInfo = await queries.getCreditStatusByInstallment(
-    data.installment_id,
-  );
-  if (creditInfo && creditInfo.status !== "ACTIVE")
+  if (credit.status !== "ACTIVE")
     throw {
       status: 409,
-      message: `No se pueden registrar cobros en un crédito en estado ${creditInfo.status}.`,
+      message: `No se pueden registrar cobros en un crédito en estado ${credit.status}.`,
     };
 
   const amountDue = inst.amount_due;
   const amountPaid = inst.amount_paid;
   const pendingAmount = await queries.getPendingCommittedAmount(
     data.installment_id,
+    client,
   );
   const available = amountDue - amountPaid - pendingAmount;
 
@@ -623,7 +611,10 @@ const create = async (data, requestingUser) => {
     };
 
   if (amountReceived > available) {
-    const totalPending = await queries.getTotalPendingBalance(inst.credit_id);
+    const totalPending = await queries.getTotalPendingBalance(
+      inst.credit_id,
+      client,
+    );
     if (amountReceived > totalPending)
       throw {
         status: 422,
@@ -634,35 +625,136 @@ const create = async (data, requestingUser) => {
   // V4.2: la pre-carga NO requiere caja abierta. El cobrador es un actor de
   // campo, no opera caja. `cash_session_id` queda NULL hasta que el admin
   // apruebe (en `approve` se imputa a la caja activa de la jornada, V4.3).
-  // Se eliminó el wrap withTransaction de IMP-2 porque ya no hay lock de
-  // caja que proteger en este flujo — el INSERT del payment y el hook de
-  // management_status son operaciones independientes; un fallo del hook no
-  // debe revertir el payment (es un side-effect de UI, no contable).
-  const payment = await queries.create({
-    installment_id: data.installment_id,
-    collector_id: requestingUser.id,
-    amount_received: amounts.amountReceived,
-    amount_cash: amounts.amountCash,
-    amount_transfer: amounts.amountTransfer,
-    payment_method: amounts.paymentMethod,
-    transfer_reference: data.transfer_reference,
-    notes: data.notes,
-    next_visit_date: data.next_visit_date,
-    cash_session_id: null, // V4.2: se llena en approve.
-  });
+  return queries.create(
+    {
+      installment_id: data.installment_id,
+      collector_id: requestingUser.id,
+      amount_received: amounts.amountReceived,
+      amount_cash: amounts.amountCash,
+      amount_transfer: amounts.amountTransfer,
+      payment_method: amounts.paymentMethod,
+      transfer_reference: data.transfer_reference,
+      notes: data.notes,
+      next_visit_date: data.next_visit_date,
+      cash_session_id: null, // V4.2: se llena en approve.
+      client_request_id: data.client_request_id,
+    },
+    client,
+  );
+};
 
-  // Hook: notificar a los admins que hay una nueva pre-carga pendiente de
-  // aprobación. Post-creación, best-effort — nunca afecta el resultado del
-  // payment ya persistido.
+/**
+ * Resuelve un reintento idempotente: la clave ya fue usada por este cobrador.
+ * Si la request coincide (misma cuota y mismo monto) devuelve la pre-carga
+ * existente marcada con `idempotent_replay`; si no, la clave se reusó para
+ * otro cobro → 409 IDEMPOTENCY_KEY_REUSED (nunca se crea un segundo pago).
+ * @param {object} existing - Pre-carga ya registrada con esa clave.
+ * @param {object} data - Body de la request reintentada.
+ * @returns {object} Pre-carga existente con `idempotent_replay: true`.
+ */
+const _resolveIdempotentReplay = (existing, data) => {
+  const sameInstallment = existing.installment_id === data.installment_id;
+  const sameAmount =
+    _round2(existing.amount_received) ===
+    _round2(_normalizePaymentAmounts(data).amountReceived);
+  if (!sameInstallment || !sameAmount)
+    throw {
+      status: 409,
+      code: "IDEMPOTENCY_KEY_REUSED",
+      message:
+        "El client_request_id ya se usó para otro cobro. Generá una clave nueva para cada intento de cobro distinto.",
+    };
+  return { ...existing, idempotent_replay: true };
+};
+
+/**
+ * Registra una pre-carga de cobro validando el saldo disponible del crédito.
+ * Permite montos que cubran varias cuotas siempre que no superen el saldo pendiente total.
+ *
+ * P08 (issue #28) — idempotente y con lock:
+ *   · Todo ocurre en una transacción que bloquea la cuota y luego el crédito
+ *     (mismo orden que approve: cuota → crédito, sin ciclos de deadlock). Dos
+ *     requests concurrentes recalculan el disponible en serie.
+ *   · Si llega `client_request_id` y este cobrador ya registró un pago con esa
+ *     clave, se devuelve el existente (`idempotent_replay: true`) sin crear otro.
+ *     El índice UNIQUE parcial (collector_id, client_request_id) es la última
+ *     barrera: si dos requests con la misma clave no se serializan por el lock
+ *     (cuotas de créditos distintos), la segunda choca con el índice y se
+ *     resuelve como replay o 409.
+ *   · No toca caja: el cobrador no opera caja (V4.2).
+ * @param {object} data - Datos validados del cobro.
+ * @param {object} requestingUser - Cobrador autenticado que registra la pre-carga.
+ * @returns {Promise<object>} Pre-carga creada (PENDING) o la existente en un replay.
+ */
+const create = async (data, requestingUser) => {
+  const clientRequestId = data.client_request_id || null;
+
+  let payment;
+  try {
+    payment = await withTransaction(async (client) => {
+      const inst = await queries.lockAndGetInstallment(
+        client,
+        data.installment_id,
+      );
+      if (!inst) throw { status: 404, message: "Cuota no encontrada." };
+      const credit = await queries.lockAndGetCredit(client, inst.credit_id);
+
+      // Chequeo de idempotencia bajo lock: si una request concurrente con la
+      // misma clave ya confirmó, acá la vemos (READ COMMITTED, nuevo snapshot).
+      if (clientRequestId) {
+        const existing = await queries.findByClientRequestId(
+          requestingUser.id,
+          clientRequestId,
+          client,
+        );
+        if (existing) return _resolveIdempotentReplay(existing, data);
+      }
+
+      // Camino pre-carga de la renovación: misma operación de negocio RENEWAL,
+      // pero por el pipeline de pre-carga (nace PENDING; efectos en approve).
+      if (data.generation_type === "RENEWAL")
+        return _insertRenewalPrecarga(client, data, requestingUser, inst);
+      return _insertCollectionPrecarga(
+        client,
+        data,
+        requestingUser,
+        inst,
+        credit,
+      );
+    });
+  } catch (err) {
+    // Carrera que el lock no serializa (misma clave, créditos distintos): el
+    // índice UNIQUE rechaza el segundo INSERT. La otra transacción ya confirmó.
+    if (
+      clientRequestId &&
+      err.code === "23505" &&
+      err.constraint === "ux_payments_collector_client_request"
+    ) {
+      const existing = await queries.findByClientRequestId(
+        requestingUser.id,
+        clientRequestId,
+      );
+      if (existing) return _resolveIdempotentReplay(existing, data);
+    }
+    throw err;
+  }
+
+  // Un replay no repite los side-effects: ya corrieron con la request original.
+  if (payment.idempotent_replay) return payment;
+
+  // Hooks post-commit, best-effort: el INSERT del payment y el hook de
+  // management_status son operaciones independientes; un fallo del hook no
+  // revierte el payment (es un side-effect de UI, no contable).
+  // · Notificar a los admins que hay una nueva pre-carga pendiente.
   await _notifyApprovalRequest(payment);
 
-  // Hook: el cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
+  // · El cobrador estuvo en el domicilio y dejó pre-carga → VISITED.
   // approve cambiará a PAID si la cuota queda saldada, o quedará VISITED
   // si fue pago parcial. Si el hook falla, el payment ya está persistido —
   // es aceptable (la planilla puede recomputarse manualmente).
   await collectionsQueries.updateManagementStatusForActiveTodaySheet(
     requestingUser.id,
-    data.installment_id,
+    payment.installment_id,
     "VISITED",
   );
 

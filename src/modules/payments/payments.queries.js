@@ -77,14 +77,18 @@ const findById = async (id) => {
   return r.rows[0] || null;
 };
 
+// Columnas que devuelve una pre-carga (creación y replay idempotente).
+const PRECARGA_COLUMNS = `id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, generation_type, client_request_id, created_at`;
+
 // Suma de pre-cargas PENDING para una cuota (monto comprometido pendiente de aprobación)
 /**
  * Suma el monto comprometido en pre-cargas pendientes de una cuota.
  * @param {string} installmentId - ID de la cuota.
+ * @param {object} [db=pool] - Pool o cliente de transacción.
  * @returns {Promise<number>} Total pendiente de aprobación ya comprometido.
  */
-const getPendingCommittedAmount = async (installmentId) => {
-  const r = await pool.query(
+const getPendingCommittedAmount = async (installmentId, db = pool) => {
+  const r = await db.query(
     `SELECT COALESCE(SUM(amount_received), 0)::float8 AS total
      FROM payments
      WHERE installment_id = $1 AND status = 'PENDING'`,
@@ -106,13 +110,14 @@ const create = async (
     next_visit_date,
     cash_session_id,
     generation_type,
+    client_request_id,
   },
   db = pool,
 ) => {
   const r = await db.query(
-    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id, generation_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-     RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, next_visit_date, cash_session_id, generation_type, created_at`,
+    `INSERT INTO payments (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference, notes, next_visit_date, cash_session_id, generation_type, client_request_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     RETURNING ${PRECARGA_COLUMNS}`,
     [
       installment_id,
       collector_id,
@@ -125,9 +130,28 @@ const create = async (
       next_visit_date || null,
       cash_session_id || null,
       generation_type || "COLLECTION",
+      client_request_id || null,
     ],
   );
   return r.rows[0];
+};
+
+/**
+ * Busca la pre-carga creada por un cobrador con una clave de idempotencia dada.
+ * Devuelve la misma forma que `create` para que un reintento responda igual.
+ * @param {string} collectorId - ID del cobrador que registró la pre-carga.
+ * @param {string} clientRequestId - Clave de idempotencia enviada por el cliente.
+ * @param {object} [db=pool] - Pool o cliente de transacción.
+ * @returns {Promise<object|null>}
+ */
+const findByClientRequestId = async (collectorId, clientRequestId, db = pool) => {
+  const r = await db.query(
+    `SELECT ${PRECARGA_COLUMNS}
+     FROM payments
+     WHERE collector_id = $1 AND client_request_id = $2`,
+    [collectorId, clientRequestId],
+  );
+  return r.rows[0] || null;
 };
 
 // ── Locks transaccionales (SELECT FOR UPDATE) ─────────────────────────────────
@@ -308,9 +332,14 @@ const reject = async (client, id, rejectionReason, adminId) => {
   return r.rowCount > 0;
 };
 
-// Saldo pendiente total de todas las cuotas no pagadas del crédito
-const getTotalPendingBalance = async (creditId) => {
-  const r = await pool.query(
+/**
+ * Saldo pendiente total de todas las cuotas no pagadas del crédito, neto de pre-cargas PENDING.
+ * @param {string} creditId - ID del crédito.
+ * @param {object} [db=pool] - Pool o cliente de transacción.
+ * @returns {Promise<number>}
+ */
+const getTotalPendingBalance = async (creditId, db = pool) => {
+  const r = await db.query(
     `SELECT (
        COALESCE(SUM(i.amount_due - i.amount_paid), 0)
        - COALESCE((
@@ -846,10 +875,11 @@ const getCreditStatusByInstallment = async (installmentId) => {
  * tipo, installments_count y estado. Devuelve la primera cuota (la única en un
  * préstamo de un solo pago) con su saldo y vencimiento.
  * @param {string} creditId - ID del crédito.
+ * @param {object} [db=pool] - Pool o cliente de transacción.
  * @returns {Promise<object|null>} Datos del crédito + cuota, o null si no existe.
  */
-const getRenewableLoan = async (creditId) => {
-  const r = await pool.query(
+const getRenewableLoan = async (creditId, db = pool) => {
+  const r = await db.query(
     `SELECT c.type, c.installments_count::int AS installments_count,
             c.status AS credit_status, c.total_amount::float8 AS total_amount,
             c.payment_frequency,
@@ -873,6 +903,7 @@ module.exports = {
   findById,
   getPendingCommittedAmount,
   create,
+  findByClientRequestId,
   lockAndGetPayment,
   lockAndGetInstallment,
   lockAndGetCredit,
