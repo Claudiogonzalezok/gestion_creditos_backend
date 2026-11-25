@@ -11,7 +11,7 @@ const collectionsQueries = require('../collections/collections.queries');
  *   El Admin puede registrar gestiones de campo, pero quedan a su nombre.
  *   Excepción SCHEDULED_VISIT (gestión administrativa): collector_id = cobrador
  *   asignado del cliente, para que la visita caiga en SU planilla de la fecha
- *   agendada. created_by siempre es quien registra (el admin).
+ *   agendada. created_by siempre es quien registra.
  *   Opción B (Admin elige cobrador libremente) queda pendiente para ETAPA futura.
  *
  * @param {object} data - Datos del intento.
@@ -19,11 +19,12 @@ const collectionsQueries = require('../collections/collections.queries');
  * @returns {Promise<object>} Intento registrado.
  */
 const create = async (data, requestingUser) => {
-  // Gestión administrativa: la visita programada (SCHEDULED_VISIT) es exclusiva
-  // del admin. Los demás tipos (NO_PAYMENT/NOT_FOUND) conservan su flujo actual.
+  // La visita programada (SCHEDULED_VISIT) la pueden cargar ADMIN, vendedor y
+  // mixto: andan en el campo y el cliente les avisa cuándo va a pagar. Los demás
+  // tipos (NO_PAYMENT/NOT_FOUND) conservan su flujo de cobrador.
   const isScheduledVisit = data.attempt_type === 'SCHEDULED_VISIT';
-  if (isScheduledVisit && requestingUser.role !== 'ADMIN')
-    throw { status: 403, message: 'Solo un administrador puede programar visitas sobre cuotas.' };
+  if (isScheduledVisit && !['ADMIN', 'SELLER', 'SELLER_COLLECTOR'].includes(requestingUser.role))
+    throw { status: 403, message: 'No tenés permiso para programar visitas sobre cuotas.' };
 
   // Verificar que la cuota exista y obtener datos del crédito/cliente
   const instRes = await pool.query(
@@ -46,8 +47,11 @@ const create = async (data, requestingUser) => {
   if (inst.credit_status !== 'ACTIVE')
     throw { status: 409, message: `No se pueden registrar intentos en un crédito en estado ${inst.credit_status}.` };
 
-  // Validar ownership: cobrador solo puede registrar sobre sus propios clientes
-  if (['COLLECTOR', 'SELLER_COLLECTOR'].includes(requestingUser.role)) {
+  // Validar ownership: en gestiones de campo (NO_PAYMENT/NOT_FOUND) el cobrador
+  // solo puede registrar sobre sus propios clientes. La visita programada queda
+  // exenta: cualquier vendedor/mixto puede agendarla para cualquier cliente (se
+  // imputa al cobrador asignado, no al que la registra).
+  if (!isScheduledVisit && ['COLLECTOR', 'SELLER_COLLECTOR'].includes(requestingUser.role)) {
     if (inst.assigned_collector_id !== requestingUser.id)
       throw { status: 403, message: 'No tenés acceso a esta cuota. El cliente no está asignado a tu cartera.' };
   }

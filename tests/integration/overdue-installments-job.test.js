@@ -3,14 +3,15 @@
 // grace_days, cap, invariante amount_due = original + penalty, y excluye
 // cuotas REFINANCED/PAID.
 //
-// Defaults seedeados (vía DEFAULT_VALUES):
-//   penalty_grace_days = 3
-//   penalty_rate_daily = 0       (mora automática deshabilitada en producción)
-//   penalty_max_rate   = 0.50    (50% del capital original)
+// Parámetros bajo los que corre esta suite:
+//   penalty_grace_days = 3       (default seedeado vía DEFAULT_VALUES)
+//   penalty_rate_daily = 0.005   (0.5% diario — LO FIJA ESTA SUITE, ver abajo)
+//   penalty_max_rate   = 0.50    (50% del capital original, default)
 //
-// Los tests de cálculo fijan explícitamente penalty_rate_daily = 0.005 (0.5%
-// diario) en un beforeEach, para no depender del default de producción.
-// El último describe verifica el comportamiento con el default (tasa 0).
+// La mora automática viene deshabilitada por default (penalty_rate_daily = 0,
+// decisión del cliente — migración 046). Estos tests verifican la FÓRMULA de
+// mora, así que habilitan una tasa explícita en cada test en vez de depender
+// del default: si el negocio vuelve a cambiarlo, la suite no se entera.
 //
 // Nota sobre primera corrida vs catch-up:
 //   El job detecta si nunca corrió antes (cron_execution_log vacío) y, en ese
@@ -18,7 +19,7 @@
 //   describe NO seedeo cron_log → simulan "primera corrida".
 //   Los tests del segundo describe SÍ seedeo cron_log → simulan catch-up real.
 
-const { pool, setupTestSuite } = require('./helpers/db');
+const { pool, setupTestSuite, setConfig } = require('./helpers/db');
 const {
   createInstallmentFixture,
   createPendingPaymentFixture,
@@ -28,21 +29,13 @@ const {
 } = require('./helpers/fixtures');
 const { today, daysAgo, daysFromNow } = require('./helpers/dates');
 const { markOverdueAndApplyPenalty } = require('../../src/jobs/overdueInstallments.job');
-const systemConfig = require('../../src/modules/systemConfig/systemConfig.queries');
 
 setupTestSuite();
 
-const TEST_PENALTY_RATE_DAILY = '0.005';
-
-/**
- * Fija la tasa diaria de mora vía el módulo de configuración (invalida caché).
- * Se registra después de setupTestSuite, así corre tras el truncate + reseed.
- */
-const setPenaltyRateDaily = (value) =>
-  systemConfig.update('penalty_rate_daily', value, null);
-
+// Va DESPUÉS de setupTestSuite: su beforeEach trunca y reseedea system_config
+// con los defaults (mora en 0), así que la tasa se fija recién después.
 beforeEach(async () => {
-  await setPenaltyRateDaily(TEST_PENALTY_RATE_DAILY);
+  await setConfig('penalty_rate_daily', '0.005');
 });
 
 describe('A — overdueInstallments.job — primera corrida (M=1 por seguridad)', () => {
@@ -446,6 +439,27 @@ describe('A — overdueInstallments.job — catch-up de N días', () => {
   });
 });
 
+describe('A — overdueInstallments.job — mora deshabilitada (default del sistema)', () => {
+  // Config REAL de producción desde la migración 046: penalty_rate_daily = 0.
+  // El resto de la suite fija 0.005 para ejercitar la fórmula; acá se verifica
+  // que con el default no se cobra mora, pero la cuota igual se marca vencida.
+  it('con penalty_rate_daily = 0 marca OVERDUE pero no acumula mora', async () => {
+    await setConfig('penalty_rate_daily', '0');
+    const inst = await createInstallmentFixture({
+      due_date:        daysAgo(10),
+      original_amount: 1000,
+      status:          'PENDING',
+    });
+
+    await markOverdueAndApplyPenalty();
+
+    const after = await reloadInstallment(inst.id);
+    expect(after.status).toBe('OVERDUE');
+    expect(after.penalty_amount).toBe(0);
+    expect(after.amount_due).toBeCloseTo(1000, 2);
+  });
+});
+
 describe('A — overdueInstallments.job — respeto a pre-cargas PENDING', () => {
   it('pre-carga PENDING que cubre el saldo total → NO aplica mora', async () => {
     await seedCronLogSuccess('overdueInstallments', daysAgo(1));
@@ -575,26 +589,5 @@ describe('A — overdueInstallments.job — respeto a pre-cargas PENDING', () =>
     const after = await reloadInstallment(inst.id);
     expect(after.penalty_amount).toBe(0);
     expect(after.last_penalty_applied_at).toBe(daysAgo(1));
-  });
-});
-
-describe('A — overdueInstallments.job — default de producción (penalty_rate_daily = 0)', () => {
-  beforeEach(async () => {
-    await setPenaltyRateDaily(systemConfig.DEFAULT_VALUES.penalty_rate_daily.value);
-  });
-
-  it('con tasa 0 marca OVERDUE pero no aplica mora', async () => {
-    const inst = await createInstallmentFixture({
-      due_date:        daysAgo(10),
-      original_amount: 1000,
-      status:          'PENDING',
-    });
-
-    await markOverdueAndApplyPenalty();
-
-    const after = await reloadInstallment(inst.id);
-    expect(after.status).toBe('OVERDUE');
-    expect(after.penalty_amount).toBe(0);
-    expect(after.amount_due).toBeCloseTo(1000, 2);
   });
 });

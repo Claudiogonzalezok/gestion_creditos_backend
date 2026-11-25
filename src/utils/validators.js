@@ -663,6 +663,25 @@ const credits = {
       .isLength({ min: 5, max: 500 })
       .withMessage("El motivo debe tener entre 5 y 500 caracteres."),
   ],
+  renew: [
+    isUUIDParam("id", "El ID de crédito"),
+    body("payment_method")
+      .isIn(["CASH", "TRANSFER", "MIXED"])
+      .withMessage("El método de pago debe ser CASH, TRANSFER o MIXED."),
+    body("amount_cash")
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage("El efectivo debe ser un número mayor o igual a 0."),
+    body("amount_transfer")
+      .optional({ nullable: true })
+      .isFloat({ min: 0 })
+      .withMessage("La transferencia debe ser un número mayor o igual a 0."),
+    body("transfer_reference")
+      .optional({ nullable: true, checkFalsy: true })
+      .trim()
+      .isLength({ max: 100 })
+      .withMessage("La referencia no puede superar los 100 caracteres."),
+  ],
   changeSeller: [
     isUUIDParam("id", "El ID de crédito"),
     body("seller_id")
@@ -837,6 +856,12 @@ const paymentAmountFields = [
 const payments = {
   create: [
     isUUID("installment_id", "La cuota"),
+    // Único generation_type que el cliente puede fijar: RENEWAL (pre-carga de
+    // renovación). Ausente = cobro normal (COLLECTION por defecto en el server).
+    body("generation_type")
+      .optional()
+      .isIn(["RENEWAL"])
+      .withMessage("El tipo de generación no es válido."),
     ...paymentAmountFields,
     body("notes")
       .optional({ nullable: true, checkFalsy: true })
