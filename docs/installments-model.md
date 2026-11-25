@@ -230,9 +230,10 @@ La reversión deshace exactamente eso:
   `cash_session_id = NULL` y sin movimiento de caja.
 - **Crédito:** si estaba SETTLED, vuelve a ACTIVE.
 
-Límites conocidos (iguales o mejores que antes del fix, nunca peores):
+Límites conocidos (en ningún caso peores que el comportamiento anterior a la
+migración 048):
 
-- Cobros aprobados antes de este cambio no tienen sub-pago por el excedente
+- Cobros aprobados antes de la migración 048 no tienen sub-pago por el excedente
   parcial ni snapshot de fechas. Al revertirlos, ese excedente se sigue restando
   a la cabecera (puede borrar pagos parciales previos de la cabecera, con clamp
   a 0), la cuota siguiente conserva el excedente y las fechas no se restauran.

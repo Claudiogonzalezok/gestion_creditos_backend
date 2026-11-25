@@ -181,6 +181,7 @@ describe('P06 — reversión de cobro con cuotas adelantadas', () => {
     const admin = await createUserFixture({ role: 'ADMIN' });
     await openOperatingSession(admin);
     const { credit, installments } = await seedCredit(6, 10000);
+    const initial = await snapshotInstallments(credit.id);
 
     // A: paga cuota 1 y adelanta la 2 → corre 3..6.
     const a = await approvedPayment(installments[0].id, 20000, admin);
@@ -191,6 +192,10 @@ describe('P06 — reversión de cobro con cuotas adelantadas', () => {
     await paymentsService.reverse(a.id, 'Error', admin.id);
 
     const after = await snapshotInstallments(credit.id);
+    // Cuotas 3 y 4 (solo corridas por A) recuperan su fecha previa a A.
+    for (const n of [2, 3]) {
+      expect(after[n]).toMatchObject({ due_date: initial[n].due_date, original_due_date: initial[n].original_due_date });
+    }
     // Cuotas 5 y 6 conservan las fechas que les dejó B (A no las pisa).
     expect(after[4]).toMatchObject({ due_date: afterB[4].due_date, original_due_date: afterB[4].original_due_date });
     expect(after[5]).toMatchObject({ due_date: afterB[5].due_date, original_due_date: afterB[5].original_due_date });
