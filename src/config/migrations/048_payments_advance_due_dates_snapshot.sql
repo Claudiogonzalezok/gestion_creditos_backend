@@ -7,8 +7,9 @@
 -- del corrimiento, así que las fechas quedaban corridas para siempre.
 --
 -- Se guarda, en el cobro cabecera que provocó el corrimiento, un arreglo JSON
--- [{ id, due_date, original_due_date }] con el estado PREVIO de cada cuota
--- corrida. payments.reverse lo usa para restaurar las fechas exactas.
+-- [{ id, due_date, original_due_date, shifted_due_date }] con el estado PREVIO
+-- de cada cuota corrida y la fecha que le quedó. payments.reverse lo usa para
+-- restaurar las fechas exactas (solo si nadie la volvió a correr después).
 --
 -- Cambio aditivo: columna nullable, sin backfill. Los cobros históricos quedan
 -- en NULL (su reversión no restaura fechas, igual que antes).

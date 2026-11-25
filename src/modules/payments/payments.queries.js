@@ -373,9 +373,9 @@ const frequencyToInterval = (paymentFrequency) => {
  * @param {string} creditId - ID del crédito afectado.
  * @param {string} paymentFrequency - Frecuencia del crédito.
  * @param {string|Date} baseDueDate - Fecha base desde la que se recalcula el plan.
- * @returns {Promise<Array<{id: string, due_date: string, original_due_date: string|null}>>}
- *   Estado PREVIO al corrimiento de cada cuota corrida, para poder restaurarlo
- *   si el cobro que lo provocó se revierte.
+ * @returns {Promise<Array<{id: string, due_date: string, original_due_date: string|null, shifted_due_date: string}>>}
+ *   Estado PREVIO al corrimiento de cada cuota corrida (y la fecha que le quedó
+ *   después), para poder restaurarlo si el cobro que lo provocó se revierte.
  */
 const shiftInstallmentDates = async (
   client,
@@ -403,7 +403,8 @@ const shiftInstallmentDates = async (
      WHERE i.id = ordered.id
      RETURNING i.id,
                to_char(ordered.prev_due_date, 'YYYY-MM-DD')          AS due_date,
-               to_char(ordered.prev_original_due_date, 'YYYY-MM-DD') AS original_due_date`,
+               to_char(ordered.prev_original_due_date, 'YYYY-MM-DD') AS original_due_date,
+               to_char(i.due_date, 'YYYY-MM-DD')                     AS shifted_due_date`,
     [creditId, interval, baseDueDate],
   );
   return r.rows;
@@ -426,18 +427,21 @@ const saveAdvanceDueDatesSnapshot = async (client, paymentId, snapshot) => {
 /**
  * Restaura los vencimientos previos al adelanto (due_date y original_due_date)
  * de las cuotas corridas por un cobro que se revierte, y recalcula su status
- * con la nueva fecha (misma regla que updateInstallment). Las cuotas que ya no
- * están en un estado de deuda (REFINANCED, PLAN_CHANGE_CANCELLED, WRITTEN_OFF)
- * no se tocan.
+ * con la nueva fecha (misma regla que updateInstallment).
+ *
+ * Solo se restaura una cuota si su due_date actual sigue siendo la que le dejó
+ * este adelanto (shifted_due_date): si otro cobro posterior la volvió a correr,
+ * se respeta ese corrimiento (reversión fuera de orden). Tampoco se tocan las
+ * cuotas en REFINANCED, PLAN_CHANGE_CANCELLED o WRITTEN_OFF.
  * @param {object} client - Cliente de transacción.
- * @param {Array<{id: string, due_date: string, original_due_date: string|null}>} snapshot
+ * @param {Array<{id: string, due_date: string, original_due_date: string|null, shifted_due_date: string}>} snapshot
  * @param {number} graceDays - Días de gracia del system_config.
  */
 const restoreAdvanceDueDates = async (client, snapshot, graceDays) => {
   await client.query(
     `WITH s AS (
        SELECT * FROM jsonb_to_recordset($1::jsonb)
-         AS x(id uuid, due_date date, original_due_date date)
+         AS x(id uuid, due_date date, original_due_date date, shifted_due_date date)
      )
      UPDATE installments i
         SET due_date          = s.due_date,
@@ -451,6 +455,7 @@ const restoreAdvanceDueDates = async (client, snapshot, graceDays) => {
             updated_at        = NOW()
        FROM s
       WHERE i.id = s.id
+        AND i.due_date = s.shifted_due_date
         AND i.status IN ('PENDING','PARTIAL','OVERDUE','PAID')`,
     [JSON.stringify(snapshot), graceDays],
   );

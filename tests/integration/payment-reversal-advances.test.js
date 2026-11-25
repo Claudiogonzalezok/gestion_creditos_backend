@@ -177,6 +177,44 @@ describe('P06 — reversión de cobro con cuotas adelantadas', () => {
     expect(after[0]).toMatchObject({ amount_paid: 3000, status: 'PARTIAL', due_date: today() });
   });
 
+  it('reversión fuera de orden: no pisa el corrimiento de un adelanto posterior', async () => {
+    const admin = await createUserFixture({ role: 'ADMIN' });
+    await openOperatingSession(admin);
+    const { credit, installments } = await seedCredit(6, 10000);
+
+    // A: paga cuota 1 y adelanta la 2 → corre 3..6.
+    const a = await approvedPayment(installments[0].id, 20000, admin);
+    // B: paga cuota 3 y adelanta la 4 → corre 5..6 otra vez.
+    await approvedPayment(installments[2].id, 20000, admin);
+    const afterB = await snapshotInstallments(credit.id);
+
+    await paymentsService.reverse(a.id, 'Error', admin.id);
+
+    const after = await snapshotInstallments(credit.id);
+    // Cuotas 5 y 6 conservan las fechas que les dejó B (A no las pisa).
+    expect(after[4]).toMatchObject({ due_date: afterB[4].due_date, original_due_date: afterB[4].original_due_date });
+    expect(after[5]).toMatchObject({ due_date: afterB[5].due_date, original_due_date: afterB[5].original_due_date });
+    // Cuotas 1 y 2 vuelven a deber todo; 3 y 4 siguen pagadas por B.
+    expect(after.map((i) => [i.status, i.amount_paid])).toEqual([
+      ['PENDING', 0], ['PENDING', 0], ['PAID', 10000], ['PAID', 10000], ['PENDING', 0], ['PENDING', 0],
+    ]);
+  });
+
+  it('cobro sin snapshot (histórico): revierte montos y no toca fechas', async () => {
+    const admin = await createUserFixture({ role: 'ADMIN' });
+    await openOperatingSession(admin);
+    const { credit, installments } = await seedCredit(3, 10000);
+    const p = await approvedPayment(installments[0].id, 20000, admin);
+    await pool.query(`UPDATE payments SET advance_due_dates_snapshot = NULL WHERE id = $1`, [p.id]);
+    const shifted = await snapshotInstallments(credit.id);
+
+    await paymentsService.reverse(p.id, 'Error', admin.id);
+
+    const after = await snapshotInstallments(credit.id);
+    expect(after.map((i) => [i.status, i.amount_paid])).toEqual([['PENDING', 0], ['PENDING', 0], ['PENDING', 0]]);
+    expect(after[2].due_date).toBe(shifted[2].due_date);
+  });
+
   it('un sub-pago por distribución no se revierte por separado', async () => {
     const admin = await createUserFixture({ role: 'ADMIN' });
     await openOperatingSession(admin);
