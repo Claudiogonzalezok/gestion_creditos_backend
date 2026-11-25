@@ -23,6 +23,19 @@
 set -euo pipefail
 umask 077
 
+# El log se define antes que todo (BACKUP_LOG del entorno, no del .env) para que
+# también queden registrados los errores de configuración y de argumentos.
+LOG_FILE="${BACKUP_LOG:-/var/log/finflow-backup.log}"
+# Un solo destino de salida: sin terminal (cron, pipe), todo stdout y stderr del script,
+# incluidos los errores de pg_dump/gpg/rclone, va al log. Con terminal, se ve en pantalla
+# y log() además lo anota en el log.
+if [[ -t 1 ]]; then
+  log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_FILE"; }
+else
+  exec >>"$LOG_FILE" 2>&1
+  log() { echo "$(date '+%F %T') $*"; }
+fi
+
 CONFIG_FILE="${BACKUP_CONFIG:-/etc/finflow-backup.env}"
 # shellcheck source=/dev/null
 [[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
@@ -35,7 +48,6 @@ RCLONE_REMOTE="${RCLONE_REMOTE:-}"
 KEEP_LOCAL_DAYS="${KEEP_LOCAL_DAYS:-7}"
 KEEP_REMOTE_DAYS="${KEEP_REMOTE_DAYS:-30}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
-LOG_FILE="${BACKUP_LOG:-/var/log/finflow-backup.log}"
 
 UPLOAD=1
 while [[ $# -gt 0 ]]; do
@@ -44,16 +56,6 @@ while [[ $# -gt 0 ]]; do
     *) echo "Opción desconocida: $1" >&2; exit 2 ;;
   esac
 done
-
-# Un solo destino de salida: sin terminal (cron, pipe), todo stdout y stderr del script,
-# incluidos los errores de pg_dump/gpg/rclone, va al log. Con terminal, se ve en pantalla
-# y log() además lo anota en el log.
-if [[ -t 1 ]]; then
-  log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_FILE"; }
-else
-  exec >>"$LOG_FILE" 2>&1
-  log() { echo "$(date '+%F %T') $*"; }
-fi
 
 ping_health() {
   [[ -n "$HEALTHCHECK_URL" ]] || return 0

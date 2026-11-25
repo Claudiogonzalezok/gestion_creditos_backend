@@ -101,7 +101,7 @@ export BACKUP=/var/backups/finflow/finflow_<fecha>.dump.gpg   # o el bajado de D
 export BROKEN="finflow_broken_$(date +%Y%m%d_%H%M)"
 bash -euo pipefail <<'EOF'
 umask 077
-work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+work="$(mktemp -d -p /var/backups)"; trap 'rm -rf "$work"' EXIT
 chown postgres "$work"
 gpg --batch --decrypt --passphrase-file /root/.finflow-backup-passphrase --output "$work/db.dump" "$BACKUP"
 chown postgres "$work/db.dump"
