@@ -61,6 +61,44 @@ describe('P08 — pre-carga idempotente (client_request_id)', () => {
     expect(first.client_request_id).toBe(KEY_A);
   });
 
+  it('el replay no repite side-effects: no notifica de nuevo a los admins', async () => {
+    await createUserFixture({ role: 'ADMIN' });
+    const { inst, user } = await setup();
+    const countNotifs = async () =>
+      (await pool.query('SELECT COUNT(*)::int AS n FROM notifications')).rows[0].n;
+
+    await paymentsService.create(body(inst.id, { client_request_id: KEY_A }), user);
+    const afterFirst = await countNotifs();
+    await paymentsService.create(body(inst.id, { client_request_id: KEY_A }), user);
+
+    expect(afterFirst).toBeGreaterThan(0);
+    expect(await countNotifs()).toBe(afterFirst);
+  });
+
+  it('replay con installment_id en mayúsculas → mismo cobro (200 replay, no 409)', async () => {
+    const { inst, user } = await setup();
+
+    const first = await paymentsService.create(body(inst.id, { client_request_id: KEY_A }), user);
+    const again = await paymentsService.create(
+      body(inst.id.toUpperCase(), { client_request_id: KEY_A.toUpperCase() }),
+      user,
+    );
+
+    expect(again.id).toBe(first.id);
+    expect(again.idempotent_replay).toBe(true);
+    expect(await countPayments(inst.id)).toBe(1);
+  });
+
+  it('misma clave con otro generation_type → 409 IDEMPOTENCY_KEY_REUSED', async () => {
+    const { inst, user } = await setup();
+
+    await paymentsService.create(body(inst.id, { client_request_id: KEY_A }), user);
+    await expect(
+      paymentsService.create(body(inst.id, { generation_type: 'RENEWAL', client_request_id: KEY_A }), user),
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_KEY_REUSED' });
+    expect(await countPayments(inst.id)).toBe(1);
+  });
+
   it('dos requests concurrentes con el mismo client_request_id → una sola pre-carga', async () => {
     const { inst, user } = await setup();
 

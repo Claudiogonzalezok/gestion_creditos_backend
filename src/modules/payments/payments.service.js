@@ -574,7 +574,9 @@ const _insertCollectionPrecarga = async (
   if (inst.status === "PAID")
     throw { status: 409, message: "Esta cuota ya fue pagada." };
 
-  if (credit.status !== "ACTIVE")
+  // La FK cuota → crédito hace imposible un crédito ausente; igual se
+  // conserva la tolerancia del código previo (sin crédito, no se bloquea).
+  if (credit && credit.status !== "ACTIVE")
     throw {
       status: 409,
       message: `No se pueden registrar cobros en un crédito en estado ${credit.status}.`,
@@ -645,19 +647,29 @@ const _insertCollectionPrecarga = async (
 
 /**
  * Resuelve un reintento idempotente: la clave ya fue usada por este cobrador.
- * Si la request coincide (misma cuota y mismo monto) devuelve la pre-carga
- * existente marcada con `idempotent_replay`; si no, la clave se reusó para
- * otro cobro → 409 IDEMPOTENCY_KEY_REUSED (nunca se crea un segundo pago).
+ * Si la request coincide (misma cuota, mismo tipo de generación y mismo monto
+ * total) devuelve la pre-carga existente marcada con `idempotent_replay`; si
+ * no, la clave se reusó para otro cobro → 409 IDEMPOTENCY_KEY_REUSED (nunca se
+ * crea un segundo pago). El desglose efectivo/transferencia no se compara a
+ * propósito: un reintento del mismo intento no debería cambiarlo, y si cambia
+ * el dinero total es el mismo — se conserva lo registrado originalmente.
+ * Los UUID se comparan sin distinguir mayúsculas (Postgres los devuelve en
+ * minúscula y el validador acepta cualquier casing).
  * @param {object} existing - Pre-carga ya registrada con esa clave.
  * @param {object} data - Body de la request reintentada.
  * @returns {object} Pre-carga existente con `idempotent_replay: true`.
  */
 const _resolveIdempotentReplay = (existing, data) => {
-  const sameInstallment = existing.installment_id === data.installment_id;
+  const sameInstallment =
+    String(existing.installment_id).toLowerCase() ===
+    String(data.installment_id).toLowerCase();
+  const sameGeneration =
+    existing.generation_type ===
+    (data.generation_type === "RENEWAL" ? "RENEWAL" : "COLLECTION");
   const sameAmount =
     _round2(existing.amount_received) ===
     _round2(_normalizePaymentAmounts(data).amountReceived);
-  if (!sameInstallment || !sameAmount)
+  if (!sameInstallment || !sameGeneration || !sameAmount)
     throw {
       status: 409,
       code: "IDEMPOTENCY_KEY_REUSED",
