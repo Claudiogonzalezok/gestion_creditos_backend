@@ -240,7 +240,7 @@ app.use((req, res) => {
 });
 
 // ── Error handler global ──────────────────────────────────────
-app.use((err, req, res, next) => {
+app.use((err, req, res, _next) => {
   // JSON mal formado enviado por el cliente
   if (err.type === "entity.parse.failed") {
     return res
@@ -265,7 +265,9 @@ app.use((err, req, res, next) => {
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
+    // eslint-disable-next-line no-console -- log de arranque
     console.log(`🚀  Servidor corriendo en http://localhost:${PORT}`);
+    // eslint-disable-next-line no-console -- log de arranque
     console.log(`📋  Ambiente: ${process.env.NODE_ENV || "development"}`);
 
     // Iniciar cron jobs solo fuera del entorno de tests

@@ -34,6 +34,7 @@ pool.connect((err, client, release) => {
     process.exit(1);
   }
   release();
+  // eslint-disable-next-line no-console -- log de arranque
   console.log('✅  Conectado a PostgreSQL →', process.env.DB_NAME);
 });
 
