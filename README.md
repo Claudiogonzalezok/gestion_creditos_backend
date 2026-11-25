@@ -670,6 +670,8 @@ PUT    /api/notifications/preferences/:type       → ADMIN — actualizar prefe
 
 Tipos de notificación: `MORA`, `INSTALLMENT_DUE`, `APPROVAL_REQUEST`, `CASH_REGISTER`, `NEW_CUSTOMER`.
 
+`MORA` se emite una sola vez por cuota: cuando el job nocturno la pasa de `PENDING`/`PARTIAL` a `OVERDUE`. Las corridas siguientes siguen aplicando punitorios a cuotas ya vencidas pero no las re-notifican.
+
 ### Reportes
 
 ```
