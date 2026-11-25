@@ -3,7 +3,7 @@ const pool = require('../../config/db');
 const findUserByDni = async (dni) => {
   const result = await pool.query(
     `SELECT id, full_name, dni, email, password_hash, role, status,
-            is_temp_password, failed_attempts, locked_at
+            is_temp_password, failed_attempts, locked_at, locked_until
      FROM users WHERE dni = $1`,
     [dni]
   );
@@ -28,6 +28,60 @@ const incrementFailedAttempts = async (userId) => {
   );
 };
 
+/**
+ * Registra un intento fallido y decide el bloqueo en una sola sentencia atómica
+ * (evita que una ráfaga paralela supere el umbral sin bloquear).
+ * No-ADMIN: bloqueo permanente (locked_at) + force_relogin_at.
+ * ADMIN: bloqueo temporal (locked_until = NOW() + lockMinutes); si el bloqueo
+ * anterior ya venció, el conteo reinicia en 1.
+ * @returns {Promise<{role: string, failed_attempts: number, locked_at: Date|null, locked_until: Date|null}>}
+ */
+const registerFailedAttempt = async (userId, maxAttempts, lockMinutes) => {
+  const result = await pool.query(
+    `UPDATE users u
+     SET failed_attempts = n.next_attempts,
+         locked_at = CASE
+           WHEN u.role <> 'ADMIN' AND u.locked_at IS NULL AND n.next_attempts >= $2 THEN NOW()
+           ELSE u.locked_at END,
+         force_relogin_at = CASE
+           WHEN u.role <> 'ADMIN' AND u.locked_at IS NULL AND n.next_attempts >= $2 THEN NOW()
+           ELSE u.force_relogin_at END,
+         locked_until = CASE
+           WHEN u.role = 'ADMIN' AND n.next_attempts >= $2 THEN NOW() + make_interval(mins => $3::int)
+           ELSE u.locked_until END,
+         updated_at = NOW()
+     FROM (
+       SELECT id,
+              CASE WHEN locked_until IS NOT NULL AND locked_until <= NOW() THEN 1
+                   ELSE failed_attempts + 1 END AS next_attempts
+       FROM users WHERE id = $1 FOR UPDATE
+     ) n
+     WHERE u.id = n.id
+     RETURNING u.role, u.failed_attempts, u.locked_at, u.locked_until`,
+    [userId, maxAttempts, lockMinutes]
+  );
+  return result.rows[0] || null;
+};
+
+/**
+ * Variante portal de registerFailedAttempt: incremento y bloqueo en un UPDATE.
+ * @returns {Promise<{portal_failed_attempts: number, portal_locked_at: Date|null}>}
+ */
+const registerPortalFailedAttempt = async (customerId, maxAttempts) => {
+  const result = await pool.query(
+    `UPDATE customers
+     SET portal_failed_attempts = portal_failed_attempts + 1,
+         portal_locked_at = CASE
+           WHEN portal_locked_at IS NULL AND portal_failed_attempts + 1 >= $2 THEN NOW()
+           ELSE portal_locked_at END,
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING portal_failed_attempts, portal_locked_at`,
+    [customerId, maxAttempts]
+  );
+  return result.rows[0] || null;
+};
+
 const lockUser = async (userId) => {
   await pool.query(
     `UPDATE users SET locked_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -37,7 +91,7 @@ const lockUser = async (userId) => {
 
 const resetFailedAttempts = async (userId) => {
   await pool.query(
-    `UPDATE users SET failed_attempts = 0, last_login_at = NOW(), updated_at = NOW() WHERE id = $1`,
+    `UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = NOW(), updated_at = NOW() WHERE id = $1`,
     [userId]
   );
 };
@@ -125,6 +179,21 @@ const revokeRefreshToken = async (id) => {
   );
 };
 
+/**
+ * Rotación atómica: revoca el token solo si sigue vigente. Si dos refresh
+ * concurrentes usan la misma cookie, solo uno obtiene la fila.
+ * @returns {Promise<boolean>} true si este llamado ganó la rotación
+ */
+const revokeRefreshTokenIfActive = async (id) => {
+  const result = await pool.query(
+    `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW()
+     WHERE id = $1 AND revoked = FALSE
+     RETURNING id`,
+    [id]
+  );
+  return result.rowCount === 1;
+};
+
 // Revoca toda la familia — se usa cuando se detecta reutilización de un token revocado.
 const revokeFamilyRefreshTokens = async (familyId) => {
   const result = await pool.query(
@@ -167,9 +236,10 @@ module.exports = {
   findUserByDni, findCustomerByDni, findCustomerPasswordHash,
   incrementFailedAttempts, lockUser, resetFailedAttempts,
   incrementPortalFailedAttempts, lockCustomer, resetPortalFailedAttempts,
+  registerFailedAttempt, registerPortalFailedAttempt,
   changePortalPassword,
   blacklistToken, cleanExpiredTokens,
-  createRefreshToken, findRefreshToken, revokeRefreshToken,
+  createRefreshToken, findRefreshToken, revokeRefreshToken, revokeRefreshTokenIfActive,
   revokeFamilyRefreshTokens, revokeAllUserRefreshTokens, revokeAllCustomerRefreshTokens,
   cleanExpiredRefreshTokens,
 };

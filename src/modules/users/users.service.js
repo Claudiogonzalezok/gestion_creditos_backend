@@ -5,6 +5,26 @@ const { generateTempPassword } = require('../../utils/tempPassword');
 
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10');
 
+/**
+ * Ejecuta fn dentro de una transacción con un client dedicado.
+ * @param {Function} fn - recibe el client
+ * @returns {Promise<*>} lo que devuelva fn
+ */
+const _withTransaction = async (fn) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+};
+
 const getAll = async (filters) => {
   return queries.findAll(filters);
 };
@@ -71,16 +91,15 @@ const update = async (id, data) => {
       throw { status: 409, message: 'No es posible cambiar el rol porque el usuario tiene clientes asignados. Reasignelos primero.' };
   }
 
-  const updated = await queries.update(id, data);
+  if (!roleCambia) return queries.update(id, data);
 
-  // Invalidar sesión activa del usuario si cambió su rol (CU02)
-  // Actualiza force_relogin_at para que cualquier token emitido antes quede inválido.
-  // Requiere columna: ALTER TABLE users ADD COLUMN force_relogin_at TIMESTAMPTZ;
-  if (roleCambia) {
-    await queries.setForceReloginAt(id);
-  }
-
-  return updated;
+  // Cambio de rol (CU02): el UPDATE y el cierre de sesiones van en la misma
+  // transacción, para que el rol nunca quede aplicado con sesiones vivas (#42).
+  return _withTransaction(async (client) => {
+    const updated = await queries.update(id, data, client);
+    await queries.invalidateSessions(id, client);
+    return updated;
+  });
 };
 
 const updateOwnProfile = async (id, data) => {
@@ -116,7 +135,11 @@ const deactivate = async (id) => {
       throw { status: 409, message: 'No es posible desactivar el usuario porque tiene clientes asignados. Reasignelos primero.' };
   }
 
-  await queries.deactivate(id);
+  // Desactivar cierra todas las sesiones del usuario (#42).
+  await _withTransaction(async (client) => {
+    await queries.deactivate(id, client);
+    await queries.invalidateSessions(id, client);
+  });
 };
 
 const activate = async (id) => {
@@ -132,7 +155,11 @@ const resetPassword = async (id) => {
 
   const tempPassword  = generateTempPassword();
   const password_hash = await bcrypt.hash(tempPassword, SALT_ROUNDS);
-  await queries.resetPassword(id, password_hash);
+  // Resetear la contraseña cierra todas las sesiones previas (#42).
+  await _withTransaction(async (client) => {
+    await queries.resetPassword(id, password_hash, client);
+    await queries.invalidateSessions(id, client);
+  });
 
   return { tempPassword };
 };

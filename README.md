@@ -364,6 +364,7 @@ Backup diario cifrado de la base, con copia en Google Drive y ensayo de restore 
 
 ```
 POST /api/auth/login               → Login sistema interno
+POST /api/auth/refresh             → Renovar access token (cookie rt, rotación atómica)
 POST /api/auth/logout              → Cerrar sesión (invalida JWT)
 GET  /api/auth/me                  → Usuario autenticado
 POST /api/auth/portal/login        → Login portal público
@@ -810,10 +811,29 @@ sin registrarse en `cron_execution_log`. Si no hay conexión para tomar el lock,
 
 - **JWT doble secreto:** `sistema-interno` y `portal-cliente`. Un token no funciona en el otro sistema.
 - **Blacklist:** tokens revocados en `token_blacklist`. El cron job los limpia automáticamente.
-- **Bloqueo por intentos:** configurable en `system_config.login_max_attempts` (default 3).
+- **Bloqueo por intentos:** configurable en `system_config.login_max_attempts` (default 3). El incremento y la decisión de bloqueo son un solo `UPDATE ... RETURNING`: una ráfaga paralela no supera el umbral sin bloquear.
+  - No-ADMIN: bloqueo permanente (`locked_at`) hasta que un Admin lo desbloquee. Al bloquearse se cierran sus sesiones.
+  - ADMIN: bloqueo **temporal** (`users.locked_until`, migración 052) de `system_config.admin_lock_minutes` minutos (default 15). Nunca se bloquea de forma permanente. Vencido el bloqueo, el conteo reinicia.
+  - Portal: el login responde siempre el mismo mensaje genérico si el DNI no existe, el portal no está habilitado, la cuenta está inactiva o la contraseña es incorrecta. El bloqueo solo se informa con la contraseña correcta.
 - **Rate limit:** `express-rate-limit` en los endpoints de login. Desactivable con `DISABLE_LOGIN_RATE_LIMIT=true` para entornos e2e.
 - **Contraseña temporal:** `is_temp_password = true` bloquea todos los endpoints salvo `/me/change-password`.
-- **Invalidación por rol:** `force_relogin_at` invalida tokens emitidos antes del cambio de rol.
+- **Cierre de sesiones del lado del servidor:** cambiar el rol, resetear la contraseña, desactivar o bloquear a un usuario fija `force_relogin_at` y revoca todos sus refresh tokens en la misma transacción. El middleware rechaza los access tokens emitidos antes (y los de usuarios bloqueados); `/refresh` rechaza usuarios bloqueados.
+- **Rotación atómica del refresh token:** el token usado se revoca con `UPDATE ... WHERE revoked = FALSE RETURNING`. Si dos pestañas refrescan a la vez con la misma cookie, solo una obtiene token nuevo; la otra recibe `401 REFRESH_TOKEN_ROTATED`.
+
+### Contrato de errores de autenticación (frontend)
+
+Las respuestas de login, refresh y del middleware mantienen el status **401** y la forma `{ ok: false, message }` de siempre. Se agrega un campo opcional `code` para manejo programático (y `retry_after_seconds` + header `Retry-After` en el bloqueo temporal). Un cliente que ignore `code` sigue funcionando igual.
+
+| `code`                  | Dónde                                   | Qué significa / qué hacer                                                                                   |
+| ----------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| _(sin code)_            | login                                   | Credenciales incorrectas (mensaje genérico).                                                                |
+| `ACCOUNT_LOCKED`        | login interno y portal                  | Cuenta bloqueada por seguridad; requiere desbloqueo del Admin / negocio.                                    |
+| `ACCOUNT_TEMP_LOCKED`   | login interno (solo ADMIN)              | Bloqueo temporal. `retry_after_seconds` indica cuándo reintentar.                                           |
+| `SESSION_REVOKED`       | refresh y endpoints protegidos (middleware) | La sesión fue cerrada del lado del servidor (bloqueo, desactivación, reset, cambio de rol o reuso de un refresh revocado). Descartar tokens e ir al login sin reintentar refresh. |
+| `REFRESH_TOKEN_ROTATED` | refresh                                 | Otro refresh concurrente ya rotó el token. La cookie vigente es la del ganador: reintentar el refresh una vez o ir al login. |
+| `TOKEN_EXPIRED`         | endpoints protegidos (en `message`, sin cambios) | Access token vencido: hacer refresh.                                                                    |
+
+Nota: `iat` del JWT tiene resolución de segundos; un token emitido en el mismo segundo que la invalidación también se rechaza.
 - **Expiración dinámica:** el tiempo de expiración del JWT se lee de `system_config` en cada login.
 
 ---

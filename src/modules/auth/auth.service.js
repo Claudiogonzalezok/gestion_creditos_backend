@@ -14,31 +14,71 @@ const _rtExpiresAt = (days) => {
   return d;
 };
 
+// Mensajes y códigos estables de error de autenticación (documentados en README).
+const MSG_BAD_CREDENTIALS = 'Credenciales incorrectas. Verificá tus datos e intentá nuevamente.';
+const MSG_USER_LOCKED     = 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.';
+const MSG_PORTAL_GENERIC  = 'DNI o contraseña incorrectos. Verificá tus datos e intentá nuevamente.';
+const MSG_SESSION_REVOKED = 'Sesión inválida por seguridad. Ingresá nuevamente.';
+
+// Hash ficticio para igualar el tiempo de respuesta cuando el DNI no existe
+// (evita enumerar cuentas por timing). Se calcula una sola vez, de forma diferida.
+let _dummyHashPromise = null;
+const _dummyCompare = async (password) => {
+  if (!_dummyHashPromise) _dummyHashPromise = bcrypt.hash('dummy-password-no-match', SALT_ROUNDS);
+  await bcrypt.compare(String(password || ''), await _dummyHashPromise);
+};
+
+/**
+ * Error de bloqueo temporal de ADMIN con los segundos restantes.
+ * @param {Date|string} lockedUntil - fin del bloqueo
+ * @returns {Object} error con status 401, code ACCOUNT_TEMP_LOCKED y retry_after_seconds
+ */
+const _tempLockedError = (lockedUntil) => {
+  const seconds = Math.max(1, Math.ceil((new Date(lockedUntil).getTime() - Date.now()) / 1000));
+  const minutes = Math.ceil(seconds / 60);
+  return {
+    status: 401,
+    code: 'ACCOUNT_TEMP_LOCKED',
+    retry_after_seconds: seconds,
+    message: `Demasiados intentos fallidos. Tu cuenta quedó bloqueada temporalmente; intentá nuevamente en ${minutes} minuto${minutes === 1 ? '' : 's'}.`,
+  };
+};
+
+const _isFuture = (date) => !!date && new Date(date).getTime() > Date.now();
+
 // ── Login sistema interno ─────────────────────────────────────────────────────
 const loginInternal = async (dni, password) => {
-  const [user, maxAttemptsStr, expiryHs, rtExpiryDays] = await Promise.all([
+  const [user, maxAttemptsStr, expiryHs, rtExpiryDays, lockMinutesStr] = await Promise.all([
     queries.findUserByDni(dni),
     getValue('login_max_attempts'),
     getValue('jwt_expiry_internal_hs'),
     getValue('rt_expiry_internal_days'),
+    getValue('admin_lock_minutes'),
   ]);
   const maxAttempts = parseInt(maxAttemptsStr || '3');
+  const lockMinutes = parseInt(lockMinutesStr || '15') || 15;
 
-  if (!user) throw { status: 401, message: 'Credenciales incorrectas. Verificá tus datos e intentá nuevamente.' };
-  if (user.locked_at && user.role !== 'ADMIN') throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
+  if (!user) {
+    await _dummyCompare(password);
+    throw { status: 401, message: MSG_BAD_CREDENTIALS };
+  }
+  if (user.locked_at && user.role !== 'ADMIN') throw { status: 401, code: 'ACCOUNT_LOCKED', message: MSG_USER_LOCKED };
+  if (user.role === 'ADMIN' && _isFuture(user.locked_until)) throw _tempLockedError(user.locked_until);
   if (user.status !== 'ACTIVE') throw { status: 401, message: 'Tu cuenta no está activa. Comunicarte con el administrador del sistema.' };
 
   const valid = await bcrypt.compare(password, user.password_hash);
   if (!valid) {
-    await queries.incrementFailedAttempts(user.id);
-    const remaining = maxAttempts - (user.failed_attempts + 1);
-    if (remaining <= 0) {
-      if (user.role !== 'ADMIN') {
-        await queries.lockUser(user.id);
-        throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.' };
-      }
+    // Incremento y decisión de bloqueo en un solo UPDATE atómico (#35).
+    const attempt = await queries.registerFailedAttempt(user.id, maxAttempts, lockMinutes);
+    if (attempt && attempt.role !== 'ADMIN' && attempt.locked_at) {
+      // Bloqueo permanente: cierra también las sesiones abiertas (#42).
+      await queries.revokeAllUserRefreshTokens(user.id);
+      throw { status: 401, code: 'ACCOUNT_LOCKED', message: MSG_USER_LOCKED };
     }
-    throw { status: 401, message: 'Credenciales incorrectas. Verificá tus datos e intentá nuevamente.' };
+    if (attempt && attempt.role === 'ADMIN' && _isFuture(attempt.locked_until)) {
+      throw _tempLockedError(attempt.locked_until);
+    }
+    throw { status: 401, message: MSG_BAD_CREDENTIALS };
   }
 
   await queries.resetFailedAttempts(user.id);
@@ -75,20 +115,27 @@ const loginPortal = async (dni, password) => {
   ]);
   const maxAttempts = parseInt(maxAttemptsStr || '3');
 
-  if (!customer) throw { status: 401, message: 'DNI o contraseña incorrectos. Verificá tus datos e intentá nuevamente.' };
-  if (!customer.portal_enabled) throw { status: 401, message: 'Tu acceso al portal aún no fue habilitado. Comunicarte con el negocio para solicitarlo.' };
-  if (customer.status !== 'ACTIVE') throw { status: 401, message: 'Tu cuenta no está disponible. Comunicarte con el negocio para más información.' };
-  if (customer.portal_locked_at) throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el negocio para reactivarla.' };
+  // Mensaje genérico: no revela si el DNI existe, si el portal está habilitado
+  // o si la cuenta está bloqueada (#35). El estado solo se informa con la
+  // contraseña correcta.
+  if (!customer || !customer.portal_enabled || customer.status !== 'ACTIVE' || !customer.portal_password_hash) {
+    await _dummyCompare(password);
+    throw { status: 401, message: MSG_PORTAL_GENERIC };
+  }
 
   const valid = await bcrypt.compare(password, customer.portal_password_hash);
   if (!valid) {
-    await queries.incrementPortalFailedAttempts(customer.id);
-    const remaining = maxAttempts - (customer.portal_failed_attempts + 1);
-    if (remaining <= 0) {
-      await queries.lockCustomer(customer.id);
-      throw { status: 401, message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el negocio para reactivarla.' };
+    if (!customer.portal_locked_at) {
+      const attempt = await queries.registerPortalFailedAttempt(customer.id, maxAttempts);
+      if (attempt && attempt.portal_locked_at) {
+        await queries.revokeAllCustomerRefreshTokens(customer.id);
+      }
     }
-    throw { status: 401, message: 'DNI o contraseña incorrectos. Verificá tus datos e intentá nuevamente.' };
+    throw { status: 401, message: MSG_PORTAL_GENERIC };
+  }
+
+  if (customer.portal_locked_at) {
+    throw { status: 401, code: 'ACCOUNT_LOCKED', message: 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el negocio para reactivarla.' };
   }
 
   await queries.resetPortalFailedAttempts(customer.id);
@@ -124,7 +171,7 @@ const refreshInternalToken = async (rawToken) => {
   // Detección de robo: token ya revocado → invalida toda la familia
   if (stored.revoked) {
     await queries.revokeFamilyRefreshTokens(stored.family_id);
-    throw { status: 401, message: 'Sesión inválida por seguridad. Ingresá nuevamente.' };
+    throw { status: 401, code: 'SESSION_REVOKED', message: MSG_SESSION_REVOKED };
   }
 
   if (new Date() > new Date(stored.expires_at)) {
@@ -133,7 +180,7 @@ const refreshInternalToken = async (rawToken) => {
 
   const [userResult, expiryHs, rtExpiryDays] = await Promise.all([
     pool.query(
-      `SELECT id, full_name, role, status, is_temp_password FROM users WHERE id = $1`,
+      `SELECT id, full_name, role, status, is_temp_password, locked_at FROM users WHERE id = $1`,
       [stored.user_id]
     ),
     getValue('jwt_expiry_internal_hs'),
@@ -142,11 +189,18 @@ const refreshInternalToken = async (rawToken) => {
 
   const user = userResult.rows[0];
   if (!user || user.status !== 'ACTIVE') {
-    throw { status: 401, message: 'Tu cuenta no está activa.' };
+    throw { status: 401, code: 'SESSION_REVOKED', message: 'Tu cuenta no está activa.' };
+  }
+  // Usuario bloqueado por seguridad: no se emiten más access tokens (#42).
+  if (user.locked_at && user.role !== 'ADMIN') {
+    await queries.revokeAllUserRefreshTokens(user.id);
+    throw { status: 401, code: 'SESSION_REVOKED', message: MSG_USER_LOCKED };
   }
 
-  // Rotación: revocar el token usado, emitir uno nuevo en la misma familia
-  await queries.revokeRefreshToken(stored.id);
+  // Rotación atómica: solo un refresh concurrente gana la fila (#42).
+  if (!(await queries.revokeRefreshTokenIfActive(stored.id))) {
+    throw { status: 401, code: 'REFRESH_TOKEN_ROTATED', message: 'La sesión ya fue renovada. Ingresá nuevamente.' };
+  }
 
   const accessToken = jwtUtil.generateInternalToken(user, `${expiryHs || '8'}h`);
   const { raw: newRtRaw, hashed: newRtHashed } = jwtUtil.generateRefreshToken();
@@ -168,7 +222,7 @@ const refreshPortalToken = async (rawToken) => {
 
   if (stored.revoked) {
     await queries.revokeFamilyRefreshTokens(stored.family_id);
-    throw { status: 401, message: 'Sesión inválida por seguridad. Ingresá nuevamente.' };
+    throw { status: 401, code: 'SESSION_REVOKED', message: MSG_SESSION_REVOKED };
   }
 
   if (new Date() > new Date(stored.expires_at)) {
@@ -177,7 +231,8 @@ const refreshPortalToken = async (rawToken) => {
 
   const [customerResult, expiryMin, rtExpiryDays] = await Promise.all([
     pool.query(
-      `SELECT id, full_name, status, portal_enabled, portal_is_temp_password FROM customers WHERE id = $1`,
+      `SELECT id, full_name, status, portal_enabled, portal_is_temp_password, portal_locked_at
+       FROM customers WHERE id = $1`,
       [stored.customer_id]
     ),
     getValue('jwt_expiry_portal_min'),
@@ -185,11 +240,14 @@ const refreshPortalToken = async (rawToken) => {
   ]);
 
   const customer = customerResult.rows[0];
-  if (!customer || customer.status !== 'ACTIVE' || !customer.portal_enabled) {
-    throw { status: 401, message: 'Tu cuenta no está disponible.' };
+  if (!customer || customer.status !== 'ACTIVE' || !customer.portal_enabled || customer.portal_locked_at) {
+    throw { status: 401, code: 'SESSION_REVOKED', message: 'Tu cuenta no está disponible.' };
   }
 
-  await queries.revokeRefreshToken(stored.id);
+  // Rotación atómica: solo un refresh concurrente gana la fila (#42).
+  if (!(await queries.revokeRefreshTokenIfActive(stored.id))) {
+    throw { status: 401, code: 'REFRESH_TOKEN_ROTATED', message: 'La sesión ya fue renovada. Ingresá nuevamente.' };
+  }
 
   const accessToken = jwtUtil.generatePortalToken(customer, `${expiryMin || '30'}m`);
   const { raw: newRtRaw, hashed: newRtHashed } = jwtUtil.generateRefreshToken();
