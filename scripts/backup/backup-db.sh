@@ -45,7 +45,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_FILE"; }
+# Escribe al log; también a pantalla solo si es una terminal (en cron, stdout ya va al
+# mismo log y cada línea quedaría duplicada).
+log() {
+  local line
+  line="$(date '+%F %T') $*"
+  echo "$line" >> "$LOG_FILE"
+  if [[ -t 1 ]]; then echo "$line"; fi
+}
 
 ping_health() {
   [[ -n "$HEALTHCHECK_URL" ]] || return 0
