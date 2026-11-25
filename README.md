@@ -524,7 +524,7 @@ El endpoint `approve` detecta automáticamente si `amount_received` supera el sa
 |---|---|
 | Campo | `client_request_id` en el body JSON (no header). UUID (cualquier versión; se recomienda v4). Otro formato → `400`. |
 | Quién lo genera | El cliente, **uno por intento de cobro**. Se reutiliza en los reintentos de ese mismo intento; un cobro nuevo lleva una clave nueva. |
-| Alcance de unicidad | Por cobrador: `(collector_id, client_request_id)`. Dos cobradores no colisionan. Índice UNIQUE parcial en `payments` (migración 048). |
+| Alcance de unicidad | Por cobrador: `(collector_id, client_request_id)`. Dos cobradores no colisionan. Índice UNIQUE parcial en `payments` (migración 049). |
 | Primera request | `201` con la pre-carga creada (incluye `client_request_id`). |
 | Reintento con la misma clave, misma cuota y mismo monto | `200` con la pre-carga **existente** (en su estado actual, aunque ya esté aprobada o rechazada) y `idempotent_replay: true`. No crea otra fila ni repite notificaciones. |
 | Misma clave con otra cuota u otro monto | `409` con `code: "IDEMPOTENCY_KEY_REUSED"`. No crea nada. |
