@@ -205,6 +205,41 @@ OVERDUE` que tenía el código viejo.
 Mismo patrón de CASE en SQL. Si tras restar el monto revertido la cuota sigue
 vencida, vuelve a OVERDUE (no degrada a PENDING o PARTIAL).
 
+#### Reversión de un cobro con cuotas adelantadas (`payments.reverse`, #41)
+
+Un cobro cuyo monto supera el saldo de su cuota se distribuye: la cabecera se
+cancela, las cuotas siguientes que alcanza se marcan PAID ("Pago adelantado") y
+el resto se imputa en forma parcial a la próxima. Cada imputación a otra cuota
+queda como **sub-pago** (`parent_payment_id` = cobro cabecera,
+`generation_type = 'ADVANCE_DISTRIBUTION'`), incluida la parcial ("Excedente
+imputado a cuota siguiente"). Si hubo cuotas adelantadas, el estado previo de
+los vencimientos corridos se guarda en
+`payments.advance_due_dates_snapshot` (migración 048).
+
+La reversión deshace exactamente eso:
+
+- **Cabecera:** se le resta `amount_received − Σ sub-pagos`, es decir solo lo
+  que se le imputó a ella. Sus pagos parciales previos se conservan.
+- **Sub-pagos:** cada cuota pierde el monto de su sub-pago.
+- **Vencimientos:** `due_date` y `original_due_date` vuelven a los valores del
+  snapshot y el status se recalcula con esa fecha. Solo se restaura una cuota
+  si su fecha actual sigue siendo la que le dejó este adelanto: si un cobro
+  posterior la volvió a correr, se respeta ese corrimiento.
+- **Caja:** una sola salida por el total del cobro cabecera, imputada a la caja
+  activa de la jornada. Los sub-pagos generan su reversión de auditoría con
+  `cash_session_id = NULL` y sin movimiento de caja.
+- **Crédito:** si estaba SETTLED, vuelve a ACTIVE.
+
+Límites conocidos (en ningún caso peores que el comportamiento anterior a la
+migración 048):
+
+- Cobros aprobados antes de la migración 048 no tienen sub-pago por el excedente
+  parcial ni snapshot de fechas. Al revertirlos, ese excedente se sigue restando
+  a la cabecera (puede borrar pagos parciales previos de la cabecera, con clamp
+  a 0), la cuota siguiente conserva el excedente y las fechas no se restauran.
+- Un sobrepago sin cuotas siguientes no queda imputado a ninguna cuota (ver
+  #32/#45); al revertirlo, ese monto también se resta a la cabecera.
+
 ---
 
 ## 6. Cron de mora — rol, catch-up y observabilidad

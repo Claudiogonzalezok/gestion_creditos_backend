@@ -146,6 +146,7 @@ const lockAndGetPayment = async (client, id) => {
             p.amount_cash::float8, p.amount_transfer::float8,
             p.payment_method, p.transfer_reference, p.status, p.notes,
             p.is_reversal, p.admin_direct, p.reversed_by_payment_id, p.generation_type,
+            p.parent_payment_id, p.advance_due_dates_snapshot,
             i.installment_number, i.amount_due::float8, i.amount_paid::float8,
             i.due_date, i.penalty_amount::float8,
             c.id AS credit_id, c.type AS credit_type, c.customer_id, c.payment_frequency,
@@ -372,6 +373,9 @@ const frequencyToInterval = (paymentFrequency) => {
  * @param {string} creditId - ID del crédito afectado.
  * @param {string} paymentFrequency - Frecuencia del crédito.
  * @param {string|Date} baseDueDate - Fecha base desde la que se recalcula el plan.
+ * @returns {Promise<Array<{id: string, due_date: string, original_due_date: string|null, shifted_due_date: string}>>}
+ *   Estado PREVIO al corrimiento de cada cuota corrida (y la fecha que le quedó
+ *   después), para poder restaurarlo si el cobro que lo provocó se revierte.
  */
 const shiftInstallmentDates = async (
   client,
@@ -384,9 +388,10 @@ const shiftInstallmentDates = async (
   // Las cuotas restantes toman las fechas de las cuotas adelantadas:
   // rn=1 → baseDueDate + 0 (toma la fecha de la primera cuota adelantada)
   // rn=2 → baseDueDate + 1 intervalo, etc.
-  await client.query(
+  const r = await client.query(
     `WITH ordered AS (
-       SELECT id, ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
+       SELECT id, due_date AS prev_due_date, original_due_date AS prev_original_due_date,
+              ROW_NUMBER() OVER (ORDER BY installment_number) AS rn
        FROM installments
        WHERE credit_id = $1 AND status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
      )
@@ -395,8 +400,112 @@ const shiftInstallmentDates = async (
          due_date           = (GREATEST($3::date, CURRENT_DATE) + ((ordered.rn - 1) * $2::interval))::date,
          updated_at         = NOW()
      FROM ordered
-     WHERE i.id = ordered.id`,
+     WHERE i.id = ordered.id
+     RETURNING i.id,
+               to_char(ordered.prev_due_date, 'YYYY-MM-DD')          AS due_date,
+               to_char(ordered.prev_original_due_date, 'YYYY-MM-DD') AS original_due_date,
+               to_char(i.due_date, 'YYYY-MM-DD')                     AS shifted_due_date`,
     [creditId, interval, baseDueDate],
+  );
+  return r.rows;
+};
+
+/**
+ * Guarda en el cobro cabecera el estado previo de los vencimientos que su
+ * adelanto corrió, para que la reversión pueda restaurarlos exactamente.
+ * @param {object} client - Cliente de transacción.
+ * @param {string} paymentId - Cobro cabecera que provocó el corrimiento.
+ * @param {Array<object>} snapshot - Filas devueltas por shiftInstallmentDates.
+ */
+const saveAdvanceDueDatesSnapshot = async (client, paymentId, snapshot) => {
+  await client.query(
+    `UPDATE payments SET advance_due_dates_snapshot = $1::jsonb WHERE id = $2`,
+    [JSON.stringify(snapshot), paymentId],
+  );
+};
+
+/**
+ * Restaura los vencimientos previos al adelanto (due_date y original_due_date)
+ * de las cuotas corridas por un cobro que se revierte, y recalcula su status
+ * con la nueva fecha (misma regla que updateInstallment).
+ *
+ * Solo se restaura una cuota si su due_date actual sigue siendo la que le dejó
+ * este adelanto (shifted_due_date): si otro cobro posterior la volvió a correr,
+ * se respeta ese corrimiento (reversión fuera de orden). Tampoco se tocan las
+ * cuotas en REFINANCED, PLAN_CHANGE_CANCELLED o WRITTEN_OFF.
+ * @param {object} client - Cliente de transacción.
+ * @param {Array<{id: string, due_date: string, original_due_date: string|null, shifted_due_date: string}>} snapshot
+ * @param {number} graceDays - Días de gracia del system_config.
+ */
+const restoreAdvanceDueDates = async (client, snapshot, graceDays) => {
+  await client.query(
+    `WITH s AS (
+       SELECT * FROM jsonb_to_recordset($1::jsonb)
+         AS x(id uuid, due_date date, original_due_date date, shifted_due_date date)
+     )
+     UPDATE installments i
+        SET due_date          = s.due_date,
+            original_due_date = s.original_due_date,
+            status            = CASE
+                                  WHEN i.amount_paid >= i.amount_due                              THEN 'PAID'
+                                  WHEN s.due_date < (CURRENT_DATE - ($2)::int * INTERVAL '1 day') THEN 'OVERDUE'
+                                  WHEN i.amount_paid > 0                                          THEN 'PARTIAL'
+                                  ELSE 'PENDING'
+                                END,
+            updated_at        = NOW()
+       FROM s
+      WHERE i.id = s.id
+        AND i.due_date = s.shifted_due_date
+        AND i.status IN ('PENDING','PARTIAL','OVERDUE','PAID')`,
+    [JSON.stringify(snapshot), graceDays],
+  );
+};
+
+/**
+ * Registra el sub-pago de la porción de un excedente que se imputó en forma
+ * PARCIAL a la cuota siguiente (no alcanzó para cancelarla). Queda vinculado al
+ * cobro cabecera vía parent_payment_id, igual que las cuotas adelantadas, para
+ * que la reversión sepa exactamente cuánto restarle a esa cuota. No impacta caja
+ * (cash_session_id NULL): el dinero ya está contado en el cobro cabecera.
+ * @param {object} client - Cliente de transacción.
+ * @param {object} data
+ * @param {string} data.installmentId - Cuota que recibió el excedente parcial.
+ * @param {string} data.adminId - Admin que aprueba.
+ * @param {number} data.amount - Monto imputado a la cuota.
+ * @param {number} data.cashRatio - Proporción efectivo/total del cobro cabecera (0..1).
+ * @param {string} data.paymentMethod
+ * @param {string|null} data.transferReference
+ * @param {string} data.parentPaymentId - Cobro cabecera.
+ */
+const createPartialAdvancePayment = async (
+  client,
+  {
+    installmentId,
+    adminId,
+    amount,
+    cashRatio,
+    paymentMethod,
+    transferReference = null,
+    parentPaymentId,
+  },
+) => {
+  await client.query(
+    `INSERT INTO payments
+       (installment_id, collector_id, amount_received, amount_cash, amount_transfer,
+        payment_method, transfer_reference,
+        status, approved_by, approved_at, notes, parent_payment_id, generation_type)
+     VALUES ($1, $2, $3::numeric, ROUND($3::numeric * $4, 2), $3::numeric - ROUND($3::numeric * $4, 2),
+             $5, $6, 'APPROVED', $2, NOW(), 'Excedente imputado a cuota siguiente', $7,
+             'ADVANCE_DISTRIBUTION')`,
+    [
+      installmentId,
+      adminId,
+      amount,
+      cashRatio,
+      paymentMethod,
+      transferReference || null,
+      parentPaymentId,
+    ],
   );
 };
 
@@ -783,6 +892,9 @@ module.exports = {
   findChildPayments,
   findPaymentsByCredit,
   restoreInstallmentFromReversal,
+  saveAdvanceDueDatesSnapshot,
+  restoreAdvanceDueDates,
+  createPartialAdvancePayment,
   getCreditStatusByInstallment,
   getRenewableLoan,
 };
