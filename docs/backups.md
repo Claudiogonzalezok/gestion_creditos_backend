@@ -55,7 +55,7 @@ Scripts: [`scripts/backup/backup-db.sh`](../scripts/backup/backup-db.sh) (VPS) y
 
    ```bash
    /opt/finflow-backup/backup-db.sh && rclone ls gdrive:finflow-backups
-   ( crontab -l 2>/dev/null; echo '0 3 * * * /opt/finflow-backup/backup-db.sh >> /var/log/finflow-backup.log 2>&1' ) | crontab -
+   ( crontab -l 2>/dev/null; echo '0 3 * * * /opt/finflow-backup/backup-db.sh' ) | crontab -
    ```
 
 5. Aviso si el backup deja de correr: crear un check gratis en [healthchecks.io](https://healthchecks.io)
@@ -63,7 +63,7 @@ Scripts: [`scripts/backup/backup-db.sh`](../scripts/backup/backup-db.sh) (VPS) y
    lo pinguea al terminar bien y pinguea `/fail` al fallar; si un día no llega nada, también avisa.
 
 Log: `/var/log/finflow-backup.log`. Una corrida buena termina en `Listo`; una con error deja
-`ERROR: ...` (incluye las fallas inesperadas, y el stderr de pg_dump/gpg/rclone va al mismo log).
+`ERROR: ...` (también las fallas inesperadas). Desde cron, todo lo que imprimen pg_dump, gpg y rclone va al mismo log.
 
 ## Verificar que el backup corre
 
@@ -92,19 +92,25 @@ En la PC, con Docker y gpg (Git Bash trae gpg):
 Solo si la base de producción se perdió o se corrompió. Restaurar en una base nueva y recién
 después cambiarla, así la base vieja queda para analizar.
 
-Como root. El bloque corta en el primer error (no renombra nada si el restore falló) y el dump
-descifrado pasa por un pipe: nunca queda en claro en el disco.
+Como root. El bloque corta en el primer error (no renombra nada si el restore falló). El dump
+descifrado queda en una carpeta privada (solo root y postgres) y se borra al terminar. No se
+restaura desde un pipe: `pg_restore` necesita poder saltar dentro del archivo.
 
 ```bash
-BACKUP=/var/backups/finflow/finflow_<fecha>.dump.gpg   # o el bajado de Drive
-bash -euo pipefail <<EOF
+export BACKUP=/var/backups/finflow/finflow_<fecha>.dump.gpg   # o el bajado de Drive
+export BROKEN="finflow_broken_$(date +%Y%m%d_%H%M)"
+bash -euo pipefail <<'EOF'
+umask 077
+work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+chown postgres "$work"
+gpg --batch --decrypt --passphrase-file /root/.finflow-backup-passphrase --output "$work/db.dump" "$BACKUP"
+chown postgres "$work/db.dump"
 pm2 stop finflow-backend
 sudo -u postgres dropdb --if-exists finflow_restored
 sudo -u postgres createdb -O finflow_user finflow_restored
-gpg --batch --decrypt --passphrase-file /root/.finflow-backup-passphrase "$BACKUP" \
-  | sudo -u postgres pg_restore --exit-on-error --no-owner --role=finflow_user -d finflow_restored
-sudo -u postgres psql -v ON_ERROR_STOP=1 -c 'ALTER DATABASE finflow RENAME TO finflow_broken_$(date +%Y%m%d_%H%M)'
-sudo -u postgres psql -v ON_ERROR_STOP=1 -c 'ALTER DATABASE finflow_restored RENAME TO finflow'
+sudo -u postgres pg_restore --exit-on-error --no-owner --role=finflow_user -d finflow_restored "$work/db.dump"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE finflow RENAME TO $BROKEN"
+sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE finflow_restored RENAME TO finflow"
 pm2 start finflow-backend
 EOF
 ```

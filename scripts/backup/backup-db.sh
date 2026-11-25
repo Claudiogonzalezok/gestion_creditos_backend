@@ -45,32 +45,35 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Escribe al log; también a pantalla solo si es una terminal (en cron, stdout ya va al
-# mismo log y cada línea quedaría duplicada).
-log() {
-  local line
-  line="$(date '+%F %T') $*"
-  echo "$line" >> "$LOG_FILE"
-  if [[ -t 1 ]]; then echo "$line"; fi
-}
+# Un solo destino de salida: sin terminal (cron, pipe), todo stdout y stderr del script,
+# incluidos los errores de pg_dump/gpg/rclone, va al log. Con terminal, se ve en pantalla
+# y log() además lo anota en el log.
+if [[ -t 1 ]]; then
+  log() { echo "$(date '+%F %T') $*" | tee -a "$LOG_FILE"; }
+else
+  exec >>"$LOG_FILE" 2>&1
+  log() { echo "$(date '+%F %T') $*"; }
+fi
 
 ping_health() {
   [[ -n "$HEALTHCHECK_URL" ]] || return 0
   curl -fsS -m 10 --retry 3 -o /dev/null "$HEALTHCHECK_URL$1" || log "AVISO: no se pudo avisar a HEALTHCHECK_URL"
 }
 
-# Toda salida con error (también las de set -e) deja una línea ERROR y avisa.
+# Toda salida con error deja una línea ERROR y avisa. fail() ya anota el motivo;
+# las fallas inesperadas (set -e) se anotan acá.
+error_logged=0
 on_exit() {
   local code=$?
   rm -f "${tmp_dump:-}" "${partial:-}"
   if (( code != 0 )); then
-    log "ERROR: backup terminó con código $code"
+    (( error_logged )) || log "ERROR: falla inesperada (código $code)"
     ping_health /fail
   fi
 }
 trap on_exit EXIT
 
-fail() { log "ERROR: $*"; exit 1; }
+fail() { log "ERROR: $*"; error_logged=1; exit 1; }
 
 # Corre un comando de Postgres como PG_AS_USER (peer auth) o como el usuario actual.
 pg() {
@@ -110,6 +113,7 @@ gpg --batch --yes --quiet --symmetric --cipher-algo AES256 \
   --passphrase-file "$PASSPHRASE_FILE" --output "$partial" "$tmp_dump" \
   || fail "Cifrado con gpg falló"
 mv "$partial" "$final"
+chmod 600 "$final"   # explícito, además del umask 077
 log "OK local: $(du -h "$final" | cut -f1)"
 
 if (( UPLOAD )); then
