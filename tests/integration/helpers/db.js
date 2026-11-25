@@ -154,15 +154,19 @@ const preserveTable = (table) => {
 
   afterAll(async () => {
     assertTestDatabase();
-    await pool.query(`DELETE FROM ${table}`);
-    for (const row of snapshot) {
-      const cols = Object.keys(row);
-      const params = cols.map((_, i) => `$${i + 1}`).join(", ");
-      await pool.query(
-        `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${params})`,
-        cols.map((c) => row[c]),
-      );
-    }
+    // En una sola transacción: si algo falla, la tabla queda como estaba
+    // en vez de vacía o a medio restaurar.
+    await withTestClient(async (client) => {
+      await client.query(`DELETE FROM ${table}`);
+      for (const row of snapshot) {
+        const cols = Object.keys(row);
+        const params = cols.map((_, i) => `$${i + 1}`).join(", ");
+        await client.query(
+          `INSERT INTO ${table} (${cols.join(", ")}) VALUES (${params})`,
+          cols.map((c) => row[c]),
+        );
+      }
+    });
   });
 };
 

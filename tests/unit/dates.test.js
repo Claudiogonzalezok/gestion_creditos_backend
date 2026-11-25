@@ -7,7 +7,9 @@ describe("helpers de fecha de integración", () => {
 
   afterEach(() => {
     jest.useRealTimers();
-    process.env.TZ = originalTz;
+    // Asignar undefined a process.env lo convierte en el texto "undefined".
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
   });
 
   it("a las 01:30 UTC, hoy en Buenos Aires sigue siendo el día anterior", () => {
