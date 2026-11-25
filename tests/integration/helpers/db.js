@@ -146,13 +146,16 @@ const setupTestSuite = () => {
  * @param {string} table - nombre de la tabla (literal fijo, no input externo)
  */
 const preserveTable = (table) => {
-  let snapshot = [];
+  // null = el snapshot no llegó a tomarse. En ese caso NO se restaura:
+  // restaurar un snapshot vacío borraría toda la tabla.
+  let snapshot = null;
 
   beforeAll(async () => {
     snapshot = await snapshotTable(table);
   });
 
   afterAll(async () => {
+    if (snapshot === null) return;
     await restoreTable(table, snapshot);
   });
 };
