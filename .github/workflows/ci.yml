@@ -15,8 +15,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  # Solo se cancelan corridas de PR reemplazadas; main y nightly siempre terminan.
+  # El evento va en la clave para que un push a main no desplace a la corrida nightly
+  # en cola (GitHub conserva una sola corrida pendiente por grupo).
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # Solo se cancelan en curso las corridas de PR reemplazadas.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

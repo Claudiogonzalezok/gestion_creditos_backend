@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { resolveScope } from './ci-scope.mjs';
+
+const cliPath = fileURLToPath(new URL('./ci-scope.mjs', import.meta.url));
+const repoRoot = join(dirname(cliPath), '..');
 
 test('un cambio solo de docs no corre tests', () => {
   const scope = resolveScope(['README.md', 'docs/cash-model-v4.md', '.husky/pre-push']);
@@ -84,4 +90,33 @@ test('el lint apunta solo a archivos js cambiados', () => {
 
 test('la corrida forzada ignora la lista de archivos', () => {
   assert.equal(resolveScope(['README.md'], { forceFull: true }).mode, 'full');
+});
+
+test('install.mjs de husky es compartido: corre en cada npm ci', () => {
+  assert.equal(resolveScope(['.husky/install.mjs']).mode, 'full');
+  assert.equal(resolveScope(['.husky/pre-commit']).mode, 'none');
+});
+
+test('borrar o mover un archivo de un módulo corre la suite completa', () => {
+  const scope = resolveScope(['src/modules/payments/old.js'], { exists: () => false });
+  assert.equal(scope.mode, 'full');
+});
+
+test('la CLI resuelve dependientes e integración sobre el repo real', () => {
+  const out = execFileSync(process.execPath, [cliPath], {
+    cwd: repoRoot,
+    input: 'src/modules/payments/payments.service.js\r\n',
+  }).toString();
+  const scope = JSON.parse(out);
+  assert.equal(scope.mode, 'affected');
+  assert.deepEqual(scope.unitFiles, ['src/modules/payments/payments.service.js']);
+  assert.ok(scope.integrationTests.includes('tests/integration/payments-findall.test.js'));
+});
+
+test('la CLI con --full fuerza la suite completa', () => {
+  const out = execFileSync(process.execPath, [cliPath, '--full'], {
+    cwd: repoRoot,
+    input: 'README.md\n',
+  }).toString();
+  assert.equal(JSON.parse(out).mode, 'full');
 });

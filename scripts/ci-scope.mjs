@@ -24,10 +24,12 @@ const SHARED_PATTERNS = [
   /^\.env\.test$/,
   /^scripts\/ci-scope/,
   /^\.github\//,
+  // Corre en cada `npm ci`, incluido el deploy de producción.
+  /^\.husky\/install\.mjs$/,
 ];
 
-// Rutas que nunca afectan tests: docs, hooks locales y herramientas de agentes.
-const NO_TEST_IMPACT_PATTERN = /(\.md$)|(^docs\/)|(^\.husky\/)|(^\.atl\/)|(^\.claude\/)/;
+// Rutas que nunca afectan tests: docs, scripts de hooks locales y herramientas de agentes.
+const NO_TEST_IMPACT_PATTERN = /(\.md$)|(^docs\/)|(^\.husky\/pre-)|(^\.atl\/)|(^\.claude\/)/;
 const MODULE_PATTERN = /^src\/modules\/([^/]+)\//;
 const UNIT_TEST_PATTERN = /^tests\/unit\/.+\.test\.js$/;
 const INTEGRATION_TEST_PATTERN = /^tests\/integration\/[^/]+\.test\.js$/;
@@ -37,15 +39,23 @@ const LINTABLE_PATTERN = /^(src|tests|scripts)\/.*\.(js|mjs)$/;
  * Resuelve el alcance de tests de CI a partir de la lista de archivos cambiados.
  * @param {string[]} files - rutas cambiadas relativas al repositorio
  * @param {{ forceFull?: boolean, dependentsOf?: (modules: string[]) => string[],
- *   integrationTestsFor?: (modules: string[]) => string[] }} [options] -
+ *   integrationTestsFor?: (modules: string[]) => string[],
+ *   exists?: (file: string) => boolean }} [options] -
  *   forceFull corre todo (main, nightly, etiqueta ci:full); dependentsOf expande los
  *   módulos cambiados con los módulos que los importan; integrationTestsFor devuelve
- *   los tests de integración que referencian esos módulos
+ *   los tests de integración que referencian esos módulos; exists indica si el archivo
+ *   sigue en disco (borrar o mover un archivo de un módulo corre la suite completa,
+ *   porque --findRelatedTests no encuentra los tests que todavía lo importan)
  * @returns {{ mode: string, unitFiles: string[], integrationTests: string[], lintFiles: string[] }}
  */
 export function resolveScope(
   files,
-  { forceFull = false, dependentsOf = (m) => m, integrationTestsFor = () => [] } = {},
+  {
+    forceFull = false,
+    dependentsOf = (m) => m,
+    integrationTestsFor = () => [],
+    exists = () => true,
+  } = {},
 ) {
   const changed = [...new Set(files.map((f) => f.trim()).filter(Boolean))];
   const lintFiles = changed.filter((f) => LINTABLE_PATTERN.test(f));
@@ -62,6 +72,7 @@ export function resolveScope(
   for (const file of code) {
     if (SHARED_PATTERNS.some((p) => p.test(file))) return full;
     const match = MODULE_PATTERN.exec(file);
+    if (match && !exists(file)) return full;
     if (match) {
       modules.add(match[1]);
       unitFiles.push(file);
@@ -114,7 +125,8 @@ function moduleDependentsOnDisk(modules) {
     if (!owner) continue;
     const source = readFileSync(file, 'utf8');
     const set = importsOf.get(owner) ?? new Set();
-    for (const m of source.matchAll(/require\(\s*['"]\.\.\/([^/'"]+)\//g)) set.add(m[1]);
+    for (const m of source.matchAll(/require\(\s*['"](?:\.\.\/)+(?:modules\/)?([^/'".]+)\//g))
+      set.add(m[1]);
     importsOf.set(owner, set);
   }
   const result = new Set(modules);
@@ -152,6 +164,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     forceFull: process.argv.includes('--full'),
     dependentsOf: moduleDependentsOnDisk,
     integrationTestsFor: integrationTestsOnDisk,
+    exists: existsSync,
   });
   process.stdout.write(JSON.stringify(scope));
 }

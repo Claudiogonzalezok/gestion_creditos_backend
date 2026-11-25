@@ -331,10 +331,10 @@ Corren contra una BD PostgreSQL real levantada en Docker (`docker-compose.test.y
 
 | Qué se tocó | Qué corre |
 |---|---|
-| Solo docs (`*.md`, `docs/`) o `.husky/` | Nada de tests |
+| Solo docs (`*.md`, `docs/`) o los hooks `.husky/pre-*` | Nada de tests |
 | Un módulo (`src/modules/<x>`) | Lint de los cambiados + unitarios relacionados (`jest --findRelatedTests`) + tests de integración que referencian ese módulo o a los módulos que lo importan |
 | Un test (`tests/unit/*`, `tests/integration/*.test.js`) | Ese test |
-| Código compartido (`src/config/`, `src/utils/`, `src/middlewares/`, `src/app.js`, `src/jobs/`, `package*.json`, `tests/integration/helpers/`, configs de jest/eslint, `docker-compose.test.yml`, `.env.test`, `.github/`) o cualquier otro archivo no listado | Suite completa: unitarios con umbral de cobertura + integración |
+| Código compartido (`src/config/`, `src/utils/`, `src/middlewares/`, `src/app.js`, `src/jobs/`, `package*.json`, `tests/integration/helpers/`, configs de jest/eslint, `docker-compose.test.yml`, `.env.test`, `.github/`, `.husky/install.mjs`), un archivo de módulo borrado o movido, o cualquier otro archivo no listado | Suite completa: unitarios con umbral de cobertura + integración |
 
 - La suite completa también corre al mergear a `main`, todas las noches (si falla, abre o actualiza un issue con la etiqueta `ci:nightly`) y en un PR con la etiqueta `ci:full`.
 - El umbral de cobertura está en `jest.unit.config.js` (53% de líneas, base del 2026-11-25). Subilo cuando la cobertura crezca; nunca lo bajes.
