@@ -315,6 +315,12 @@ Corren contra una BD PostgreSQL real levantada en Docker (`docker-compose.test.y
 
 ---
 
+## Backups de producción
+
+Backup diario cifrado de la base, con copia en Google Drive y ensayo de restore en Docker: ver [`docs/backups.md`](docs/backups.md).
+
+---
+
 ## Endpoints
 
 ### Autenticación
