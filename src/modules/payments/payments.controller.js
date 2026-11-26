@@ -59,10 +59,13 @@ const reject = async (req, res) => {
 const adminDirect = async (req, res) => {
   try {
     const result = await service.adminDirect(req.body, req.user.id);
+    // #73: reintento con el mismo client_request_id → 200 con el cobro existente.
+    if (result.idempotent_replay)
+      return response.success(res, result, 'Cobro ya registrado (reintento idempotente).');
     return response.created(res, result, 'Cobro registrado y aprobado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code || null);
     if (err.status === 422) return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);
   }

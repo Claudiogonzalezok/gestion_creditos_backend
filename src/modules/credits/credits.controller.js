@@ -192,6 +192,13 @@ const renew = async (req, res) => {
       req.body,
       req.user.id,
     );
+    // #73: reintento con el mismo client_request_id → 200 con la renovación existente.
+    if (payment.idempotent_replay)
+      return response.success(
+        res,
+        payment,
+        "Renovación ya registrada (reintento idempotente).",
+      );
     return response.created(
       res,
       payment,
@@ -257,7 +264,8 @@ const earlySettlement = async (req, res) => {
     );
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409)
+      return response.conflict(res, err.message, null, err.code || null);
     return response.serverError(res, err);
   }
 };

@@ -729,13 +729,14 @@ const createApproved = async (
     notes,
     cashSessionId,
     generationType,
+    clientRequestId,
   },
 ) => {
   const r = await client.query(
     `INSERT INTO payments
        (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
-        status, approved_by, approved_at, notes, admin_direct, cash_session_id, generation_type)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), $8, TRUE, $9, $10)
+        status, approved_by, approved_at, notes, admin_direct, cash_session_id, generation_type, client_request_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'APPROVED', $2, NOW(), $8, TRUE, $9, $10, $11)
      RETURNING id, installment_id, amount_received::float8, amount_cash::float8, amount_transfer::float8, payment_method, status, cash_session_id, created_at`,
     [
       installmentId,
@@ -748,6 +749,7 @@ const createApproved = async (
       notes || null,
       cashSessionId || null,
       generationType || "COLLECTION",
+      clientRequestId || null,
     ],
   );
   return r.rows[0];

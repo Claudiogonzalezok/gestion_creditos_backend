@@ -681,6 +681,8 @@ const credits = {
       .trim()
       .isLength({ max: 100 })
       .withMessage("La referencia no puede superar los 100 caracteres."),
+    // #73: clave de idempotencia opcional (mismo mecanismo que P08).
+    isUUID("client_request_id", "La clave de idempotencia (client_request_id)", false),
   ],
   changeSeller: [
     isUUIDParam("id", "El ID de crédito"),
@@ -735,6 +737,8 @@ const credits = {
       }
       return true;
     }),
+    // #73: clave de idempotencia opcional (mismo mecanismo que P08).
+    isUUID("client_request_id", "La clave de idempotencia (client_request_id)", false),
   ],
   refinance: [
     isUUIDParam("id", "El ID de crédito"),
@@ -890,6 +894,8 @@ const payments = {
       .trim()
       .isLength({ max: 500 })
       .withMessage("Las observaciones no pueden superar los 500 caracteres."),
+    // #73: clave de idempotencia opcional (mismo mecanismo que P08).
+    isUUID("client_request_id", "La clave de idempotencia (client_request_id)", false),
   ],
   reverse: [
     isUUIDParam("id", "El ID de cobro"),

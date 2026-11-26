@@ -1038,7 +1038,35 @@ const isVisibleToCollector = async (creditId, collectorId) => {
   return r.rows.length > 0;
 };
 
+/**
+ * Devuelve los payments de una cancelación anticipada a partir del payment que
+ * guarda la clave de idempotencia (#73). Los payments de una misma cancelación
+ * comparten crédito, admin, nota y created_at (NOW() de la transacción).
+ * @param {string} creditId - Crédito cancelado.
+ * @param {string} paymentId - Payment con el client_request_id.
+ * @returns {Promise<object[]>} Payments ordenados por número de cuota (vacío si no corresponde).
+ */
+const findEarlySettlementPaymentsByAnchor = async (creditId, paymentId) => {
+  const r = await pool.query(
+    `SELECT p.id, p.payment_method, p.amount_received::float8,
+            p.amount_cash::float8, p.amount_transfer::float8
+     FROM payments anchor
+     JOIN installments ai ON ai.id = anchor.installment_id AND ai.credit_id = $1
+     JOIN payments p ON p.collector_id = anchor.collector_id
+                    AND p.created_at = anchor.created_at
+                    AND p.notes = 'Cancelación anticipada'
+     JOIN installments i ON i.id = p.installment_id AND i.credit_id = $1
+     WHERE anchor.id = $2
+       AND anchor.notes = 'Cancelación anticipada'
+       AND anchor.admin_direct IS NOT TRUE
+     ORDER BY i.installment_number`,
+    [creditId, paymentId],
+  );
+  return r.rows;
+};
+
 module.exports = {
+  findEarlySettlementPaymentsByAnchor,
   isVisibleToCollector,
   findAll,
   findById,

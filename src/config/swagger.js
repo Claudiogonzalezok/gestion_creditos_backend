@@ -1047,12 +1047,35 @@ const swaggerSpec = {
                 properties: {
                   payment_method:      { $ref: '#/components/schemas/PaymentMethod' },
                   transfer_reference:  { type: 'string', maxLength: 100 },
+                  client_request_id:   { $ref: '#/components/schemas/UUID', description: 'Clave de idempotencia opcional (#73). Reintento con la misma clave → 200 con el resultado original e idempotent_replay: true.' },
                 },
               },
             },
           },
         },
-        responses: { 200: { description: 'Crédito cancelado — estado SETTLED' } },
+        responses: {
+          200: { description: 'Crédito cancelado — estado SETTLED (o replay idempotente)' },
+          409: { description: 'Estado inválido, pagos pendientes o IDEMPOTENCY_KEY_REUSED' },
+        },
+      },
+    },
+
+    '/credits/{id}/renew': {
+      post: {
+        tags: ['Credits'], summary: 'Renovar préstamo de una cuota (solo ADMIN)', security: [{ internalAuth: [] }],
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['payment_method'], properties: {
+          payment_method:     { type: 'string', enum: ['CASH', 'TRANSFER', 'MIXED'] },
+          amount_cash:        { type: 'number' },
+          amount_transfer:    { type: 'number' },
+          transfer_reference: { type: 'string', maxLength: 100 },
+          client_request_id:  { $ref: '#/components/schemas/UUID', description: 'Clave de idempotencia opcional (#73).' },
+        } } } } },
+        responses: {
+          200: { description: 'Replay idempotente: renovación existente con idempotent_replay: true' },
+          201: { description: 'Renovación registrada' },
+          409: { description: 'No renovable, sin caja activa o IDEMPOTENCY_KEY_REUSED' },
+        },
       },
     },
 
@@ -1192,12 +1215,14 @@ const swaggerSpec = {
           amount_transfer:    { type: 'number', description: 'Formato mixto' },
           transfer_reference: { type: 'string', maxLength: 100 },
           notes:              { type: 'string', maxLength: 500 },
+          client_request_id:  { $ref: '#/components/schemas/UUID', description: 'Clave de idempotencia opcional (#73).' },
         } } } } },
         responses: {
+          200: { description: 'Replay idempotente: cobro existente con idempotent_replay: true' },
           201: { description: 'Cobro registrado y aprobado' },
           403: { $ref: '#/components/responses/Forbidden' },
           404: { $ref: '#/components/responses/NotFound' },
-          409: { description: 'Sin caja activa, cuota ya pagada o crédito liquidado' },
+          409: { description: 'Sin caja activa, cuota ya pagada, crédito liquidado o IDEMPOTENCY_KEY_REUSED' },
         },
       },
     },
