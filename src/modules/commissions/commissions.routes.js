@@ -1,3 +1,4 @@
+const { paginationRules } = require('../../utils/pagination');
 const router          = require('express').Router();
 const controller      = require('./commissions.controller');
 const { body, param, query } = require('express-validator');
@@ -11,6 +12,7 @@ router.use(authenticate);
 router.get('/',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   [
+    ...paginationRules(),
     query('status').optional()
       .isIn(['PENDING','PAID','REVERSED'])
       .withMessage('status debe ser PENDING, PAID o REVERSED.'),

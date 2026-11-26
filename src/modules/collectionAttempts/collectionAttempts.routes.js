@@ -1,3 +1,4 @@
+const { paginationRules } = require('../../utils/pagination');
 const router     = require('express').Router();
 const controller = require('./collectionAttempts.controller');
 const { query }  = require('express-validator');
@@ -10,6 +11,7 @@ router.use(authenticate);
 router.get('/',
   authorize('ADMIN', 'COLLECTOR', 'SELLER_COLLECTOR'),
   [
+    ...paginationRules(),
     query('collector_id').optional().isUUID().withMessage('collector_id debe ser un UUID válido.'),
     query('installment_id').optional().isUUID().withMessage('installment_id debe ser un UUID válido.'),
   ],

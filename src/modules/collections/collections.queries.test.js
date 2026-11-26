@@ -1,6 +1,6 @@
 jest.mock("../../config/db", () => ({ query: jest.fn() }));
 
-const { collapseToOldestPerCredit } = require("./collections.queries");
+const { collapseToOldestPerCredit, createDetails } = require("./collections.queries");
 
 /** Helper: fila mínima de detalle de planilla con los campos que usa el colapso. */
 const row = (o) => ({
@@ -62,5 +62,33 @@ describe("collapseToOldestPerCredit", () => {
     ]);
     expect(out).toHaveLength(2);
     expect(out.every((r) => r.additional_installments_count === 0)).toBe(true);
+  });
+});
+
+describe("createDetails — inserción por lotes (#38)", () => {
+  const item = (i) => ({ installment_id: `i${i}`, amount_due: 100, installment_number: 1 });
+
+  it("una planilla grande se inserta en varios INSERT sin superar 65535 parámetros", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    const items = Array.from({ length: 2600 }, (_, i) => item(i));
+    await createDetails("S", items, db);
+    expect(db.query.mock.calls.length).toBeGreaterThan(1);
+    let total = 0;
+    for (const [, params] of db.query.mock.calls) {
+      expect(params.length).toBeLessThanOrEqual(65535);
+      expect(params.length % 26).toBe(0);
+      total += params.length / 26;
+    }
+    expect(total).toBe(2600);
+    // order_number (3er parámetro de cada fila) sigue siendo global y correlativo
+    const orders = db.query.mock.calls.flatMap(([, params]) =>
+      params.filter((_, idx) => idx % 26 === 2));
+    expect(orders).toEqual(items.map((_, i) => i + 1));
+  });
+
+  it("una planilla chica sigue siendo un único INSERT", async () => {
+    const db = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+    await createDetails("S", [item(1), item(2)], db);
+    expect(db.query).toHaveBeenCalledTimes(1);
   });
 });

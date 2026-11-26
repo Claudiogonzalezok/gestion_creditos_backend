@@ -35,6 +35,7 @@ const createBulk = async (req, res) => {
     const result = await service.createBulk(variant_id, units, req.user.id);
     return response.created(res, result, `${result.created} unidad(es) registrada(s) correctamente.`);
   } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
     if (err.status === 404) return response.notFound(res, err.message);
     if (err.status === 409) return response.conflict(res, err.message);
     return response.serverError(res, err);

@@ -1,4 +1,5 @@
 const pool = require('../../config/db');
+const { runListQuery } = require('../../utils/pagination');
 
 /**
  * Registra un intento de cobranza sin cobro.
@@ -22,7 +23,7 @@ const create = async ({ installmentId, collectorId, createdBy, attemptType, reas
  * @param {{ collectorId?: string, installmentId?: string }} filters
  * @returns {Promise<Array>}
  */
-const findAll = async ({ collectorId, installmentId } = {}) => {
+const findAll = async ({ collectorId, installmentId, pagination } = {}) => {
   let q = `
     SELECT ca.id, ca.attempt_type, ca.reason, ca.next_visit_date, ca.notes, ca.created_at,
            ca.installment_id, ca.collector_id, ca.created_by,
@@ -40,8 +41,8 @@ const findAll = async ({ collectorId, installmentId } = {}) => {
   const params = [];
   if (collectorId)   { params.push(collectorId);   q += ` AND ca.collector_id = $${params.length}`; }
   if (installmentId) { params.push(installmentId); q += ` AND ca.installment_id = $${params.length}`; }
-  q += ` ORDER BY ca.created_at DESC`;
-  return (await pool.query(q, params)).rows;
+  q += ` ORDER BY ca.created_at DESC, ca.id DESC`;
+  return runListQuery(q, params, pagination);
 };
 
 /**

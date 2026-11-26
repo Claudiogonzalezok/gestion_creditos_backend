@@ -8,7 +8,13 @@ const { authenticate, authorize } = require('../../middlewares/auth.middleware')
 
 // ── Cotizador público: sin autenticación (CU10) ───────────────
 router.get('/simulate/options',   controller.getSimulateOptions);
-router.get('/simulate/products',  controller.getSimulateProducts);
+router.get('/simulate/products',
+  [
+    query('limit').optional().isInt({ min: 1, max: 50 })
+      .withMessage('limit debe ser un entero entre 1 y 50.'),
+  ],
+  validate,
+  controller.getSimulateProducts);
 router.post('/simulate/all',      v.credits.simulateAll, validate, controller.simulateAll);
 router.post('/simulate',          v.credits.simulate,    validate, controller.simulate);
 

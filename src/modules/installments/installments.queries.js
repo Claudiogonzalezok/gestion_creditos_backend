@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
+const { runListQuery } = require('../../utils/pagination');
 
-const findAll = async ({ credit_id, status, collector_id } = {}) => {
+const findAll = async ({ credit_id, status, collector_id, pagination } = {}) => {
   let q = `
     SELECT i.id, i.credit_id, i.installment_number, i.due_date, i.original_due_date,
            i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8,
@@ -17,8 +18,8 @@ const findAll = async ({ credit_id, status, collector_id } = {}) => {
   if (credit_id)    { params.push(credit_id);    q += ` AND i.credit_id = $${params.length}`; }
   if (status)       { params.push(status);       q += ` AND i.status = $${params.length}`; }
   if (collector_id) { params.push(collector_id); q += ` AND cu.assigned_collector_id = $${params.length}`; }
-  q += ` ORDER BY i.due_date ASC, i.installment_number ASC`;
-  return (await pool.query(q, params)).rows;
+  q += ` ORDER BY i.due_date ASC, i.installment_number ASC, i.id ASC`;
+  return runListQuery(q, params, pagination);
 };
 
 const findById = async (id) => {

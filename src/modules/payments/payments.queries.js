@@ -1,4 +1,5 @@
 const pool = require("../../config/db");
+const { runListQuery } = require("../../utils/pagination");
 const { movementConceptCase } = require("../../utils/movementConcept");
 
 const findAll = async ({
@@ -7,6 +8,7 @@ const findAll = async ({
   installment_id,
   date_from,
   date_to,
+  pagination,
 } = {}) => {
   let q = `
     SELECT p.id, p.installment_id, p.amount_received::float8,
@@ -49,8 +51,8 @@ const findAll = async ({
     params.push(date_to);
     q += ` AND p.approved_at::date <= $${params.length}`;
   }
-  q += ` ORDER BY p.created_at DESC`;
-  return (await pool.query(q, params)).rows;
+  q += ` ORDER BY p.created_at DESC, p.id DESC`;
+  return runListQuery(q, params, pagination);
 };
 
 const findById = async (id) => {

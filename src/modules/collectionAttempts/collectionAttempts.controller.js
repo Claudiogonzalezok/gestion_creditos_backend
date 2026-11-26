@@ -1,4 +1,5 @@
 const service  = require('./collectionAttempts.service');
+const { parsePagination, sendList } = require('../../utils/pagination');
 const response = require('../../utils/response');
 
 const create = async (req, res) => {
@@ -17,7 +18,8 @@ const create = async (req, res) => {
 const getAll = async (req, res) => {
   try {
     const { collector_id, installment_id } = req.query;
-    return response.success(res, await service.getAll({ collectorId: collector_id, installmentId: installment_id }, req.user));
+    const pagination = parsePagination(req.query);
+    return sendList(res, await service.getAll({ collectorId: collector_id, installmentId: installment_id, pagination }, req.user));
   } catch (err) { return response.serverError(res, err); }
 };
 

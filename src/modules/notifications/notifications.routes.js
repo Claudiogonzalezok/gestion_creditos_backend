@@ -1,3 +1,4 @@
+const { query } = require("express-validator");
 const router = require("express").Router();
 const controller = require("./notifications.controller");
 const v = require("../../utils/validators");
@@ -29,7 +30,17 @@ router.put(
 );
 
 // ── Historial / badge — cualquier usuario autenticado ──────────
-router.get("/", controller.listByUser);
+router.get(
+  "/",
+  [
+    query("page").optional().isInt({ min: 1, max: 100000 })
+      .withMessage("page debe ser un entero entre 1 y 100000."),
+    query("limit").optional().isInt({ min: 1, max: 100 })
+      .withMessage("limit debe ser un entero entre 1 y 100."),
+  ],
+  validate,
+  controller.listByUser,
+);
 
 router.get("/unread-count", controller.unreadCount);
 

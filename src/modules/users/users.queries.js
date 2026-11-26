@@ -1,6 +1,7 @@
 const pool = require('../../config/db');
+const { runListQuery } = require('../../utils/pagination');
 
-const findAll = async ({ role, roles, status, search } = {}) => {
+const findAll = async ({ role, roles, status, search, pagination } = {}) => {
   let q = `SELECT id, full_name, dni, email, phone, address, role, status, is_temp_password,
                   failed_attempts, locked_at, last_login_at, created_at
            FROM users WHERE 1=1`;
@@ -19,9 +20,8 @@ const findAll = async ({ role, roles, status, search } = {}) => {
     params.push(`%${search}%`);
     q += ` AND (full_name ILIKE $${params.length} OR dni ILIKE $${params.length} OR email ILIKE $${params.length})`;
   }
-  q += ` ORDER BY full_name ASC`;
-  const result = await pool.query(q, params);
-  return result.rows;
+  q += ` ORDER BY full_name ASC, id ASC`;
+  return runListQuery(q, params, pagination);
 };
 
 const findById = async (id) => {

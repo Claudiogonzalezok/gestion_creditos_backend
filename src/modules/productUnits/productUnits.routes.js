@@ -1,5 +1,6 @@
 const router     = require('express').Router();
 const controller = require('./productUnits.controller');
+const { MAX_BULK_UNITS } = require('./productUnits.service');
 const { body, param, query } = require('express-validator');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
@@ -53,7 +54,8 @@ router.post('/bulk',
   authorize('ADMIN'),
   [
     body('variant_id').isUUID().withMessage('La variante es obligatoria y debe ser un UUID válido.'),
-    body('units').isArray({ min: 1 }).withMessage('Debe enviar al menos una unidad.'),
+    body('units').isArray({ min: 1, max: MAX_BULK_UNITS })
+      .withMessage(`Debe enviar entre 1 y ${MAX_BULK_UNITS} unidades.`),
     body('units.*.unit_code').trim()
       .notEmpty().withMessage('Cada unidad debe tener un código.').bail()
       .isLength({ min: 2, max: 100 }).withMessage('El código debe tener entre 2 y 100 caracteres.')

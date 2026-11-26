@@ -1,7 +1,8 @@
 const router     = require('express').Router();
 const controller = require('./productVariants.controller');
 const v          = require('../../utils/validators');
-const { query }  = require('express-validator');
+const { query, body } = require('express-validator');
+const { MAX_INITIAL_UNITS } = require('./productVariants.service');
 const { validate }                = require('../../middlewares/validate.middleware');
 const { authenticate, authorize } = require('../../middlewares/auth.middleware');
 
@@ -31,7 +32,16 @@ router.post('/',
 
 router.post('/bulk',
   authorize('ADMIN'),
-  v.productVariants.bulkCreate, validate,
+  v.productVariants.bulkCreate,
+  // Tope total de unidades iniciales del lote (#38); filas sin initial_units cuentan 1.
+  body('rows').custom((rows) => {
+    const total = (Array.isArray(rows) ? rows : [])
+      .reduce((acc, r) => acc + (Number.isInteger(Number(r?.initial_units)) ? Math.max(0, Number(r.initial_units)) : 1), 0);
+    if (total > MAX_INITIAL_UNITS)
+      throw new Error(`La suma de initial_units no puede superar ${MAX_INITIAL_UNITS}.`);
+    return true;
+  }),
+  validate,
   controller.createBulk
 );
 

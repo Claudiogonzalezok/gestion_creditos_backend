@@ -1,4 +1,5 @@
 const service  = require('./users.service');
+const { parsePagination, sendList } = require('../../utils/pagination');
 const response = require('../../utils/response');
 
 // GET /api/users
@@ -9,8 +10,9 @@ const getAll = async (req, res) => {
     const rolesArr = roles
       ? String(roles).split(',').map((r) => r.trim()).filter(Boolean)
       : undefined;
-    const users = await service.getAll({ role, roles: rolesArr, status, search });
-    return response.success(res, users);
+    const pagination = parsePagination(req.query);
+    const users = await service.getAll({ role, roles: rolesArr, status, search, pagination });
+    return sendList(res, users);
   } catch (err) {
     return response.serverError(res, err);
   }

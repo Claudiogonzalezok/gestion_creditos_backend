@@ -1,3 +1,4 @@
+const { paginationRules } = require('../../utils/pagination');
 const router        = require('express').Router();
 const controller    = require('./installments.controller');
 const { query }     = require('express-validator');
@@ -10,6 +11,7 @@ router.use(authenticate);
 router.get('/',
   authorize('ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'),
   [
+    ...paginationRules(),
     query('status').optional()
       .isIn(['PENDING','OVERDUE','PAID','PARTIAL'])
       .withMessage('status debe ser PENDING, OVERDUE, PAID o PARTIAL.'),
