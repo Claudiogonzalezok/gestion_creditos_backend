@@ -559,7 +559,7 @@ PATCH  /api/installments/:id/early-pay
 ### Cobros (payments)
 
 ```
-GET    /api/payments
+GET    /api/payments?status=&collector_id=&installment_id=&date_from=&date_to=&created_from=&created_to=
 GET    /api/payments/:id
 POST   /api/payments                  → Registrar pre-carga
 PATCH  /api/payments/:id/approve      → Aprueba y aplica adelanto automático si sobra saldo
@@ -567,6 +567,13 @@ PATCH  /api/payments/:id/reject
 POST   /api/payments/admin-direct     → Cobro directo sin pre-carga (solo ADMIN)
 POST   /api/payments/:id/reverse      → Revertir cobro aprobado (solo ADMIN)
 ```
+
+Filtros de fecha de `GET /api/payments` (YYYY-MM-DD, inclusivos, combinables con los demás filtros y la paginación):
+
+- `date_from` / `date_to`: fecha de **aprobación** (`approved_at`). Excluyen las pre-cargas `PENDING`.
+- `created_from` / `created_to`: fecha de **registro** (`created_at`). Incluyen `PENDING`. `created_to` debe ser mayor o igual a `created_from` (si no, 400).
+
+Un cobrador siempre ve solo sus propios cobros, con cualquier filtro.
 
 #### Cobro directo: `POST /api/payments/admin-direct`
 
