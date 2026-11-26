@@ -19,6 +19,12 @@ router.get('/',
       .isUUID().withMessage('collector_id debe ser un UUID válido.'),
     query('credit_id').optional()
       .isUUID().withMessage('credit_id debe ser un UUID válido.'),
+    query('overdue').optional()
+      .isIn(['true','false']).withMessage('overdue debe ser true o false.'),
+    query('due_before').optional()
+      .matches(/^\d{4}-\d{2}-\d{2}$/).withMessage('due_before debe ser una fecha YYYY-MM-DD.')
+      .bail()
+      .isISO8601({ strict: true }).withMessage('due_before debe ser una fecha YYYY-MM-DD.'),
   ],
   validate,
   controller.getAll

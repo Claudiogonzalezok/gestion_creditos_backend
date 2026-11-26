@@ -556,6 +556,13 @@ PATCH  /api/installments/:id/waive-penalty
 PATCH  /api/installments/:id/early-pay
 ```
 
+`GET /api/installments` acepta, además de `status`, `credit_id`, `collector_id` y paginación:
+
+- `overdue=true` → cuotas vencidas **por fecha** (`due_date` anterior a hoy de la jornada), con saldo pendiente (`amount_due - amount_paid > 0`) y status distinto de `PAID`/`REFINANCED`/`PLAN_CHANGE_CANCELLED`/`WRITTEN_OFF`, aunque el cron todavía no las haya marcado `OVERDUE`.
+- `due_before=YYYY-MM-DD` → mismo criterio con fecha de corte explícita (estricta). Si llegan ambos, se usa la fecha más temprana.
+
+`PATCH /api/installments/:id/apply-penalty` acepta cuotas `OVERDUE` y también `PENDING`/`PARTIAL` con `due_date` anterior a hoy y saldo pendiente. Una cuota `PAID` responde `409` ("La cuota ya fue pagada…").
+
 ### Cobros (payments)
 
 ```

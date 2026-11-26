@@ -1,7 +1,16 @@
 const pool = require('../../config/db');
 const { runListQuery } = require('../../utils/pagination');
 
-const findAll = async ({ credit_id, status, collector_id, pagination } = {}) => {
+// Status que nunca cuentan como vencidos aunque tengan saldo (ver IS_OVERDUE_DERIVED).
+const CLOSED_STATUSES = ['PAID', 'REFINANCED', 'PLAN_CHANGE_CANCELLED', 'WRITTEN_OFF'];
+
+/**
+ * Lista cuotas con filtros opcionales.
+ * `overdueBefore` (YYYY-MM-DD) restringe a cuotas con due_date anterior a esa
+ * fecha, saldo pendiente real > 0 y status abierto, sin depender del status
+ * OVERDUE persistido (que solo actualiza el cron).
+ */
+const findAll = async ({ credit_id, status, collector_id, overdueBefore, pagination } = {}) => {
   let q = `
     SELECT i.id, i.credit_id, i.installment_number, i.due_date, i.original_due_date,
            i.amount_due::float8, i.amount_paid::float8, i.penalty_amount::float8,
@@ -18,6 +27,12 @@ const findAll = async ({ credit_id, status, collector_id, pagination } = {}) => 
   if (credit_id)    { params.push(credit_id);    q += ` AND i.credit_id = $${params.length}`; }
   if (status)       { params.push(status);       q += ` AND i.status = $${params.length}`; }
   if (collector_id) { params.push(collector_id); q += ` AND cu.assigned_collector_id = $${params.length}`; }
+  if (overdueBefore) {
+    params.push(overdueBefore);
+    q += ` AND i.due_date < $${params.length}::date AND (i.amount_due - i.amount_paid) > 0`;
+    params.push(CLOSED_STATUSES);
+    q += ` AND i.status <> ALL($${params.length}::text[])`;
+  }
   q += ` ORDER BY i.due_date ASC, i.installment_number ASC, i.id ASC`;
   return runListQuery(q, params, pagination);
 };

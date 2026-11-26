@@ -1063,6 +1063,8 @@ const swaggerSpec = {
           { name: 'status',       in: 'query', schema: { type: 'string', enum: ['PENDING','OVERDUE','PAID','PARTIAL'] } },
           { name: 'collector_id', in: 'query', schema: { $ref: '#/components/schemas/UUID' } },
           { name: 'credit_id',    in: 'query', schema: { $ref: '#/components/schemas/UUID' } },
+          { name: 'overdue',      in: 'query', schema: { type: 'string', enum: ['true','false'] }, description: 'true: vencidas por fecha (due_date < hoy de la jornada), con saldo pendiente y status abierto, sin depender del status OVERDUE persistido.' },
+          { name: 'due_before',   in: 'query', schema: { type: 'string', format: 'date' }, description: 'Vencidas con due_date estrictamente anterior a esta fecha, con saldo pendiente y status abierto. Con overdue=true se usa la fecha más temprana.' },
         ],
         responses: { 200: { description: 'Lista de cuotas' } },
       },
