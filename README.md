@@ -734,6 +734,10 @@ GET    /api/reports/summary
 - `overdue` — segmentado por aging buckets (1-30d, 31-60d, 61-90d, +90d)
 - `portfolio` — incluye top 10 clientes por saldo pendiente
 - `collectors` — incluye `avg_approval_hours` (tiempo promedio de aprobación)
+  - `total_payments`, `approved_count`, `rejected_count` y `approval_rate` cuentan todos los cobros del cobrador en el rango (aprobados, rechazados y pendientes; las filas de reversión no cuentan). La jornada de un cobro es la de su caja; si no tiene, la fecha de aprobación/rechazo y, para pendientes, la de creación.
+  - `total_collected` netea las reversiones igual que `collection` (la reversión resta en su propia jornada), así ambos reportes coinciden para el mismo rango.
+
+**Montos exactos:** los cálculos nuevos de dinero (cronograma de simulación, imputación de cobros, saldos de cancelación/castigo/cambio de plan) se hacen en centavos enteros (`src/utils/money.js`). En el cronograma, la suma del capital de todas las cuotas es exactamente el capital financiado (la última cuota absorbe el resto). No se recalcula ningún monto ya persistido.
 
 ### Configuración del sistema
 

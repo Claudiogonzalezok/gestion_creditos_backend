@@ -1,6 +1,7 @@
 const pool = require("../../config/db");
 const { runListQuery } = require("../../utils/pagination");
 const { movementConceptCase } = require("../../utils/movementConcept");
+const { toCents, fromCents } = require("../../utils/money");
 
 const findAll = async ({
   status,
@@ -272,9 +273,12 @@ const updateInstallment = async (
   currentAmountPaid,
   graceDays,
 ) => {
-  const remaining = amountDue - currentAmountPaid;
-  const toApply = Math.min(amountReceived, remaining);
-  const newTotal = currentAmountPaid + toApply;
+  // Cálculo en centavos enteros: evita persistir amount_paid con ruido de
+  // punto flotante (ej. 0.1 + 0.2 = 0.30000000000000004) que rompería el >= amount_due.
+  const paidCents = toCents(currentAmountPaid);
+  const remainingCents = toCents(amountDue) - paidCents;
+  const toApplyCents = Math.min(toCents(amountReceived), remainingCents);
+  const newTotal = fromCents(paidCents + toApplyCents);
   const r = await client.query(
     `UPDATE installments
      SET amount_paid = $1,

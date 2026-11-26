@@ -1,4 +1,5 @@
 const { localDate } = require("./date");
+const { toCents, fromCents, splitMoney } = require("./money");
 
 /**
  * Convierte un input de fecha YYYY-MM-DD a Date local sin sesgo UTC.
@@ -195,7 +196,74 @@ const getProductInstallmentContribution = (
   installmentsCount,
 ) => getInstallmentAmount(lineTotal, rate, installmentsCount);
 
+/**
+ * Reparte capital, interés y saldo estimado de un cronograma en centavos enteros.
+ * La suma del capital de todas las cuotas es exactamente el capital financiado
+ * (la última cuota absorbe el resto de la división) y capital + interés = cuota.
+ * @param {object} params
+ * @param {number|string} params.financedAmount - Capital financiado.
+ * @param {number|string} params.installmentAmount - Monto de cada cuota.
+ * @param {number} params.installmentsCount - Cantidad de cuotas.
+ * @param {number|string} params.totalToReturn - Total a devolver.
+ * @returns {Array<{amount:number, capital:number, interest:number, remaining_estimated:number}>}
+ */
+const buildScheduleAmounts = ({
+  financedAmount,
+  installmentAmount,
+  installmentsCount,
+  totalToReturn,
+}) => {
+  const capitals = splitMoney(financedAmount, installmentsCount);
+  const amountCents = toCents(installmentAmount);
+  let remainingCents = toCents(totalToReturn);
+  return capitals.map((capital) => {
+    remainingCents = Math.max(0, remainingCents - amountCents);
+    // Nunca interés negativo: si la cuota no cubre el capital (caso degenerado
+    // de tasa ~0 con total menor al financiado), el capital se recorta a la cuota.
+    const capitalCents = Math.min(toCents(capital), amountCents);
+    return {
+      amount: fromCents(amountCents),
+      capital: fromCents(capitalCents),
+      interest: fromCents(amountCents - capitalCents),
+      remaining_estimated: fromCents(remainingCents),
+    };
+  });
+};
+
+/**
+ * Agrega en centavos las líneas de una venta en filas de cronograma.
+ * El capital de cada línea se reparte con splitMoney (suma exacta por línea) y
+ * el interés de cada fila nunca es negativo (capital recortado a la cuota).
+ * @param {Array<object>} groups - Líneas con financed_line_total, installments_count e installment_contribution.
+ * @param {number} installmentsCount - Cantidad de filas del cronograma.
+ * @returns {Array<{amount:number, capital:number, interest:number}>}
+ */
+const buildSaleScheduleAmounts = (groups, installmentsCount) => {
+  const groupCapitals = groups.map((group) =>
+    splitMoney(group.financed_line_total, group.installments_count).map(
+      toCents,
+    ),
+  );
+  return Array.from({ length: installmentsCount }, (_, index) => {
+    let amountCents = 0;
+    let capitalCents = 0;
+    groups.forEach((group, groupIndex) => {
+      if (index >= group.installments_count) return;
+      amountCents += toCents(group.installment_contribution);
+      capitalCents += groupCapitals[groupIndex][index];
+    });
+    capitalCents = Math.min(capitalCents, amountCents);
+    return {
+      amount: fromCents(amountCents),
+      capital: fromCents(capitalCents),
+      interest: fromCents(amountCents - capitalCents),
+    };
+  });
+};
+
 module.exports = {
+  buildScheduleAmounts,
+  buildSaleScheduleAmounts,
   getInstallmentAmount,
   getTotalWithInterest,
   getTotalToReturn,

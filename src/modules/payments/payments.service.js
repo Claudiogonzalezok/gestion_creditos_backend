@@ -10,6 +10,7 @@ const collectionsQueries = require("../collections/collections.queries");
 const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
 const { withTransaction } = require("../../utils/transaction");
+const { round2: _round2, addMoney, subtractMoney } = require("../../utils/money");
 const notificationsService = require("../notifications/notifications.service");
 const notificationsQueries = require("../notifications/notifications.queries");
 
@@ -79,7 +80,6 @@ const _validateCajaOpen = async (date) => {
   };
 };
 
-const _round2 = (n) => Math.round(n * 100) / 100;
 
 /**
  * Normaliza los montos de un cobro a un shape único, aceptando los dos formatos
@@ -278,8 +278,8 @@ const _applyPaymentToInstallments = async (
     graceDays,
   );
 
-  const round = (n) => Math.round(n * 100) / 100;
-  let remaining = round(amountToApply - (amountDue - amountPaid));
+  // Excedente calculado en centavos para no arrastrar ruido de punto flotante.
+  let remaining = subtractMoney(amountToApply, subtractMoney(amountDue, amountPaid));
   let paidCount = 0;
 
   // Proporción efectivo/total del cobro cabecera. Las cuotas adelantadas heredan
@@ -307,9 +307,7 @@ const _applyPaymentToInstallments = async (
     for (const inst of nextInstallments) {
       if (remaining <= 0) break;
 
-      const instBalance = round(
-        parseFloat(inst.amount_due) - parseFloat(inst.amount_paid),
-      );
+      const instBalance = subtractMoney(inst.amount_due, inst.amount_paid);
       if (remaining >= instBalance) {
         await queries.markInstallmentAsPrepaid(
           client,
@@ -321,7 +319,7 @@ const _applyPaymentToInstallments = async (
           paymentId,
           cashRatio,
         );
-        remaining = round(remaining - instBalance);
+        remaining = subtractMoney(remaining, instBalance);
         paidCount++;
       } else {
         await queries.updateInstallment(
@@ -1339,13 +1337,8 @@ const reverse = async (id, reason, adminId) => {
     // el resto del amount_received fue a las cuotas hijas (adelantadas o con
     // excedente parcial), que se restauran abajo con su propio monto (#41).
     // Restar el total borraba los pagos parciales previos de la cabecera.
-    const childrenTotal = children.reduce(
-      (sum, c) => sum + parseFloat(c.amount_received),
-      0,
-    );
-    const headerApplied = _round2(
-      parseFloat(payment.amount_received) - childrenTotal,
-    );
+    const childrenTotal = addMoney(...children.map((c) => c.amount_received));
+    const headerApplied = subtractMoney(payment.amount_received, childrenTotal);
 
     await queries.restoreInstallmentFromReversal(
       client,
