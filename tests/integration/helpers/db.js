@@ -181,12 +181,14 @@ const preserveTable = (table) => {
 };
 
 /**
- * Devuelve todas las filas actuales de una tabla de referencia.
- * @param {string} table - nombre de la tabla (literal fijo, no input externo)
+ * Devuelve todas las filas actuales de una tabla de referencia, ordenadas por
+ * `id` para que dos snapshots de las mismas filas sean comparables (sin ORDER BY
+ * el orden depende del layout físico y cambia tras DELETE + INSERT).
+ * @param {string} table - nombre de la tabla (literal fijo, no input externo; debe tener columna id)
  * @returns {Promise<Object[]>}
  */
 const snapshotTable = async (table) =>
-  (await pool.query(`SELECT * FROM ${table}`)).rows;
+  (await pool.query(`SELECT * FROM ${table} ORDER BY id`)).rows;
 
 /**
  * Reemplaza el contenido de la tabla por las filas del snapshot, en una sola

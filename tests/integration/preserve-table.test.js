@@ -23,8 +23,10 @@ describe("snapshotTable / restoreTable", () => {
 
     expect(await countRates()).toBe(snapshot.length);
     const restored = await snapshotTable("interest_rates");
-    const byId = (a, b) => a.id - b.id;
-    expect(restored.sort(byId)).toEqual([...snapshot].sort(byId));
+    // id es UUID: restarlos daba NaN y el sort no ordenaba (test flaky, #87).
+    // snapshotTable ya ordena por id; se compara con un orden de string estable.
+    const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    expect([...restored].sort(byId)).toEqual([...snapshot].sort(byId));
   });
 
   it("si una fila falla, no deja la tabla vacía ni a medias", async () => {
@@ -32,7 +34,7 @@ describe("snapshotTable / restoreTable", () => {
     const snapshot = await snapshotTable("interest_rates");
     // Fila inválida primero: el INSERT falla justo después del DELETE, antes
     // de reinsertar nada. Sin transacción la tabla quedaría vacía.
-    const broken = [{ id: "no-es-un-numero" }, ...snapshot];
+    const broken = [{ id: "no-es-un-uuid" }, ...snapshot];
 
     await expect(restoreTable("interest_rates", broken)).rejects.toThrow();
 
