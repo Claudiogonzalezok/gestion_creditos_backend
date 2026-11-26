@@ -29,23 +29,36 @@ const getRates = async () => {
 };
 
 /**
- * Datos de la empresa + tasas.
- * @returns {Promise<{company: object, rates: object}>}
+ * Umbral de stock bajo desde system_config (#106).
+ * @returns {Promise<number>}
+ */
+const getLowStockThreshold = async () =>
+  Number(await systemConfigQueries.getValue('low_stock_threshold'));
+
+/**
+ * Datos de la empresa + tasas + umbral de stock bajo.
+ * @returns {Promise<{company: object, rates: object, low_stock_threshold: number}>}
  */
 const get = async () => {
   const company = await queries.getSettings();
-  return { company, rates: await getRates() };
+  return { company, rates: await getRates(), low_stock_threshold: await getLowStockThreshold() };
 };
 
 /**
- * Actualiza los datos de contacto de la empresa (parcial).
- * @param {object} data
+ * Actualiza los datos de contacto de la empresa y/o el umbral de stock bajo (parcial).
+ * @param {object} data - campos de company_settings y low_stock_threshold opcional
  * @param {string} userId
- * @returns {Promise<{company: object, rates: object}>}
+ * @returns {Promise<{company: object, rates: object, low_stock_threshold: number}>}
  */
 const updateCompany = async (data, userId) => {
-  const company = await queries.updateSettings(data, userId);
-  return { company, rates: await getRates() };
+  const { low_stock_threshold: threshold, ...companyData } = data;
+  if (threshold !== undefined)
+    await systemConfigService.updateMany({ low_stock_threshold: threshold }, userId);
+  const hasCompanyFields = Object.values(companyData).some((v) => v !== undefined);
+  const company = hasCompanyFields
+    ? await queries.updateSettings(companyData, userId)
+    : await queries.getSettings();
+  return { company, rates: await getRates(), low_stock_threshold: await getLowStockThreshold() };
 };
 
 /**
@@ -66,4 +79,4 @@ const updateRates = async (data, userId) => {
   return get();
 };
 
-module.exports = { get, updateCompany, updateRates, RATE_KEYS };
+module.exports = { get, updateCompany, updateRates, getLowStockThreshold, RATE_KEYS };

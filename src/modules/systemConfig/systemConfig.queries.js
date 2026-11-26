@@ -19,6 +19,7 @@ const DEFAULT_VALUES = {
   commission_pay_day:        { value: '1',      description: 'Día de pago de liquidaciones (ISO: 1=Lun)' },
   company_sale_rate_monthly: { value: '0',      description: 'Tasa mensual de referencia para VENTA (datos de empresa; no reemplaza product_rates)' },
   company_loan_rate_monthly: { value: '0',      description: 'Tasa mensual de referencia para PRÉSTAMO (datos de empresa; no reemplaza interest_rates)' },
+  low_stock_threshold:       { value: '5',      description: 'Umbral de stock bajo: un producto con unidades disponibles <= este valor se marca como stock bajo' },
 };
 
 const findAll = async () => {

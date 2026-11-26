@@ -49,11 +49,55 @@ const getAccountSummary = async (customerId) => {
   };
 };
 
+/** Estados de cuota que todavía adeudan saldo (mismo criterio que el resumen). */
+const OWED_STATUSES = ['PENDING', 'OVERDUE', 'PARTIAL'];
+
 /**
- * Lista de créditos del cliente autenticado.
+ * Redondea a centavos para evitar arrastre de punto flotante.
+ * @param {number} n
+ * @returns {number}
+ */
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * Cuota pública del portal: incluye lo pagado (#98).
+ * @param {object} i - fila de installments
+ * @returns {object}
+ */
+const mapInstallment = (i) => ({
+  id:                 i.id,
+  installment_number: i.installment_number,
+  due_date:           i.due_date,
+  amount_due:         parseFloat(i.amount_due),
+  amount_paid:        parseFloat(i.amount_paid),
+  penalty_amount:     parseFloat(i.penalty_amount),
+  status:             i.status,
+});
+
+/**
+ * Totales pagado/restante de un crédito a partir de sus cuotas.
+ * remaining_amount = Σ (amount_due - amount_paid) de cuotas PENDING/OVERDUE/PARTIAL.
+ * @param {object[]} installments - cuotas ya mapeadas
+ * @returns {{amount_paid: number, remaining_amount: number}}
+ */
+const computePaidTotals = (installments) => ({
+  amount_paid: round2(installments.reduce((s, i) => s + i.amount_paid, 0)),
+  remaining_amount: round2(installments
+    .filter((i) => OWED_STATUSES.includes(i.status))
+    .reduce((s, i) => s + (i.amount_due - i.amount_paid), 0)),
+});
+
+/**
+ * Lista de créditos del cliente autenticado, con cuotas y lo pagado (#98).
  */
 const getCredits = async (customerId) => {
   const rows = await queries.findCredits(customerId, await getGraceDays());
+  const installmentRows = await queries.findInstallmentsByCreditIds(rows.map((r) => r.id));
+  const byCredit = new Map();
+  for (const i of installmentRows) {
+    if (!byCredit.has(i.credit_id)) byCredit.set(i.credit_id, []);
+    byCredit.get(i.credit_id).push(mapInstallment(i));
+  }
   return rows.map(r => ({
     id:                 r.id,
     type:               r.type,
@@ -74,6 +118,9 @@ const getCredits = async (customerId) => {
     pending_penalty:         parseFloat(r.pending_penalty),
     has_overdue:             r.has_overdue === true,
     overdue_installments:    parseInt(r.overdue_installments),
+    amount_paid:             round2(parseFloat(r.amount_paid)),
+    remaining_amount:        round2(parseFloat(r.remaining_amount)),
+    installments:            byCredit.get(r.id) ?? [],
   }));
 };
 
@@ -85,6 +132,7 @@ const getCreditById = async (creditId, customerId) => {
   const credit = await queries.findCreditById(creditId, customerId);
   if (!credit) throw { status: 404, message: 'Crédito no encontrado.' };
 
+  const installments = credit.installments.map(mapInstallment);
   const totalToReturn = credit.installments.reduce(
     (sum, i) => sum + parseFloat(i.amount_due),
     0,
@@ -106,15 +154,8 @@ const getCreditById = async (creditId, customerId) => {
     down_payment_method:  credit.down_payment_method ?? null,
     prepaid_installments: parseInt(credit.prepaid_installments),
     interest_rate:        credit.interest_rate != null ? parseFloat(credit.interest_rate) : null,
-    installments:         credit.installments.map(i => ({
-      id:                 i.id,
-      installment_number: i.installment_number,
-      due_date:           i.due_date,
-      amount_due:         parseFloat(i.amount_due),
-      amount_paid:        parseFloat(i.amount_paid),
-      penalty_amount:     parseFloat(i.penalty_amount),
-      status:             i.status,
-    })),
+    ...computePaidTotals(installments),
+    installments,
   };
 };
 

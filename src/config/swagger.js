@@ -1522,7 +1522,7 @@ const swaggerSpec = {
     '/reports/products': {
       get: {
         tags: ['Reports'], summary: 'Reporte de productos vendidos y stock', security: [{ internalAuth: [] }],
-        parameters: [{ name: 'stock_threshold', in: 'query', schema: { type: 'integer', minimum: 0 }, description: 'Alertar productos con stock menor a este valor' }],
+        parameters: [{ name: 'stock_threshold', in: 'query', schema: { type: 'integer', minimum: 0 }, description: 'low_stock = unidades disponibles <= este valor. Si se omite, usa low_stock_threshold de system_config (default 5).' }],
         responses: { 200: { description: 'Ranking de ventas y estado de stock' } },
       },
     },
@@ -1564,12 +1564,13 @@ const swaggerSpec = {
     // EMPRESA (#88)
     // ════════════════════════════════════════════════════════════
     '/company': {
-      get: { tags: ['Company'], summary: 'Datos y tasas de la empresa (ADMIN)', security: [{ internalAuth: [] }], responses: { 200: { description: '{ company: { system_name, contact_email, phone, address, updated_at, updated_by }, rates: { sale_rate_monthly, loan_rate_monthly, mora_rate_daily, seller_commission_rate, grace_period_days } }' }, 403: { description: 'Solo ADMIN' } } },
+      get: { tags: ['Company'], summary: 'Datos y tasas de la empresa (ADMIN)', security: [{ internalAuth: [] }], responses: { 200: { description: '{ company: { system_name, contact_email, phone, address, updated_at, updated_by }, rates: { sale_rate_monthly, loan_rate_monthly, mora_rate_daily, seller_commission_rate, grace_period_days }, low_stock_threshold }' }, 403: { description: 'Solo ADMIN' } } },
       put: {
         tags: ['Company'], summary: 'Actualizar datos de la empresa (parcial, ADMIN)', security: [{ internalAuth: [] }],
         requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
           system_name: { type: 'string', maxLength: 150 }, contact_email: { type: 'string', format: 'email', nullable: true },
           phone: { type: 'string', maxLength: 30, nullable: true }, address: { type: 'string', maxLength: 255, nullable: true },
+          low_stock_threshold: { type: 'integer', minimum: 0, maximum: 100000, description: 'Umbral de stock bajo (system_config)' },
         } } } } },
         responses: { 200: { description: 'Datos actualizados' }, 400: { description: 'Validación' }, 403: { description: 'Solo ADMIN' } },
       },
@@ -1595,11 +1596,11 @@ const swaggerSpec = {
     },
 
     '/portal/credits': {
-      get: { tags: ['Portal'], summary: 'Créditos activos del cliente', security: [{ portalAuth: [] }], responses: { 200: { description: 'Lista de créditos con estado' } } },
+      get: { tags: ['Portal'], summary: 'Créditos activos del cliente', security: [{ portalAuth: [] }], responses: { 200: { description: 'Lista de créditos con estado. Cada crédito incluye amount_paid, remaining_amount (Σ amount_due - amount_paid de cuotas PENDING/OVERDUE/PARTIAL) e installments[] { id, installment_number, due_date, amount_due, amount_paid, penalty_amount, status }' } } },
     },
 
     '/portal/credits/{id}': {
-      get: { tags: ['Portal'], summary: 'Detalle de crédito con cronograma de cuotas', security: [{ portalAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }], responses: { 200: { description: 'Crédito con todas las cuotas' } } },
+      get: { tags: ['Portal'], summary: 'Detalle de crédito con cronograma de cuotas', security: [{ portalAuth: [] }], parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }], responses: { 200: { description: 'Crédito con todas las cuotas, amount_paid y remaining_amount (mismo cálculo que el listado)' } } },
     },
   },
 };

@@ -55,10 +55,11 @@ const getSellersReport = async (req, res) => {
 
 const getProductsReport = async (req, res) => {
   try {
+    // Sin query, el service usa low_stock_threshold de system_config (#106).
     const threshold =
       req.query.stock_threshold !== undefined
         ? parseInt(req.query.stock_threshold)
-        : 5;
+        : undefined;
     return response.success(res, await service.getProductsReport(threshold));
   } catch (err) {
     return response.serverError(res, err);
