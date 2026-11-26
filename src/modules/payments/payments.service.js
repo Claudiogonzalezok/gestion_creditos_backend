@@ -8,7 +8,7 @@ const {
 } = require("../businessDays/businessDays.service");
 const collectionsQueries = require("../collections/collections.queries");
 const collectionAttemptsQueries = require("../collectionAttempts/collectionAttempts.queries");
-const { getValue } = require("../systemConfig/systemConfig.queries");
+const { getGraceDays } = require("../systemConfig/graceDays");
 const { withTransaction } = require("../../utils/transaction");
 const { round2: _round2, addMoney, subtractMoney } = require("../../utils/money");
 const notificationsService = require("../notifications/notifications.service");
@@ -804,7 +804,7 @@ const approve = async (id, adminId) => {
   await _validateCajaOpen(jornadaDate);
 
   // Días de gracia para el recálculo de status post-aplicación del pago
-  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+  const graceDays = await getGraceDays();
 
   await withTransaction(async (client) => {
     // V4: resolver la caja activa de la jornada actual bajo lock. Si no hay
@@ -1088,7 +1088,7 @@ const _adminDirectOnce = async (data, adminId, recheck) => {
   // lockActiveSessionForCurrentJornada (no más por owner).
 
   // Días de gracia para el recálculo de status post-aplicación del pago
-  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+  const graceDays = await getGraceDays();
 
   // Validar cuota
   const instCheck = await pool.query(
@@ -1255,7 +1255,7 @@ const renew = async (creditId, data, adminId) => {
 const _renewOnce = async (creditId, data, adminId, recheck, resolveReplay) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
-  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+  const graceDays = await getGraceDays();
 
   const loan = await queries.getRenewableLoan(creditId);
   if (!loan) throw { status: 404, message: "Crédito no encontrado." };
@@ -1400,7 +1400,7 @@ const renewalQuote = async (creditId) => {
  */
 const reverse = async (id, reason, adminId) => {
   // Días de gracia para el recálculo de status tras restaurar amount_paid
-  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+  const graceDays = await getGraceDays();
 
   // V4.3: la reversión se imputa a la CAJA ACTIVA de la jornada (no a la del
   // admin que revierte, ni al cash_session_id del payment original que

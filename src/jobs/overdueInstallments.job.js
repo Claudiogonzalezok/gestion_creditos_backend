@@ -60,6 +60,7 @@
 const cron = require("node-cron");
 const pool = require("../config/db");
 const { getValue } = require("../modules/systemConfig/systemConfig.queries");
+const { getGraceDays } = require("../modules/systemConfig/graceDays");
 const { runWithLogging, ts } = require("../utils/cronLogger");
 const { rollbackSafely, releaseClient } = require("../utils/transaction");
 const notificationsService = require("../modules/notifications/notifications.service");
@@ -126,7 +127,7 @@ const markOverdueAndApplyPenalty = () =>
     try {
       await client.query("BEGIN");
 
-      const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+      const graceDays = await getGraceDays();
       const maxRate = parseFloat(
         (await getValue("penalty_max_rate")) || "0.50",
       );

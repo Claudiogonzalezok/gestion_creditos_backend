@@ -1,6 +1,6 @@
 const bcrypt = require("bcryptjs");
 const queries = require("./customers.queries");
-const { getValue } = require("../systemConfig/systemConfig.queries");
+const { getGraceDays } = require("../systemConfig/graceDays");
 const { generateTempPassword } = require("../../utils/tempPassword");
 const notificationsService = require("../notifications/notifications.service");
 const notificationsQueries = require("../notifications/notifications.queries");
@@ -27,14 +27,6 @@ const _notifyNewCustomer = async (customer) => {
   }
 };
 
-/**
- * Días de gracia para considerar una cuota vencida en queries que usan la
- * condición derivada (IS_OVERDUE_DERIVED).
- * @returns {Promise<number>}
- */
-const getGraceDays = async () =>
-  parseInt((await getValue("penalty_grace_days")) || "3");
-
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || "10");
 
 /**
@@ -45,7 +37,7 @@ const IS_COLLECTOR = (role) => ["COLLECTOR", "SELLER_COLLECTOR"].includes(role);
 const stripFieldsByRole = (customer, requestingUser) => {
   // COLLECTOR y SELLER_COLLECTOR no ven el domicilio completo (CU06)
   if (IS_COLLECTOR(requestingUser.role)) {
-    const { address, ...rest } = customer;
+    const { address: _address, ...rest } = customer; // eslint-disable-line no-unused-vars
     return rest;
   }
   return customer;

@@ -3,6 +3,7 @@ const queries = require("./installments.queries");
 const paymentsQueries = require("../payments/payments.queries");
 const paymentsService = require("../payments/payments.service");
 const { getValue } = require("../systemConfig/systemConfig.queries");
+const { getGraceDays } = require("../systemConfig/graceDays");
 const { localDate } = require("../../utils/date");
 
 /**
@@ -77,7 +78,7 @@ const waivePenalty = async (id) => {
     };
   if (parseFloat(inst.penalty_amount) === 0)
     throw { status: 409, message: "Esta cuota no tiene mora aplicada." };
-  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+  const graceDays = await getGraceDays();
   return queries.waivePenalty(id, graceDays);
 };
 

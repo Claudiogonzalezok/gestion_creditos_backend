@@ -6,6 +6,7 @@ const prQueries = require("../productRates/productRates.queries");
 const puQueries = require("../productUnits/productUnits.queries");
 const usersQueries = require("../users/users.queries");
 const { getValue } = require("../systemConfig/systemConfig.queries");
+const { getGraceDays } = require("../systemConfig/graceDays");
 const { withTransaction } = require("../../utils/transaction");
 const { localDate } = require("../../utils/date");
 const businessDaysService = require("../businessDays/businessDays.service");
@@ -1321,7 +1322,7 @@ const reject = async (id, rejectionReason, adminId) => {
          WHERE id = $1 AND status = 'REFINANCED'`,
         [credit.refinanced_from_credit_id, rejectedNote],
       );
-      const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+      const graceDays = await getGraceDays();
       await client.query(
         `UPDATE installments
          SET status = CASE
@@ -1899,7 +1900,7 @@ const changePlan = async (
   { reason, excess_disposition } = {},
   adminId,
 ) => {
-  const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
+  const graceDays = await getGraceDays();
 
   return withTransaction(async (client) => {
     const credit = await queries.lockCredit(client, creditId);
