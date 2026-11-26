@@ -1526,6 +1526,33 @@ const swaggerSpec = {
     },
 
     // ════════════════════════════════════════════════════════════
+    // EMPRESA (#88)
+    // ════════════════════════════════════════════════════════════
+    '/company': {
+      get: { tags: ['Company'], summary: 'Datos y tasas de la empresa (ADMIN)', security: [{ internalAuth: [] }], responses: { 200: { description: '{ company: { system_name, contact_email, phone, address, updated_at, updated_by }, rates: { sale_rate_monthly, loan_rate_monthly, mora_rate_daily, seller_commission_rate, grace_period_days } }' }, 403: { description: 'Solo ADMIN' } } },
+      put: {
+        tags: ['Company'], summary: 'Actualizar datos de la empresa (parcial, ADMIN)', security: [{ internalAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+          system_name: { type: 'string', maxLength: 150 }, contact_email: { type: 'string', format: 'email', nullable: true },
+          phone: { type: 'string', maxLength: 30, nullable: true }, address: { type: 'string', maxLength: 255, nullable: true },
+        } } } } },
+        responses: { 200: { description: 'Datos actualizados' }, 400: { description: 'Validación' }, 403: { description: 'Solo ADMIN' } },
+      },
+    },
+
+    '/company/rates': {
+      put: {
+        tags: ['Company'], summary: 'Actualizar tasas de la empresa (parcial y atómico, ADMIN)', security: [{ internalAuth: [] }],
+        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+          sale_rate_monthly: { type: 'number', minimum: 0, maximum: 1 }, loan_rate_monthly: { type: 'number', minimum: 0, maximum: 1 },
+          mora_rate_daily: { type: 'number', minimum: 0, maximum: 0.5 }, seller_commission_rate: { type: 'number', minimum: 0, maximum: 1 },
+          grace_period_days: { type: 'integer', minimum: 0, maximum: 30 },
+        } } } } },
+        responses: { 200: { description: 'Tasas actualizadas' }, 400: { description: 'Validación (no se guarda ninguna)' }, 403: { description: 'Solo ADMIN' } },
+      },
+    },
+
+    // ════════════════════════════════════════════════════════════
     // PORTAL PÚBLICO
     // ════════════════════════════════════════════════════════════
     '/portal/me': {

@@ -149,6 +149,7 @@ app.use(
   "/api/system-config",
   require("./modules/systemConfig/systemConfig.routes"),
 );
+app.use("/api/company", require("./modules/company/company.routes"));
 app.use("/api/holidays", require("./modules/holidays/holidays.routes"));
 app.use(
   "/api/interest-rates",
