@@ -1,4 +1,5 @@
 const { localDate } = require("./date");
+const { toCents, fromCents, splitMoney } = require("./money");
 
 /**
  * Convierte un input de fecha YYYY-MM-DD a Date local sin sesgo UTC.
@@ -195,7 +196,39 @@ const getProductInstallmentContribution = (
   installmentsCount,
 ) => getInstallmentAmount(lineTotal, rate, installmentsCount);
 
+/**
+ * Reparte capital, interés y saldo estimado de un cronograma en centavos enteros.
+ * La suma del capital de todas las cuotas es exactamente el capital financiado
+ * (la última cuota absorbe el resto de la división) y capital + interés = cuota.
+ * @param {object} params
+ * @param {number|string} params.financedAmount - Capital financiado.
+ * @param {number|string} params.installmentAmount - Monto de cada cuota.
+ * @param {number} params.installmentsCount - Cantidad de cuotas.
+ * @param {number|string} params.totalToReturn - Total a devolver.
+ * @returns {Array<{amount:number, capital:number, interest:number, remaining_estimated:number}>}
+ */
+const buildScheduleAmounts = ({
+  financedAmount,
+  installmentAmount,
+  installmentsCount,
+  totalToReturn,
+}) => {
+  const capitals = splitMoney(financedAmount, installmentsCount);
+  const amountCents = toCents(installmentAmount);
+  let remainingCents = toCents(totalToReturn);
+  return capitals.map((capital) => {
+    remainingCents = Math.max(0, remainingCents - amountCents);
+    return {
+      amount: fromCents(amountCents),
+      capital,
+      interest: fromCents(amountCents - toCents(capital)),
+      remaining_estimated: fromCents(remainingCents),
+    };
+  });
+};
+
 module.exports = {
+  buildScheduleAmounts,
   getInstallmentAmount,
   getTotalWithInterest,
   getTotalToReturn,

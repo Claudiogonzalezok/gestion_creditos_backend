@@ -1,4 +1,5 @@
 const {
+  buildScheduleAmounts,
   addFrequencyPeriods,
   adjustDueDatesWithBusinessDayRule,
   getDueDates,
@@ -105,4 +106,32 @@ describe("creditCalculator", () => {
     expect(getTotalToReturn(100000, 0.1, 5)).toBe(110000);
     expect(getProductInstallmentContribution(100000, 0.1, 5)).toBe(22000);
   });
+});
+
+describe("buildScheduleAmounts (P32 #39)", () => {
+  const cents = (n) => Math.round(n * 100);
+
+  it.each([
+    [1000, 3, 1000],
+    [1000.05, 2, 1000],
+    [0.3, 3, 1000],
+    [100000, 7, 20000],
+  ])(
+    "capital %p en %p cuotas suma exactamente el financiado",
+    (financed, count, installment) => {
+      const rows = buildScheduleAmounts({
+        financedAmount: financed,
+        installmentAmount: installment,
+        installmentsCount: count,
+        totalToReturn: installment * count,
+      });
+      expect(rows).toHaveLength(count);
+      const capitalCents = rows.reduce((a, r) => a + cents(r.capital), 0);
+      expect(capitalCents).toBe(cents(financed));
+      rows.forEach((r) =>
+        expect(cents(r.capital) + cents(r.interest)).toBe(cents(r.amount)),
+      );
+      expect(rows[count - 1].remaining_estimated).toBe(0);
+    },
+  );
 });

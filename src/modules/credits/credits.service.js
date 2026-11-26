@@ -20,7 +20,9 @@ const {
   adjustDueDatesWithBusinessDayRule,
   getWeekBounds,
   getProductInstallmentContribution,
+  buildScheduleAmounts,
 } = require("../../utils/creditCalculator");
+const { round2, toCents, fromCents, splitMoney } = require("../../utils/money");
 const {
   moveToNextBusinessDay,
   getActiveHolidayKeysInRange,
@@ -28,7 +30,6 @@ const {
 
 const { getActiveJornadaDate } = businessDaysService;
 
-const round2 = (n) => Math.round(n * 100) / 100;
 const hasValue = (v) =>
   v !== undefined && v !== null && String(v).trim() !== "";
 
@@ -114,7 +115,7 @@ const resolveStoredSplitForFinalAmount = ({
 const getFinancedAmount = (totalAmount, downPayment = 0) => {
   const total = parseFloat(totalAmount || 0);
   const down = parseFloat(downPayment || 0);
-  return Math.round((total - down) * 100) / 100;
+  return round2(total - down);
 };
 
 /**
@@ -187,24 +188,19 @@ const buildSimulationSchedule = async ({
     baseDueDates,
     paymentFrequency,
   );
-  const rawCapital = financedAmount / count;
-  let remaining = totalToReturn;
-
-  return dueDates.map((dueDate, index) => {
-    const amount = installmentAmount;
-    const capital = Math.round(rawCapital * 100) / 100;
-    const interest = Math.max(0, Math.round((amount - capital) * 100) / 100);
-    remaining = Math.max(0, Math.round((remaining - amount) * 100) / 100);
-
-    return {
-      installment_number: index + 1,
-      due_date: toApiDate(dueDate),
-      amount,
-      capital,
-      interest,
-      remaining_estimated: remaining,
-    };
+  // Montos en centavos: la suma del capital es exactamente el financiado.
+  const amounts = buildScheduleAmounts({
+    financedAmount,
+    installmentAmount,
+    installmentsCount: count,
+    totalToReturn,
   });
+
+  return dueDates.map((dueDate, index) => ({
+    installment_number: index + 1,
+    due_date: toApiDate(dueDate),
+    ...amounts[index],
+  }));
 };
 
 /**
@@ -231,35 +227,37 @@ const buildSaleSimulationSchedule = async ({
     paymentFrequency,
   );
 
-  const rows = dueDates.map((dueDate, index) => {
-    let amount = 0;
-    let capital = 0;
-    let interest = 0;
+  // Capital de cada línea repartido en centavos: su suma es exactamente el
+  // capital financiado de la línea (la última cuota absorbe el resto).
+  const groupCapitals = groups.map((group) =>
+    splitMoney(group.financed_line_total, group.installments_count).map(
+      toCents,
+    ),
+  );
 
-    for (const group of groups) {
-      if (index >= group.installments_count) continue;
-      const groupCapital = group.financed_line_total / group.installments_count;
-      const groupInterest = Math.max(
-        0,
-        group.installment_contribution - groupCapital,
-      );
-      amount += group.installment_contribution;
-      capital += groupCapital;
-      interest += groupInterest;
-    }
+  const rows = dueDates.map((dueDate, index) => {
+    let amountCents = 0;
+    let capitalCents = 0;
+
+    groups.forEach((group, groupIndex) => {
+      if (index >= group.installments_count) return;
+      amountCents += toCents(group.installment_contribution);
+      capitalCents += groupCapitals[groupIndex][index];
+    });
 
     return {
       installment_number: index + 1,
       due_date: toApiDate(dueDate),
-      amount: Math.round(amount * 100) / 100,
-      capital: Math.round(capital * 100) / 100,
-      interest: Math.round(interest * 100) / 100,
+      amount: fromCents(amountCents),
+      capital: fromCents(capitalCents),
+      interest: fromCents(amountCents - capitalCents),
     };
   });
 
-  let remaining = rows.reduce((acc, row) => acc + row.amount, 0);
+  let remainingCents = rows.reduce((acc, row) => acc + toCents(row.amount), 0);
   return rows.map((row) => {
-    remaining = Math.max(0, Math.round((remaining - row.amount) * 100) / 100);
+    remainingCents = Math.max(0, remainingCents - toCents(row.amount));
+    const remaining = fromCents(remainingCents);
     return {
       ...row,
       remaining_estimated: remaining,
@@ -676,14 +674,14 @@ const simulate = async ({
       total_to_return: totalToReturn,
       interest_amount: Math.max(
         0,
-        Math.round((totalToReturn - amount) * 100) / 100,
+        round2(totalToReturn - amount),
       ),
       summary: {
         financed_amount: amount,
         down_payment: 0,
         interest_amount: Math.max(
           0,
-          Math.round((totalToReturn - amount) * 100) / 100,
+          round2(totalToReturn - amount),
         ),
       },
       schedule: await buildSimulationSchedule({
@@ -775,7 +773,7 @@ const simulate = async ({
 
   for (const g of groups) {
     const netLine = g.line_total * capitalRatio;
-    g.financed_line_total = Math.round(netLine * 100) / 100;
+    g.financed_line_total = round2(netLine);
     g.installment_contribution = getProductInstallmentContribution(
       netLine,
       g.rate,
@@ -788,7 +786,7 @@ const simulate = async ({
     parseInt(installments_count || 0),
     ...groups.map((group) => parseInt(group.installments_count || 0)),
   );
-  const financedAmountRounded = Math.round(financedAmount * 100) / 100;
+  const financedAmountRounded = round2(financedAmount);
   const schedule = await buildSaleSimulationSchedule({
     groups,
     installmentsCount: totalInstallmentsCount,
@@ -796,18 +794,18 @@ const simulate = async ({
     firstPaymentDate: first_payment_date,
   });
   const scheduledTotal =
-    Math.round(schedule.reduce((acc, row) => acc + row.amount, 0) * 100) / 100;
-  const totalToReturn = Math.round((scheduledTotal + downPayment) * 100) / 100;
+    fromCents(schedule.reduce((acc, row) => acc + toCents(row.amount), 0));
+  const totalToReturn = round2(scheduledTotal + downPayment);
   const interestAmount = Math.max(
     0,
-    Math.round((totalToReturn - totalBase) * 100) / 100,
+    round2(totalToReturn - totalBase),
   );
 
   const result = {
     type,
     payment_frequency,
     installments_count: totalInstallmentsCount,
-    total_amount: Math.round(totalBase * 100) / 100,
+    total_amount: round2(totalBase),
     installment_amount: totalInstallment,
     total_to_return: totalToReturn,
     interest_amount: interestAmount,
@@ -823,7 +821,7 @@ const simulate = async ({
 
   if (downPayment > 0) {
     result.down_payment = downPayment;
-    result.financed_amount = Math.round(financedAmount * 100) / 100;
+    result.financed_amount = round2(financedAmount);
   }
 
   return result;
@@ -1378,12 +1376,13 @@ const earlySettlement = async (id, paymentData, adminId) => {
     };
 
   const settlementAmount =
-    Math.round(
+    fromCents(
       pendingInstallments.reduce(
-        (sum, inst) => sum + inst.amount_due - inst.amount_paid,
+        (sum, inst) =>
+          sum + toCents(inst.amount_due) - toCents(inst.amount_paid),
         0,
-      ) * 100,
-    ) / 100;
+      ),
+    );
   const normalizedPayment = paymentsService._normalizePaymentAmounts({
     ...paymentData,
     amount_received:
@@ -1409,7 +1408,7 @@ const earlySettlement = async (id, paymentData, adminId) => {
     for (let i = 0; i < pendingInstallments.length; i++) {
       const inst = pendingInstallments[i];
       const instAmount =
-        Math.round((inst.amount_due - inst.amount_paid) * 100) / 100;
+        round2(inst.amount_due - inst.amount_paid);
       const instCash =
         i === pendingInstallments.length - 1
           ? round2(remainingCash)
@@ -1584,12 +1583,12 @@ const refinance = async (creditId, data, adminId) => {
       };
 
     const pendingBalance =
-      Math.round(
+      fromCents(
         pendingInstallments.reduce(
-          (sum, i) => sum + (i.amount_due - i.amount_paid),
+          (sum, i) => sum + (toCents(i.amount_due) - toCents(i.amount_paid)),
           0,
-        ) * 100,
-      ) / 100;
+        ),
+      );
 
     // ── 3. Validación de pagos PENDING (cobros sin confirmar) ────────────────
     const hasPending = await queries.hasPendingPayments(client, creditId);
@@ -1602,14 +1601,14 @@ const refinance = async (creditId, data, adminId) => {
 
     // ── 4. Calcular monto total trasladado ───────────────────────────────────
     const extraCharges =
-      Math.round(parseFloat(data.extra_charges || 0) * 100) / 100;
+      round2(parseFloat(data.extra_charges || 0));
     if (extraCharges < 0)
       throw {
         status: 400,
         message: "Los cargos adicionales no pueden ser negativos.",
       };
     const totalTransferred =
-      Math.round((pendingBalance + extraCharges) * 100) / 100;
+      round2(pendingBalance + extraCharges);
 
     // ── 5. Crear nuevo crédito LOAN en PENDING_APPROVAL ──────────────────────
     const newCredit = await queries.createRefinancing(client, {
@@ -1713,7 +1712,6 @@ const _resolvePlanChange = async (credit, rawInstallments, db = pool) => {
         "El cambio de plan requiere un plan más corto que el actual; este crédito no es elegible.",
     };
 
-  const round2 = (n) => Math.round(n * 100) / 100;
   const capital = getFinancedAmount(credit.total_amount, credit.down_payment);
   const totalPaid = round2(
     installments.reduce((sum, i) => sum + parseFloat(i.amount_paid), 0),
@@ -2048,13 +2046,12 @@ const writeOffCredit = async (
 
     // Saldo que se deja de cobrar (snapshot para auditoría / cartera castigada).
     const writtenOffBalance =
-      Math.round(
+      fromCents(
         openInstallments.reduce(
-          (sum, i) =>
-            sum + (parseFloat(i.amount_due) - parseFloat(i.amount_paid)),
+          (sum, i) => sum + (toCents(i.amount_due) - toCents(i.amount_paid)),
           0,
-        ) * 100,
-      ) / 100;
+        ),
+      );
 
     await queries.writeOffInstallments(client, creditId);
     await queries.writeOffCredit(client, creditId);
