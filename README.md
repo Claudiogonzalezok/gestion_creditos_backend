@@ -263,6 +263,7 @@ ALLOWED_ORIGINS=http://localhost:4200
 BCRYPT_SALT_ROUNDS=10
 
 DISABLE_LOGIN_RATE_LIMIT=false   # Poner true en entorno e2e
+TRUST_PROXY=loopback             # Proxies confiables para la IP real del cliente (default loopback: nginx en el mismo host)
 ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 ```
 
@@ -815,7 +816,8 @@ sin registrarse en `cron_execution_log`. Si no hay conexión para tomar el lock,
   - No-ADMIN: bloqueo permanente (`locked_at`) hasta que un Admin lo desbloquee. Al bloquearse se cierran sus sesiones.
   - ADMIN: bloqueo **temporal** (`users.locked_until`, migración 052) de `system_config.admin_lock_minutes` minutos (default 15). Nunca se bloquea de forma permanente. Vencido el bloqueo, el conteo reinicia.
   - Portal: el login responde siempre el mismo mensaje genérico si el DNI no existe, el portal no está habilitado, la cuenta está inactiva o la contraseña es incorrecta. El bloqueo solo se informa con la contraseña correcta.
-- **Rate limit:** `express-rate-limit` en los endpoints de login. Desactivable con `DISABLE_LOGIN_RATE_LIMIT=true` para entornos e2e.
+- **Rate limit:** `express-rate-limit` en los endpoints de login. Desactivable con `DISABLE_LOGIN_RATE_LIMIT=true` para entornos e2e. El mensaje 429 indica los minutos que faltan para que venza la ventana real (`LOGIN_RATE_LIMIT_WINDOW_MS`).
+- **IP real del cliente (`TRUST_PROXY`):** `app.set('trust proxy', ...)` cuenta el rate limit por la IP de `X-Forwarded-For` solo si la conexión viene de un proxy confiable. Default `loopback`: producción tiene nginx en el mismo host proxyando a `127.0.0.1:3001` (un salto). Valores: `true`/`false`, un número de saltos (`1`) o una lista de subredes (`loopback, 10.0.0.0/8`). No usar `true` a ciegas: permitiría falsificar la IP con el header.
 - **Contraseña temporal:** `is_temp_password = true` bloquea todos los endpoints salvo `/me/change-password`.
 - **Cierre de sesiones del lado del servidor:** cambiar el rol, resetear la contraseña, desactivar o bloquear a un usuario fija `force_relogin_at` y revoca todos sus refresh tokens en la misma transacción. El middleware rechaza los access tokens emitidos antes (y los de usuarios bloqueados); `/refresh` rechaza usuarios bloqueados.
 - **Rotación atómica del refresh token:** el token usado se revoca con `UPDATE ... WHERE revoked = FALSE RETURNING`. Si dos pestañas refrescan a la vez con la misma cookie, solo una obtiene token nuevo; la otra recibe `401 REFRESH_TOKEN_ROTATED`.

@@ -6,6 +6,10 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const rateLimit = require("express-rate-limit");
 const cookieParser = require("cookie-parser");
+const {
+  parseTrustProxy,
+  rateLimitMessage,
+} = require("./middlewares/rateLimit.helpers");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./config/swagger");
 const {
@@ -18,6 +22,12 @@ const {
 validateSecureConfig();
 
 const app = express();
+
+// ── Proxy inverso ─────────────────────────────────────────────
+// Detrás de Nginx la IP real del cliente llega en X-Forwarded-For; sin esto el
+// rate limit cuenta a todos como uno solo (#35). Default loopback: nginx en el
+// mismo host. Formatos de TRUST_PROXY en rateLimit.helpers.parseTrustProxy.
+app.set("trust proxy", parseTrustProxy(process.env.TRUST_PROXY));
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:4200")
   .split(",")
@@ -39,16 +49,6 @@ const envFlag = (value) => {
     normalized === "on"
   );
 };
-
-// ── Proxy inverso ─────────────────────────────────────────────
-// Detrás de Nginx la IP real del cliente llega en X-Forwarded-For. Sin esto,
-// req.ip es siempre la del proxy y el rate limit cuenta a todos los usuarios
-// como uno solo. TRUST_PROXY = cantidad de proxies delante (ej. 1); sin definir
-// no se confía en ningún encabezado (desarrollo local).
-if (process.env.TRUST_PROXY) {
-  const hops = parseInt(process.env.TRUST_PROXY, 10);
-  app.set("trust proxy", Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
-}
 
 // ── Documentación API ─────────────────────────────────────────
 // Solo fuera de producción (#34). CSP permisiva solo para esta ruta
@@ -108,11 +108,7 @@ if (!disableLoginRateLimit) {
     max: parseInt(process.env.LOGIN_RATE_LIMIT_MAX || "20", 10),
     standardHeaders: true,
     legacyHeaders: false,
-    message: {
-      ok: false,
-      message:
-        "Demasiados intentos de acceso. Intentá nuevamente en 15 minutos.",
-    },
+    message: rateLimitMessage("Demasiados intentos de acceso."),
   });
   app.use("/api/auth/login", loginLimiter);
   app.use("/api/auth/portal/login", loginLimiter);
@@ -127,11 +123,7 @@ const refreshLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  message: {
-    ok: false,
-    message:
-      "Demasiadas solicitudes de renovación de sesión. Intentá nuevamente en 15 minutos.",
-  },
+  message: rateLimitMessage("Demasiadas solicitudes de renovación de sesión."),
 });
 app.use("/api/auth/refresh", refreshLimiter);
 app.use("/api/auth/portal/refresh", refreshLimiter);
