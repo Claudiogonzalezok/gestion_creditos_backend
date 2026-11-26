@@ -1338,7 +1338,50 @@ const reject = async (id, rejectionReason, adminId) => {
   });
 };
 
-const earlySettlement = async (id, paymentData, adminId) => {
+/**
+ * Cancelación anticipada con idempotencia opcional por `client_request_id`
+ * (#73): reutiliza el mecanismo de P08 (la clave va en el primer payment
+ * creado; índice UNIQUE (collector_id, client_request_id)). Un reintento con
+ * la misma clave devuelve el resultado original con `idempotent_replay: true`.
+ * @param {string} id - Crédito a cancelar.
+ * @param {object} paymentData - Body validado.
+ * @param {string} adminId - Admin que registra.
+ * @returns {Promise<object>} Resumen de la cancelación.
+ */
+const earlySettlement = async (id, paymentData, adminId) =>
+  paymentsService._runIdempotentAdminOperation(
+    adminId,
+    paymentData.client_request_id || null,
+    async (existing) => {
+      const rows = await queries.findEarlySettlementPaymentsByAnchor(
+        id,
+        existing.id,
+      );
+      if (!rows.length) throw paymentsService._idempotencyKeyReused();
+      const sum = (field) =>
+        fromCents(rows.reduce((acc, r) => acc + toCents(r[field]), 0));
+      return {
+        credit_id: id,
+        settlement_amount: sum("amount_received"),
+        payment_method: rows[0].payment_method,
+        amount_cash: sum("amount_cash"),
+        amount_transfer: sum("amount_transfer"),
+        payment_ids: rows.map((r) => r.id),
+        message:
+          "Cancelación anticipada creada. Los pagos están pendientes de aprobación.",
+        idempotent_replay: true,
+      };
+    },
+    () => _earlySettlementOnce(id, paymentData, adminId),
+  );
+
+/**
+ * Cuerpo de la cancelación anticipada sin la capa de idempotencia.
+ * Sin lock propio: dos requests concurrentes con la misma clave se serializan
+ * en el INSERT del primer payment (índice UNIQUE) y la segunda resulta replay.
+ * @returns {Promise<object>} Resumen de la cancelación creada.
+ */
+const _earlySettlementOnce = async (id, paymentData, adminId) => {
   const credit = await queries.findById(id);
   if (!credit) throw { status: 404, message: "Crédito no encontrado." };
   if (credit.status !== "ACTIVE")
@@ -1408,8 +1451,8 @@ const earlySettlement = async (id, paymentData, adminId) => {
       const paymentResult = await client.query(
         `INSERT INTO payments
            (installment_id, collector_id, amount_received, amount_cash, amount_transfer, payment_method, transfer_reference,
-             status, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', 'Cancelación anticipada')
+             status, notes, client_request_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', 'Cancelación anticipada', $8)
           RETURNING id`,
         [
           inst.id,
@@ -1419,6 +1462,8 @@ const earlySettlement = async (id, paymentData, adminId) => {
           instTransfer,
           normalizedPayment.paymentMethod,
           paymentData.transfer_reference || null,
+          // #73: la clave va solo en el primer payment (ancla del replay).
+          i === 0 ? paymentData.client_request_id || null : null,
         ],
       );
       paymentIds.push(paymentResult.rows[0].id);

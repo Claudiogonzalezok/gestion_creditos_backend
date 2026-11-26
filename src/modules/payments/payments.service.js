@@ -963,6 +963,105 @@ const getByCredit = async (creditId, requestingUser) => {
   return queries.findPaymentsByCredit(creditId);
 };
 
+/** Error 409 estándar cuando una clave de idempotencia se reusa para otra operación. */
+const _idempotencyKeyReused = () => ({
+  status: 409,
+  code: "IDEMPOTENCY_KEY_REUSED",
+  message:
+    "El client_request_id ya se usó para otra operación. Generá una clave nueva para cada operación distinta.",
+});
+
+/**
+ * Indica si el error es la violación del índice UNIQUE parcial
+ * (collector_id, client_request_id) de payments (P08, migración 049).
+ * @param {object} err - Error de pg.
+ * @returns {boolean}
+ */
+const _isClientRequestIdConflict = (err) =>
+  !!err &&
+  err.code === "23505" &&
+  err.constraint === "ux_payments_collector_client_request";
+
+/**
+ * Ejecuta una operación admin con idempotencia opcional por `client_request_id`,
+ * reutilizando el mecanismo de P08 (columna payments.client_request_id + índice
+ * UNIQUE parcial por (collector_id, client_request_id)). Issue #73.
+ *   · Sin clave: ejecuta la operación tal cual (comportamiento anterior).
+ *   · Con clave ya usada: devuelve `resolve(existing)` sin volver a validar
+ *     (un reintento posterior al éxito chocaría con las guardas de negocio).
+ *   · Dentro de la transacción, `run` puede llamar `recheck(client)` tras tomar
+ *     sus locks para ver una request concurrente ya confirmada.
+ *   · Carrera no serializada por locks: el INSERT del segundo choca con el
+ *     índice UNIQUE → se resuelve como replay.
+ * @param {string} adminId - Usuario que registra (collector_id del payment).
+ * @param {string|null} clientRequestId - Clave de idempotencia o null.
+ * @param {Function} resolve - async (paymentConClave) => resultado del replay; lanza 409 si no coincide.
+ * @param {Function} run - async (recheck) => resultado de la operación original.
+ * @returns {Promise<object>}
+ */
+const _runIdempotentAdminOperation = async (
+  adminId,
+  clientRequestId,
+  resolve,
+  run,
+) => {
+  if (!clientRequestId) return run(async () => null);
+  const find = (db) =>
+    queries.findByClientRequestId(adminId, clientRequestId, db);
+  const existing = await find();
+  if (existing) return resolve(existing);
+  try {
+    return await run(find);
+  } catch (err) {
+    if (_isClientRequestIdConflict(err)) {
+      const winner = await find();
+      if (winner) return resolve(winner);
+    }
+    throw err;
+  }
+};
+
+/**
+ * Valida que el payment asociado a la clave corresponda a un cobro directo
+ * admin sobre la cuota (y el monto, si se indica) pedidos.
+ * @param {object} existing - Payment con la clave (forma findByClientRequestId).
+ * @param {object} expected - { installmentId, generationType, amountReceived|null }.
+ * @returns {Promise<object>} Payment (forma findById) con `idempotent_replay: true`.
+ */
+const _resolveAdminDirectReplay = async (existing, expected) => {
+  const full = await queries.findById(existing.id);
+  const matches =
+    full &&
+    full.admin_direct === true &&
+    existing.generation_type === expected.generationType &&
+    String(existing.installment_id).toLowerCase() ===
+      String(expected.installmentId).toLowerCase() &&
+    (expected.amountReceived == null ||
+      _round2(existing.amount_received) === _round2(expected.amountReceived));
+  if (!matches) throw _idempotencyKeyReused();
+  return { ...full, idempotent_replay: true };
+};
+
+/**
+ * Registra y aprueba un cobro directo (flujo admin) con idempotencia opcional
+ * por `client_request_id` (#73).
+ * @param {object} data - Body validado.
+ * @param {string} adminId - Admin que registra.
+ * @returns {Promise<object>} Payment creado, o el existente con `idempotent_replay`.
+ */
+const adminDirect = async (data, adminId) =>
+  _runIdempotentAdminOperation(
+    adminId,
+    data.client_request_id || null,
+    (existing) =>
+      _resolveAdminDirectReplay(existing, {
+        installmentId: data.installment_id,
+        generationType: "COLLECTION",
+        amountReceived: _normalizePaymentAmounts(data).amountReceived,
+      }),
+    (recheck) => _adminDirectOnce(data, adminId, recheck),
+  );
+
 /**
  * Registra y aprueba un cobro directo sin pre-carga (flujo admin).
  * Valida caja abierta, crea el payment como APPROVED y distribuye el monto.
@@ -974,9 +1073,10 @@ const getByCredit = async (creditId, requestingUser) => {
  * @param {string} [data.transfer_reference]
  * @param {string} [data.notes]
  * @param {string} adminId
- * @returns {Promise<object>} Payment creado y aprobado.
+ * @param {Function} recheck - async (client) => payment con la clave o null (#73).
+ * @returns {Promise<object>} Payment creado y aprobado (o el existente en un replay).
  */
-const adminDirect = async (data, adminId) => {
+const _adminDirectOnce = async (data, adminId, recheck) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
 
@@ -1025,6 +1125,7 @@ const adminDirect = async (data, adminId) => {
     };
 
   let newPaymentId;
+  let replayOf = null;
   await withTransaction(async (client) => {
     // V4.3: imputar a la caja activa de la jornada (no al admin).
     const activeSession =
@@ -1036,6 +1137,11 @@ const adminDirect = async (data, adminId) => {
           "No hay caja operativa abierta. Abrí una caja para registrar un cobro directo.",
         code: "NO_ACTIVE_SESSION",
       };
+
+    // #73: bajo el lock de caja, una request concurrente con la misma clave
+    // ya confirmada se ve acá → replay sin efectos.
+    replayOf = await recheck(client);
+    if (replayOf) return;
 
     // Lock sobre la cuota principal
     const lockedInst = await queries.lockAndGetInstallment(
@@ -1056,6 +1162,7 @@ const adminDirect = async (data, adminId) => {
       transferReference: data.transfer_reference,
       notes: data.notes,
       cashSessionId: activeSession.id,
+      clientRequestId: data.client_request_id,
     });
     newPaymentId = created.id;
 
@@ -1096,6 +1203,12 @@ const adminDirect = async (data, adminId) => {
     await _checkAndSettleCredit(client, lockedInst.credit_id);
   });
 
+  if (replayOf)
+    return _resolveAdminDirectReplay(replayOf, {
+      installmentId: data.installment_id,
+      generationType: "COLLECTION",
+      amountReceived,
+    });
   return queries.findById(newPaymentId);
 };
 
@@ -1109,9 +1222,33 @@ const adminDirect = async (data, adminId) => {
  * @param {string} creditId - Préstamo a renovar.
  * @param {object} data - Medio de pago del interés (payment_method + split mixto).
  * @param {string} adminId - Admin que registra la renovación.
- * @returns {Promise<object>} El pago de renovación creado.
+ * Idempotencia opcional por `client_request_id` (#73).
+ * @returns {Promise<object>} El pago de renovación creado (o el existente con `idempotent_replay`).
  */
 const renew = async (creditId, data, adminId) => {
+  // El replay valida que la clave sea de una renovación de ESTE préstamo.
+  const resolveReplay = async (existing) => {
+    const loan = await queries.getRenewableLoan(creditId);
+    if (!loan) throw _idempotencyKeyReused();
+    return _resolveAdminDirectReplay(existing, {
+      installmentId: loan.installment_id,
+      generationType: "RENEWAL",
+      amountReceived: null, // el monto lo fija el server (interés + mora).
+    });
+  };
+  return _runIdempotentAdminOperation(
+    adminId,
+    data.client_request_id || null,
+    resolveReplay,
+    (recheck) => _renewOnce(creditId, data, adminId, recheck, resolveReplay),
+  );
+};
+
+/**
+ * Cuerpo de renew sin la capa de idempotencia.
+ * @returns {Promise<object>} Pago de renovación creado o el existente en un replay.
+ */
+const _renewOnce = async (creditId, data, adminId, recheck, resolveReplay) => {
   const jornadaDate = await getActiveJornadaDate();
   await _validateCajaOpen(jornadaDate);
   const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
@@ -1154,6 +1291,7 @@ const renew = async (creditId, data, adminId) => {
     };
 
   let newPaymentId;
+  let replayOf = null;
   await withTransaction(async (client) => {
     const activeSession =
       await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
@@ -1164,6 +1302,10 @@ const renew = async (creditId, data, adminId) => {
           "No hay caja operativa abierta. Abrí una caja para registrar la renovación.",
         code: "NO_ACTIVE_SESSION",
       };
+
+    // #73: request concurrente con la misma clave ya confirmada → replay.
+    replayOf = await recheck(client);
+    if (replayOf) return;
 
     const lockedInst = await queries.lockAndGetInstallment(
       client,
@@ -1187,6 +1329,7 @@ const renew = async (creditId, data, adminId) => {
       notes: "Pago por renovación",
       cashSessionId: activeSession.id,
       generationType: "RENEWAL",
+      clientRequestId: data.client_request_id,
     });
     newPaymentId = created.id;
 
@@ -1211,6 +1354,7 @@ const renew = async (creditId, data, adminId) => {
     });
   });
 
+  if (replayOf) return resolveReplay(replayOf);
   return queries.findById(newPaymentId);
 };
 
@@ -1532,6 +1676,8 @@ module.exports = {
   reject,
   getByCredit,
   adminDirect,
+  _runIdempotentAdminOperation,
+  _idempotencyKeyReused,
   renew,
   renewalQuote,
   reverse,

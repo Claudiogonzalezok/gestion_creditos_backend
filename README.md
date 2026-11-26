@@ -600,6 +600,20 @@ El endpoint `approve` detecta automáticamente si `amount_received` supera el sa
 
 Además, la creación corre en una transacción que bloquea la cuota y el crédito (`SELECT ... FOR UPDATE`) antes de recalcular el saldo disponible: dos pre-cargas concurrentes que juntas superan el saldo dejan pasar una sola; la otra recibe `409`/`422`. No se bloquea la caja (el cobrador no opera caja).
 
+#### Idempotencia en operaciones admin (#73)
+
+`POST /api/payments/admin-direct`, `POST /api/credits/:id/renew` y `PATCH /api/credits/:id/early-settlement` aceptan el mismo `client_request_id` opcional, con el mismo mecanismo (columna e índice UNIQUE de la migración 049, alcance por admin):
+
+| Caso | Respuesta |
+|---|---|
+| Primera request | Igual que antes (`201` en admin-direct y renovación, `200` en cancelación anticipada). |
+| Reintento con la misma clave sobre la misma operación | `200` con el resultado original e `idempotent_replay: true`. No repite el cobro, la renovación ni los pagos de cancelación, aunque la cuota ya esté saldada. |
+| Requests concurrentes con la misma clave | Un solo efecto; la otra recibe el replay. |
+| Misma clave usada en otra operación (otra cuota, otro monto, otro crédito u otro endpoint) | `409` con `code: "IDEMPOTENCY_KEY_REUSED"`. |
+| Sin `client_request_id` | Comportamiento anterior. |
+
+En la cancelación anticipada la clave se guarda en el primer pago creado; el replay reconstruye `payment_ids` y montos desde esos pagos.
+
 ### Planillas
 
 ```
