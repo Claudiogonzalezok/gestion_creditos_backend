@@ -89,6 +89,8 @@ describe("simulatePlanChange — cálculo (caso del negocio 6→3)", () => {
       survivingInstallmentId: "i3",
       cancelledInstallments: [4, 5, 6],
       creditWillBeSettled: false,
+      excessAmount: 0,
+      requiresExcessDisposition: false,
     });
   });
 });
@@ -184,7 +186,10 @@ describe("simulatePlanChange — saldo ≤ 0 cancela el crédito", () => {
     expect(r.newBalance).toBe(0);
     expect(r.survivingInstallmentId).toBeNull();
     expect(r.creditWillBeSettled).toBe(true);
-    expect(r.cancelledInstallments).toEqual([12]);
+    // Igual que la ejecución: al cancelarse el crédito también se anula la
+    // sobreviviente (#45: simulación y ejecución coinciden).
+    expect(r.cancelledInstallments).toEqual([11, 12]);
+    expect(r.excessAmount).toBe(0);
   });
 });
 
@@ -263,7 +268,7 @@ describe("changePlan — ejecución (Etapa 2)", () => {
 
     await service.changePlan("credit-1", {}, "admin-1");
 
-    expect(queries.settleCreditByPlanChange).toHaveBeenCalledWith(client, "credit-1");
+    expect(queries.settleCreditByPlanChange).toHaveBeenCalledWith(client, "credit-1", 0);
     expect(queries.cancelInstallmentsForPlanChange).toHaveBeenCalledWith(client, [
       "i11",
       "i12",

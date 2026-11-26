@@ -213,7 +213,16 @@ const findProductsWithActiveRates = async ({
   return r.rows;
 };
 
+/**
+ * Invalida la caché de tasas de producto. Debe llamarse cuando cambia un dato
+ * denormalizado en la caché (por ejemplo, el título del producto al renombrarlo).
+ */
+const invalidateCache = () => {
+  cache.invalidateByPrefix(CACHE_PREFIX);
+};
+
 module.exports = {
+  invalidateCache,
   findAll,
   findById,
   findExact,

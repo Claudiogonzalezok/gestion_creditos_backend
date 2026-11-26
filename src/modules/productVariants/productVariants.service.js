@@ -154,8 +154,10 @@ const createBulk = async ({ product_id, rows }) => {
     };
   }
 
-  for (const row of validRows) {
-    const variant = await withTransaction(async (client) => {
+  // Todo o nada: una sola transacción para el lote completo, así un fallo en
+  // la fila k no deja k-1 variantes creadas que bloqueen el reintento.
+  await withTransaction(async (client) => {
+    for (const row of validRows) {
       const createdVariant = await queries.createWithClient(client, {
         productId: product_id,
         color: row.color,
@@ -168,10 +170,9 @@ const createBulk = async ({ product_id, rows }) => {
         await createInitialUnits(client, createdVariant.id, row.initialUnits);
       }
 
-      return createdVariant;
-    });
-    created.push(variant);
-  }
+      created.push(createdVariant);
+    }
+  });
 
   return { created, rejected: [] };
 };

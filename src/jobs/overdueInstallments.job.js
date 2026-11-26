@@ -66,14 +66,17 @@ const notificationsService = require("../modules/notifications/notifications.ser
 const notificationsQueries = require("../modules/notifications/notifications.queries");
 
 /**
- * Hook: notifica a los admins activos sobre las cuotas que entraron/siguen en
- * mora en esta corrida. Se ejecuta DESPUÉS del COMMIT del UPDATE de mora —
- * fuera de la transacción de negocio — y es best-effort: un fallo de notify()
- * nunca debe afectar el resultado ya persistido del job.
- * @param {Array<{id: string, days_applied: number}>} updatedRows
+ * Hook: notifica a los admins activos SOLO sobre las cuotas que entraron en
+ * mora en esta corrida (estado previo PENDING/PARTIAL → OVERDUE). Las cuotas
+ * que ya estaban OVERDUE siguen acumulando punitorios pero no se re-notifican
+ * (issue #44). Se ejecuta DESPUÉS del COMMIT del UPDATE de mora — fuera de la
+ * transacción de negocio — y es best-effort: un fallo de notify() nunca debe
+ * afectar el resultado ya persistido del job.
+ * @param {Array<{id: string, days_applied: number, previous_status: string}>} updatedRows
  */
 const _notifyOverdueInstallments = async (updatedRows) => {
-  if (!updatedRows.length) return;
+  const newlyOverdue = updatedRows.filter((r) => r.previous_status !== "OVERDUE");
+  if (!newlyOverdue.length) return;
   try {
     const adminIds = await notificationsQueries.getActiveAdminUserIds();
     const details = await pool.query(
@@ -82,7 +85,7 @@ const _notifyOverdueInstallments = async (updatedRows) => {
        JOIN credits c    ON c.id  = i.credit_id
        JOIN customers cu ON cu.id = c.customer_id
        WHERE i.id = ANY($1::uuid[])`,
-      [updatedRows.map((r) => r.id)],
+      [newlyOverdue.map((r) => r.id)],
     );
     for (const row of details.rows) {
       await notificationsService.notify({
@@ -223,7 +226,8 @@ const markOverdueAndApplyPenalty = () =>
        WHERE i.id = t.id
          AND t.days_to_apply             > 0
          AND t.pending_adjusted_balance  > 0
-       RETURNING i.id, t.days_to_apply::int AS days_applied`,
+       RETURNING i.id, t.days_to_apply::int AS days_applied,
+                 t.status AS previous_status`,
         [effectiveToday, graceDays, dailyRate, maxRate, isFirstRun],
       );
 

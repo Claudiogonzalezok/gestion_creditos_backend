@@ -304,13 +304,23 @@ const planChangeExecute = async (req, res) => {
   try {
     const result = await service.changePlan(
       req.params.id,
-      { reason: req.body.reason },
+      {
+        reason: req.body.reason,
+        excess_disposition: req.body.excess_disposition,
+      },
       req.user.id,
     );
     return response.success(res, result, result.message);
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409)
+      return response.conflict(res, err.message, null, err.code);
+    // 422 con código (ej: EXCESS_DISPOSITION_REQUIRED) para que el frontend
+    // pueda pedirle al cliente el destino del excedente.
+    if (err.status === 422 && err.code)
+      return res
+        .status(422)
+        .json({ ok: false, message: err.message, code: err.code });
     if (err.status === 422)
       return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);

@@ -14,7 +14,6 @@ const {
   createCustomerFixture,
   createInstallmentFixture,
 } = require("./helpers/fixtures");
-const { today } = require("./helpers/dates");
 
 setupTestSuite();
 
@@ -173,6 +172,43 @@ describe("Hooks de notificaciones — MORA (job overdueInstallments)", () => {
     );
     const forAdmin = rows.rows.find((r) => r.user_id === admin.id);
     expect(forAdmin).toBeDefined();
+  });
+
+  it("dos corridas en días seguidos: la cuota ya vencida NO se re-notifica (issue #44)", async () => {
+    const admin = await createUserFixture({ role: "ADMIN" });
+    const customer = await createCustomerFixture({ full_name: "Deudor Repetido" });
+    const { createCreditFixture } = require("./helpers/fixtures");
+    const credit = await createCreditFixture({ customer_id: customer.id });
+    const installment = await createInstallmentFixture({
+      credit_id: credit.id,
+      due_date: "2020-01-01",
+      original_amount: 1000,
+      status: "PENDING",
+    });
+
+    const {
+      markOverdueAndApplyPenalty,
+    } = require("../../src/jobs/overdueInstallments.job");
+
+    // Día 1: la cuota pasa PENDING → OVERDUE y se notifica.
+    const day1 = await markOverdueAndApplyPenalty();
+    expect(day1.affected_rows).toBe(1);
+
+    // Simular el día siguiente: la última mora aplicada queda en "ayer".
+    await pool.query(
+      `UPDATE installments SET last_penalty_applied_at = CURRENT_DATE - 1 WHERE id = $1`,
+      [installment.id],
+    );
+
+    // Día 2: el job vuelve a procesar la cuota (sigue OVERDUE) pero no notifica.
+    const day2 = await markOverdueAndApplyPenalty();
+    expect(day2.affected_rows).toBe(1);
+
+    const rows = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM notifications WHERE type = 'MORA' AND user_id = $1`,
+      [admin.id],
+    );
+    expect(rows.rows[0].n).toBe(1);
   });
 
   it("el job de mora NO falla (sigue marcando OVERDUE) aunque notify() lance un error", async () => {

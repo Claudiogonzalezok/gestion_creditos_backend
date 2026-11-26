@@ -164,3 +164,48 @@ describe("collections.service.generateBatch", () => {
     expect(queries.create).not.toHaveBeenCalled();
   });
 });
+
+// #49: una falla en la relectura posterior al COMMIT no debe informarse como
+// error de generación — la planilla sí se creó y reintentar la duplicaría.
+describe("collections.service — lecturas post-commit (#49)", () => {
+  const client = { query: jest.fn() };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    localDate.mockReturnValue("2026-06-20");
+    withTransaction.mockImplementation(async (callback) => callback(client));
+    client.query.mockResolvedValue({ rows: [{ id: "user-row" }], rowCount: 1 });
+    queries.findUnassignedCustomersWithPending.mockResolvedValue([]);
+    queries.findInstallmentsForSheet.mockResolvedValue([
+      { installment_id: "i-1", next_visit_date: null, due_date: "2026-06-20" },
+    ]);
+    queries.create.mockResolvedValue({ id: "sheet-1" });
+    queries.findById.mockRejectedValue(new Error("connection reset"));
+  });
+
+  it("generateBatch informa la planilla creada (no error) si falla la relectura", async () => {
+    const { results } = await service.generateBatch(
+      { collector_ids: ["c-1"], date: "2026-06-21" },
+      "admin-1",
+    );
+    expect(results[0].error).toBeUndefined();
+    expect(results[0].sheet).toMatchObject({ id: "sheet-1" });
+  });
+
+  it("generate devuelve la planilla creada si falla la relectura", async () => {
+    const result = await service.generate(
+      { collector_id: "c-1", date: "2026-06-21" },
+      "admin-1",
+    );
+    expect(result.sheet).toMatchObject({ id: "sheet-1" });
+  });
+
+  it("no romper: un error dentro de la transacción sigue informándose por cobrador", async () => {
+    withTransaction.mockRejectedValueOnce({ status: 404, message: "Cobrador no encontrado o inactivo." });
+    const { results } = await service.generateBatch(
+      { collector_ids: ["c-1"], date: "2026-06-21" },
+      "admin-1",
+    );
+    expect(results[0].error).toEqual({ status: 404, message: "Cobrador no encontrado o inactivo." });
+  });
+});
