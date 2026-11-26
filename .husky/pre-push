@@ -1,2 +1,2 @@
-npm run test:scope
-npm run test:unit
+pnpm run test:scope
+pnpm run test:unit
