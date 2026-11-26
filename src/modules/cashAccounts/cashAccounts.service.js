@@ -1,5 +1,6 @@
 const queries = require("./cashAccounts.queries");
 const { withTransaction } = require("../../utils/transaction");
+const { round2 } = require("../../utils/money");
 
 // Dirección fija para tipos no-ADJUSTMENT. ADJUSTMENT requiere direction
 // explícito desde el caller.
@@ -21,7 +22,6 @@ const PUBLIC_MOVEMENT_TYPES = [
   "MANUAL_INCOME",
 ];
 
-const round2 = (n) => Math.round(n * 100) / 100;
 const hasValue = (v) =>
   v !== undefined && v !== null && String(v).trim() !== "";
 
@@ -45,6 +45,65 @@ const resolveDirection = (movementType, requestedDirection) => {
   }
   // Para el resto, la direction es fija — se ignora cualquier valor del cliente.
   return FIXED_DIRECTION[movementType];
+};
+
+/**
+ * Saldos por medio de una cuenta ya leída (idealmente bajo lock FOR UPDATE).
+ * cash_balance = current_balance - transfer_balance, así la suma siempre
+ * coincide con current_balance.
+ * @param {object} db - Pool o client de la transacción.
+ * @param {{id:string, current_balance:number}} account - Cuenta.
+ * @returns {Promise<{cash_balance:number, transfer_balance:number}>}
+ */
+const getMethodBalances = async (db, account) => {
+  const transfer = round2(await queries.computeTransferBalance(account.id, db));
+  return {
+    cash_balance: round2(account.current_balance - transfer),
+    transfer_balance: transfer,
+  };
+};
+
+const METHOD_LABEL = { CASH: "efectivo", TRANSFER: "transferencia" };
+
+/**
+ * Rechaza con 409 INSUFFICIENT_METHOD_BALANCE si algún medio no alcanza.
+ * @param {object} client - Client de la transacción (cuenta ya bloqueada).
+ * @param {{id:string, current_balance:number}} account - Cuenta bloqueada.
+ * @param {{CASH?:number, TRANSFER?:number}} required - Monto requerido por medio.
+ * @returns {Promise<{cash_balance:number, transfer_balance:number}>}
+ */
+const assertMethodBalances = async (client, account, required) => {
+  const balances = await getMethodBalances(client, account);
+  const available = {
+    CASH: balances.cash_balance,
+    TRANSFER: balances.transfer_balance,
+  };
+  for (const method of ["CASH", "TRANSFER"]) {
+    const need = round2(required[method] || 0);
+    if (need > 0 && need > available[method]) {
+      throw err(
+        409,
+        `Saldo insuficiente en ${METHOD_LABEL[method]}. Disponible: ${available[method]}. Monto requerido: ${need}.`,
+        "INSUFFICIENT_METHOD_BALANCE",
+      );
+    }
+  }
+  return balances;
+};
+
+/**
+ * Bloquea la cuenta (mismo FOR UPDATE que current_balance) y valida que el
+ * medio de origen tenga saldo, para conversiones COMPANY o egresos por medio.
+ * @param {object} client - Client de una transacción abierta.
+ * @param {string} accountId - Cuenta de Caja General.
+ * @param {'CASH'|'TRANSFER'} method - Medio de origen.
+ * @param {number} amount - Monto a debitar de ese medio.
+ * @returns {Promise<{cash_balance:number, transfer_balance:number}>}
+ */
+const assertMethodAvailable = async (client, accountId, method, amount) => {
+  const account = await queries.lockAndGetBalance(client, accountId);
+  if (!account) throw err(404, "Cuenta no encontrada.", "NOT_FOUND");
+  return assertMethodBalances(client, account, { [method]: amount });
 };
 
 /**
@@ -93,14 +152,37 @@ const insertMovementWithBalance = async (client, params) => {
     );
   }
 
+  // 3b) Egreso con medio declarado: validar el saldo de cada medio bajo el
+  // mismo lock FOR UPDATE de la cuenta (issue #93). Un OUT sin desglose
+  // conserva solo la validación del saldo total (retrocompatible).
+  const outSplit =
+    direction === "OUT" &&
+    (amountCash !== undefined || amountTransfer !== undefined);
+  if (outSplit) {
+    await assertMethodBalances(client, account, {
+      CASH: amountCash,
+      TRANSFER: amountTransfer,
+    });
+  }
+
+  let splitCash = 0;
+  let splitTransfer = 0;
+  if (direction === "IN") {
+    splitCash = amountCash ?? amount;
+    splitTransfer = amountTransfer ?? 0;
+  } else if (outSplit) {
+    splitCash = amountCash || 0;
+    splitTransfer = amountTransfer || 0;
+  }
+
   // 4) Insertar movimiento.
   const movement = await queries.insertMovement(client, {
     cashAccountId,
     movementType,
     direction,
     amount,
-    amountCash: direction === "IN" ? (amountCash ?? amount) : 0,
-    amountTransfer: direction === "IN" ? (amountTransfer ?? 0) : 0,
+    amountCash: splitCash,
+    amountTransfer: splitTransfer,
     description,
     beneficiaryName,
     referenceType,
@@ -131,6 +213,7 @@ const getBalance = async (id) => {
     name: account.name,
     type: account.type,
     current_balance: account.current_balance,
+    ...(await getMethodBalances(undefined, account)),
   };
 };
 
@@ -213,13 +296,6 @@ const registerMovement = async (accountId, body, user) => {
   if (!(amount > 0)) {
     throw err(422, "amount debe ser > 0.", "INVALID_AMOUNT");
   }
-  if (hasSplit && direction !== "IN") {
-    throw err(
-      422,
-      "El desglose por medio solo aplica a movimientos IN.",
-      "INVALID_SPLIT_DIRECTION",
-    );
-  }
   if (hasSplit && (amountCash < 0 || amountTransfer < 0)) {
     throw err(
       422,
@@ -268,6 +344,8 @@ module.exports = {
   registerMovement,
   // helpers internos (reutilizables por cashSessions/commissions en commits siguientes)
   insertMovementWithBalance,
+  getMethodBalances,
+  assertMethodAvailable,
   resolveDirection,
   FIXED_DIRECTION,
   PUBLIC_MOVEMENT_TYPES,

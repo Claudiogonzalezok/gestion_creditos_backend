@@ -87,6 +87,8 @@ La **Caja General** es la tesorería consolidada del negocio. No representa una 
 
 `current_balance` está cacheado en `cash_accounts` con `CHECK (current_balance >= 0)` a nivel DB. Es un **pool único** — no separa efectivo de transferencia a nivel de saldo total (sí guarda el split `amount_cash`/`amount_transfer` por movimiento, a fines de reporte).
 
+**Saldo por medio (issue #93, migración 055):** `GET /api/cash-accounts/:id/balance` agrega `cash_balance` y `transfer_balance`. No hay columnas cacheadas: `transfer_balance` se deriva de los movimientos (IN suma, OUT resta su `amount_transfer`) más las conversiones `COMPANY`, y `cash_balance = current_balance - transfer_balance`. Un OUT sin desglose (legacy o automático) se imputa a efectivo, por eso no hay CHECK >= 0 por medio. Un OUT con desglose y la conversión `COMPANY` validan el medio de origen bajo el mismo `FOR UPDATE` de la cuenta → 409 `INSUFFICIENT_METHOD_BALANCE`.
+
 ### 1.6 Operar sin jornada abierta — patrón `criteria: 'DAILY' | 'COMPANY'` (V4.9)
 
 Gasto, ingreso manual y conversión **no requieren una caja operativa abierta**. Cada uno de estos tres flujos acepta un `criteria` que decide el destino:
@@ -238,7 +240,7 @@ POST /api/cash-accounts/:id/movements
 - `SALARY_PAYMENT` **no** se acepta por endpoint público — se genera únicamente vía `commissions.liquidate` (trazabilidad de período).
 - `DROP_IN` **no** se acepta por endpoint público — se genera únicamente vía `cashSessions.service.addDrop` (trazabilidad de origen).
 - `ADJUSTMENT` requiere `direction` explícito (IN / OUT). `MANUAL_INCOME` tiene dirección fija `IN`.
-- `amount_cash` / `amount_transfer` (split): permitido para `ADJUSTMENT IN` y `MANUAL_INCOME`. Acepta un solo lado (solo efectivo o solo transferencia) — el único requisito es que ambos sean `>= 0` y la suma sea `> 0`. **No** hace falta que "ambos sean mayores a 0" (esa restricción era un bug — ver §6 inv. #5).
+- `amount_cash` / `amount_transfer` (split): permitido para todos los tipos públicos; en OUT cada medio se valida contra su saldo (#93). Acepta un solo lado (solo efectivo o solo transferencia) — el único requisito es que ambos sean `>= 0` y la suma sea `> 0`. **No** hace falta que "ambos sean mayores a 0" (esa restricción era un bug — ver §6 inv. #5).
 - Regla universal: cualquier movimiento que llevaría `current_balance < 0` es rechazado con `409 INSUFFICIENT_BALANCE`.
 
 ### 5.3 Escrituras automáticas
@@ -285,6 +287,7 @@ Esto cierra un gap real que existía antes de V4.9: gasto y conversión `COMPANY
 | `409` | `NO_ACTIVE_SESSION` | Intento de aprobar / gastar / convertir con `criteria: 'DAILY'` sin caja activa en la jornada |
 | `409` | `ACTIVE_SESSION_IN_BUSINESS_DAY` | Intento de abrir caja cuando ya existe una caja (de cualquier status) en la jornada |
 | `409` | `INSUFFICIENT_BALANCE` | Caja General sin fondos para un movimiento OUT (o conversión `COMPANY`) |
+| `409` | `INSUFFICIENT_METHOD_BALANCE` | Egreso con desglose o conversión `COMPANY` que supera el saldo del medio de origen |
 | `409` | `NO_GENERAL_CASH_ACCOUNT` | Operación `COMPANY` cuando no existe una Caja General activa |
 | `409` | `ACCOUNT_INACTIVE` | Movimiento intenta operar sobre `cash_account` con `is_active = FALSE` |
 | `422` | `INVALID_MOVEMENT_TYPE` | `movement_type` no aceptado por el endpoint público (`DROP_IN`, `SALARY_PAYMENT`) |

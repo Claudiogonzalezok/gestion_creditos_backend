@@ -92,14 +92,8 @@ router.post(
         if (!has(b.amount)) throw new Error("amount es obligatorio.");
         return true;
       }
-      const isAdjustmentIn =
-        b.movement_type === "ADJUSTMENT" && b.direction === "IN";
-      const isManualIncome = b.movement_type === "MANUAL_INCOME";
-      if (!isAdjustmentIn && !isManualIncome) {
-        throw new Error(
-          "amount_cash/amount_transfer solo aplican a ADJUSTMENT IN o MANUAL_INCOME.",
-        );
-      }
+      // Desde #93 el desglose aplica también a egresos (OUT): cada medio se
+      // valida contra su propio saldo en el service.
       const cash = parseFloat(b.amount_cash) || 0;
       const transfer = parseFloat(b.amount_transfer) || 0;
       if (cash < 0 || transfer < 0 || cash + transfer <= 0) {
