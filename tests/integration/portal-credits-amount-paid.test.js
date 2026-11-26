@@ -22,7 +22,7 @@ setupTestSuite();
  */
 const createPortalCustomer = async () => {
   const c = await createCustomerFixture();
-  await pool.query(`UPDATE customers SET portal_enabled = TRUE WHERE id = $1`, [c.id]);
+  await pool.query(`UPDATE customers SET portal_enabled = TRUE, portal_is_temp_password = FALSE WHERE id = $1`, [c.id]);
   return c;
 };
 
