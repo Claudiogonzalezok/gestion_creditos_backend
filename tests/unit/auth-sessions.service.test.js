@@ -213,6 +213,7 @@ describe("users.service · invalidación transaccional", () => {
 
   it("deactivate invalida sesiones dentro de la transacción", async () => {
     usersQueries.findById.mockResolvedValue({ id: "u1", role: "SELLER", status: "ACTIVE" });
+    usersQueries.deactivate.mockResolvedValue(true);
     await usersService.deactivate("u1");
     expect(usersQueries.deactivate).toHaveBeenCalledWith("u1", client);
     expect(usersQueries.invalidateSessions).toHaveBeenCalledWith("u1", client);
