@@ -570,7 +570,10 @@ GET    /api/installments/:id
 PATCH  /api/installments/:id/apply-penalty
 PATCH  /api/installments/:id/waive-penalty
 PATCH  /api/installments/:id/early-pay
+POST   /api/installments/:id/notify-overdue   → Avisar mora al cliente por email (ADMIN, COLLECTOR, SELLER_COLLECTOR)
 ```
+
+`notify-overdue` (#88): la cuota debe estar `OVERDUE` (si no, `409 INSTALLMENT_NOT_OVERDUE`) y el cliente tener email (`422 CUSTOMER_NO_EMAIL`). Los cobradores solo pueden avisar a clientes asignados a ellos (`403`). Cada aviso queda auditado en `customer_overdue_notices` (migración 054) con destinatario, saldo pendiente, quién lo envió y la fecha. Idempotente por cuota y día: el primer aviso responde `201 { already_notified: false, notice }`; los siguientes del mismo día `200 { already_notified: true, notice }` sin reenviar. Si el envío falla no queda registro (se puede reintentar); sin transporte configurado → `503 NOTIFIER_NOT_CONFIGURED`. Es independiente de las notificaciones in-app (`/api/notifications`), que son para usuarios internos.
 
 ### Cobros (payments)
 

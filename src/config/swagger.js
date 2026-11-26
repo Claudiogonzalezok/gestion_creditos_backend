@@ -1107,6 +1107,23 @@ const swaggerSpec = {
       },
     },
 
+    '/installments/{id}/notify-overdue': {
+      post: {
+        tags: ['Installments'], summary: 'Avisar mora al cliente por email (#88)', security: [{ internalAuth: [] }],
+        description: 'ADMIN, COLLECTOR y SELLER_COLLECTOR (cobradores solo clientes asignados). Idempotente por cuota y día.',
+        parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }],
+        responses: {
+          201: { description: 'Aviso enviado: { already_notified: false, notice }' },
+          200: { description: 'Ya avisado hoy: { already_notified: true, notice } (no reenvía)' },
+          403: { description: 'Rol sin acceso o cliente no asignado al cobrador' },
+          404: { $ref: '#/components/responses/NotFound' },
+          409: { description: 'INSTALLMENT_NOT_OVERDUE' },
+          422: { description: 'CUSTOMER_NO_EMAIL' },
+          503: { description: 'NOTIFIER_NOT_CONFIGURED' },
+        },
+      },
+    },
+
     '/installments/{id}/early-pay': {
       patch: {
         tags: ['Installments'], summary: 'Pago anticipado de cuota individual', security: [{ internalAuth: [] }],
