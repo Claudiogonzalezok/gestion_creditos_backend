@@ -124,7 +124,7 @@ const findById = async (id) => {
             lp.approved_at  AS paid_at,
             lp.generation_type,
             lp.payment_method AS paid_method,
-            cu.full_name AS paid_by_name,
+            col.full_name AS paid_by_name,
             to_char(lnv.next_visit_date, 'YYYY-MM-DD') AS next_visit_date,
             sched.full_name AS next_visit_scheduled_by_name
      FROM installments i
@@ -138,7 +138,7 @@ const findById = async (id) => {
        ORDER BY p.approved_at DESC
        LIMIT 1
      ) lp ON TRUE
-     LEFT JOIN users cu ON cu.id = lp.collector_id
+     LEFT JOIN users col ON col.id = lp.collector_id
      LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
      LEFT JOIN users sched ON sched.id = lnv.scheduled_by_user_id
      WHERE i.credit_id = $1
@@ -311,12 +311,15 @@ const approve = async (
 
 /**
  * Genera el cronograma de cuotas de un crédito con monto fijo y fechas precalculadas.
- * Guarda due_date como original_amount para soporte de corrimiento por pagos adelantados.
+ * Inserta una cuota por fecha (numeradas desde 1) con amount_due y
+ * original_amount iguales a installmentAmount: original_amount congela el monto
+ * pactado al aprobar, aunque luego se sume mora a amount_due.
  * @param {object} client - Cliente de transacción.
  * @param {string} creditId
  * @param {number} installmentAmount - Monto por cuota (uniforme para todas).
  * @param {Date[]} dueDates - Fechas de vencimiento en orden.
  * @param {string} paymentFrequency - DAILY | WEEKLY | BIWEEKLY | MONTHLY.
+ * @returns {Promise<Array<{id: string, installment_number: number, amount_due: number}>>} Cuotas creadas.
  */
 const generateInstallments = async (
   client,

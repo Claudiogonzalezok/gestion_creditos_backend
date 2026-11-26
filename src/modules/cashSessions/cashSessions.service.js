@@ -1,5 +1,8 @@
 const queries = require("./cashSessions.queries");
-const { computeAvailableCash } = require("./cashSessions.calculations");
+const {
+  computeAvailableCash,
+  computeExpectedTransfer,
+} = require("./cashSessions.calculations");
 const bdQueries = require("../businessDays/businessDays.queries");
 const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 const cashAccountsService = require("../cashAccounts/cashAccounts.service");
@@ -69,26 +72,8 @@ const buildClosureSnapshot = ({
       })),
   };
 
-  const expectedCash =
-    opening.cash +
-    collections.payments.cash +
-    collections.down_payments.cash +
-    collections.manual_incomes.cash -
-    outflows.expenses.cash -
-    outflows.commissions.cash -
-    outflows.loans.cash +
-    conversions.cash_delta -
-    dropsBlock.cash;
-  const expectedTransfer =
-    opening.transfer +
-    collections.payments.transfer +
-    collections.down_payments.transfer +
-    collections.manual_incomes.transfer -
-    outflows.expenses.transfer -
-    outflows.commissions.transfer -
-    outflows.loans.transfer +
-    conversions.transfer_delta -
-    dropsBlock.transfer;
+  const expectedCash = computeAvailableCash(session, totals);
+  const expectedTransfer = computeExpectedTransfer(totals);
 
   return {
     version: SNAPSHOT_VERSION,
@@ -112,6 +97,71 @@ const differenceStatusOf = (n) => {
   if (n > 0) return "SURPLUS";
   if (n < 0) return "SHORTAGE";
   return "EXACT";
+};
+
+/**
+ * Arma todo lo que persiste un cierre (close) o una reconciliación tardía
+ * (reconcile) a partir de lo declarado por método: snapshot, diferencia total
+ * y detalle por método. Los métodos distintos de CASH/TRANSFER esperan 0.
+ * @param {object} params
+ * @param {object} params.session - Caja bloqueada.
+ * @param {object} params.totals - Resultado de computeSessionTotals.
+ * @param {Array} params.drops - Drops de la caja.
+ * @param {Array<{payment_method, declared_amount}>} params.declaredList
+ * @param {string} params.capturedBy - Usuario que captura el cierre.
+ */
+const buildClosureRecords = ({
+  session,
+  totals,
+  drops,
+  declaredList,
+  capturedBy,
+}) => {
+  // Mapeo de declared por método (default 0).
+  const declaredByMethod = new Map(
+    declaredList.map((d) => [d.payment_method, parseFloat(d.declared_amount)]),
+  );
+  const cashDeclared = declaredByMethod.get("CASH") || 0;
+  const transferDeclared = declaredByMethod.get("TRANSFER") || 0;
+
+  const snapshot = buildClosureSnapshot({
+    session: { ...session },
+    totals,
+    drops,
+    declared: { cash: cashDeclared, transfer: transferDeclared },
+    capturedBy,
+  });
+
+  const totalDifference =
+    snapshot.difference.cash + snapshot.difference.transfer;
+  const totalDiffStatus = differenceStatusOf(totalDifference);
+
+  const details = declaredList.map((d) => {
+    const expected =
+      d.payment_method === "CASH"
+        ? snapshot.expected.cash
+        : d.payment_method === "TRANSFER"
+          ? snapshot.expected.transfer
+          : 0;
+    const declared = parseFloat(d.declared_amount);
+    const diff = declared - expected;
+    return {
+      payment_method: d.payment_method,
+      expected_amount: expected,
+      declared_amount: declared,
+      difference: diff,
+      difference_status: differenceStatusOf(diff),
+    };
+  });
+
+  return {
+    snapshot,
+    cashDeclared,
+    transferDeclared,
+    totalDifference,
+    totalDiffStatus,
+    details,
+  };
 };
 
 /**
@@ -169,7 +219,9 @@ const resolveOrCreateBusinessDay = async (client, branchId) => {
  * @param {string} [data.owner_user_id]   (cajero del turno)
  * @param {string} [data.branch_id]
  * @param {string} [data.observations]
- * @param {string} [data.shift_label]
+ * @param {string} [data.shift_label] - En desuso desde la migración 037 (sin
+ *   multi-turno): se ignora y no se persiste; la columna se conserva solo por
+ *   compatibilidad con datos históricos.
  * @param {object} requestingUser
  */
 const open = async (data, requestingUser) => {
@@ -262,26 +314,8 @@ const snapshot = async (id) => {
         destination: d.destination,
       })),
   };
-  const expectedCash =
-    opening.cash +
-    totals.collections_payments_cash +
-    totals.collections_down_payments_cash +
-    totals.collections_manual_incomes_cash -
-    totals.outflows_expenses_cash -
-    totals.outflows_commissions_cash -
-    totals.outflows_loans_cash +
-    totals.conversions_cash_delta -
-    dropsBlock.cash;
-  const expectedTransfer =
-    opening.transfer +
-    totals.collections_payments_transfer +
-    totals.collections_down_payments_transfer +
-    totals.collections_manual_incomes_transfer -
-    totals.outflows_expenses_transfer -
-    totals.outflows_commissions_transfer -
-    totals.outflows_loans_transfer +
-    totals.conversions_transfer_delta -
-    dropsBlock.transfer;
+  const expectedCash = computeAvailableCash(session, totals);
+  const expectedTransfer = computeExpectedTransfer(totals);
 
   return {
     session_id: session.id,
@@ -424,47 +458,22 @@ const close = async (id, data, requestingUser) => {
     const totals = await queries.computeSessionTotals(id, client);
     const drops = await queries.findDropsBySession(id);
 
-    // Mapeo de declared por método (default 0).
-    const declaredByMethod = new Map(
-      data.declared.map((d) => [
-        d.payment_method,
-        parseFloat(d.declared_amount),
-      ]),
-    );
-    const cashDeclared = declaredByMethod.get("CASH") || 0;
-    const transferDeclared = declaredByMethod.get("TRANSFER") || 0;
-
-    const snapshot = buildClosureSnapshot({
-      session: { ...session },
+    const {
+      snapshot,
+      cashDeclared,
+      transferDeclared,
+      totalDifference,
+      totalDiffStatus,
+      details,
+    } = buildClosureRecords({
+      session,
       totals,
       drops,
-      declared: { cash: cashDeclared, transfer: transferDeclared },
+      declaredList: data.declared,
       capturedBy: requestingUser.id,
     });
 
-    const totalDifference =
-      snapshot.difference.cash + snapshot.difference.transfer;
-    const totalDiffStatus = differenceStatusOf(totalDifference);
-
     // Persistir cierre + detalles por método.
-    const details = data.declared.map((d) => {
-      const expected =
-        d.payment_method === "CASH"
-          ? snapshot.expected.cash
-          : d.payment_method === "TRANSFER"
-            ? snapshot.expected.transfer
-            : 0;
-      const declared = parseFloat(d.declared_amount);
-      const diff = declared - expected;
-      return {
-        payment_method: d.payment_method,
-        expected_amount: expected,
-        declared_amount: declared,
-        difference: diff,
-        difference_status: differenceStatusOf(diff),
-      };
-    });
-
     const closed = await queries.close(client, id, {
       closedBy: requestingUser.id,
       snapshot,
@@ -540,45 +549,21 @@ const reconcile = async (id, data, requestingUser) => {
     const totals = await queries.computeSessionTotals(id, client);
     const drops = await queries.findDropsBySession(id);
 
-    const declaredByMethod = new Map(
-      data.declared.map((d) => [
-        d.payment_method,
-        parseFloat(d.declared_amount),
-      ]),
-    );
-    const cashDeclared = declaredByMethod.get("CASH") || 0;
-    const transferDeclared = declaredByMethod.get("TRANSFER") || 0;
-
-    const snapshot = buildClosureSnapshot({
-      session: { ...session },
+    const {
+      snapshot,
+      cashDeclared,
+      transferDeclared,
+      totalDifference,
+      totalDiffStatus,
+      details,
+    } = buildClosureRecords({
+      session,
       totals,
       drops,
-      declared: { cash: cashDeclared, transfer: transferDeclared },
+      declaredList: data.declared,
       capturedBy: requestingUser.id,
     });
     snapshot.late_reconciliation = true;
-
-    const totalDifference =
-      snapshot.difference.cash + snapshot.difference.transfer;
-    const totalDiffStatus = differenceStatusOf(totalDifference);
-
-    const details = data.declared.map((d) => {
-      const expected =
-        d.payment_method === "CASH"
-          ? snapshot.expected.cash
-          : d.payment_method === "TRANSFER"
-            ? snapshot.expected.transfer
-            : 0;
-      const declared = parseFloat(d.declared_amount);
-      const diff = declared - expected;
-      return {
-        payment_method: d.payment_method,
-        expected_amount: expected,
-        declared_amount: declared,
-        difference: diff,
-        difference_status: differenceStatusOf(diff),
-      };
-    });
 
     const ok = await queries.reconcile(client, id, {
       reconciledBy: requestingUser.id,

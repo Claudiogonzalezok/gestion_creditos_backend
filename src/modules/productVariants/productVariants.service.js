@@ -6,6 +6,18 @@ const { withTransaction } = require('../../utils/transaction');
 // millones de inserts. Se valida también en el middleware.
 const MAX_INITIAL_UNITS = 10000;
 
+// Si initial_units no llega como entero, la variante nace con una unidad
+// disponible (comportamiento histórico del alta individual y por lote).
+const DEFAULT_INITIAL_UNITS = 1;
+
+/**
+ * Normaliza initial_units: entero → máx(0, n); cualquier otro valor → default.
+ * @param {*} raw - Valor recibido en el body.
+ * @returns {number} Cantidad de unidades iniciales a crear.
+ */
+const parseInitialUnits = (raw) =>
+  Number.isInteger(Number(raw)) ? Math.max(0, Number(raw)) : DEFAULT_INITIAL_UNITS;
+
 /**
  * Genera un unit_code automático válido para stock inicial.
  * @returns {string} Código de unidad único.
@@ -58,9 +70,7 @@ const create = async ({ product_id, color, size, capacity, current_price, initia
   if (await queries.findDuplicate(product_id, c, s, cap))
     throw { status: 409, message: 'Ya existe una variante con los mismos atributos para este producto.' };
 
-  const initialUnits = Number.isInteger(Number(initial_units))
-    ? Math.max(0, Number(initial_units))
-    : 1;
+  const initialUnits = parseInitialUnits(initial_units);
 
   if (initialUnits > MAX_INITIAL_UNITS)
     throw { status: 400, message: `initial_units no puede superar ${MAX_INITIAL_UNITS}.` };
@@ -137,10 +147,7 @@ const createBulk = async ({ product_id, rows }) => {
     }
 
     if (!errors.some((e) => e.row === index)) {
-      const initialUnitsRaw = row.initial_units;
-      const initialUnits = Number.isInteger(Number(initialUnitsRaw))
-        ? Math.max(0, Number(initialUnitsRaw))
-        : 1;
+      const initialUnits = parseInitialUnits(row.initial_units);
       validRows.push({ color, size, capacity, currentPrice, initialUnits });
     }
   }

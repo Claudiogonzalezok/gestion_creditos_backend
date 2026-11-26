@@ -6,6 +6,9 @@ const { query }   = require('express-validator');
 const { validate }                                            = require('../../middlewares/validate.middleware');
 const { authenticate, authenticateAllowTemp, authorize }      = require('../../middlewares/auth.middleware');
 
+// Roles internos válidos como filtro del listado (role exacto o roles en lista).
+const USER_ROLES = ['ADMIN', 'SELLER', 'COLLECTOR', 'SELLER_COLLECTOR'];
+
 // ── Ruta con middleware propio (fuera del authenticate global) ─
 // authenticateAllowTemp permite el acceso aunque la contraseña sea temporal,
 // para que el usuario obligatoriamente pueda cambiarla.
@@ -26,9 +29,9 @@ router.get('/',
   authorize('ADMIN'),
   [
     ...paginationRules(),
-    query('role').optional().isIn(['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR']).withMessage('role inválido.'),
+    query('role').optional().isIn(USER_ROLES).withMessage('role inválido.'),
     query('roles').optional().custom((value) => {
-      const valid = ['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'];
+      const valid = USER_ROLES;
       const tokens = String(value).split(',').map((r) => r.trim()).filter(Boolean);
       if (!tokens.length || tokens.some((t) => !valid.includes(t)))
         throw new Error('roles inválido. Use una lista separada por comas de roles válidos.');

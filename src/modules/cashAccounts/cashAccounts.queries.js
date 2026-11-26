@@ -70,10 +70,17 @@ const MOVEMENT_FIELDS = `
   reference_type, reference_id, created_by, created_at
 `;
 
-const findMovements = async (
-  { accountId, movementType, direction, from, to, limit, offset },
-  db = pool,
-) => {
+/**
+ * Arma el WHERE compartido por el listado y el conteo de movimientos.
+ * @returns {{conds: string[], params: any[]}}
+ */
+const buildMovementFilters = ({
+  accountId,
+  movementType,
+  direction,
+  from,
+  to,
+}) => {
   const conds = ["cash_account_id = $1"];
   const params = [accountId];
   if (movementType) {
@@ -92,6 +99,20 @@ const findMovements = async (
     conds.push(`created_at <  $${params.length + 1}`);
     params.push(to);
   }
+  return { conds, params };
+};
+
+const findMovements = async (
+  { accountId, movementType, direction, from, to, limit, offset },
+  db = pool,
+) => {
+  const { conds, params } = buildMovementFilters({
+    accountId,
+    movementType,
+    direction,
+    from,
+    to,
+  });
   const limitParam = params.length + 1;
   params.push(limit);
   const offsetParam = params.length + 1;
@@ -112,24 +133,13 @@ const countMovements = async (
   { accountId, movementType, direction, from, to },
   db = pool,
 ) => {
-  const conds = ["cash_account_id = $1"];
-  const params = [accountId];
-  if (movementType) {
-    conds.push(`movement_type = $${params.length + 1}`);
-    params.push(movementType);
-  }
-  if (direction) {
-    conds.push(`direction = $${params.length + 1}`);
-    params.push(direction);
-  }
-  if (from) {
-    conds.push(`created_at >= $${params.length + 1}`);
-    params.push(from);
-  }
-  if (to) {
-    conds.push(`created_at <  $${params.length + 1}`);
-    params.push(to);
-  }
+  const { conds, params } = buildMovementFilters({
+    accountId,
+    movementType,
+    direction,
+    from,
+    to,
+  });
   const r = await db.query(
     `SELECT COUNT(*)::int AS total
      FROM cash_account_movements

@@ -19,6 +19,29 @@ const getById = async (id) => {
   return expense;
 };
 
+/**
+ * Arma el payload de expenses.queries.create a partir del body. Compartido por
+ * los gastos COMPANY (Caja General) y DAILY (caja operativa).
+ * @param {object} data - Body validado.
+ * @param {{createdBy:string, registerDate:string, cashSessionId:string|null, source:string}} context
+ * @returns {object}
+ */
+const buildExpensePayload = (
+  data,
+  { createdBy, registerDate, cashSessionId, source },
+) => ({
+  amount: parseFloat(data.amount),
+  description: data.description,
+  expenseDate: data.expense_date,
+  paymentMethod: data.payment_method,
+  transferReference: data.transfer_reference || null,
+  categoryId: data.category_id || null,
+  createdBy,
+  registerDate,
+  cashSessionId,
+  source,
+});
+
 const create = async (data, requestingUser) => {
   if (data.category_id) {
     const category = await queries.findActiveCategoryById(data.category_id);
@@ -74,18 +97,12 @@ const create = async (data, requestingUser) => {
         };
 
       const expense = await queries.create(
-        {
-          amount: parseFloat(data.amount),
-          description: data.description,
-          expenseDate: data.expense_date,
-          paymentMethod: data.payment_method,
-          transferReference: data.transfer_reference || null,
-          categoryId: data.category_id || null,
+        buildExpensePayload(data, {
           createdBy: requestingUser.id,
           registerDate,
           cashSessionId: null,
           source,
-        },
+        }),
         client,
       );
 
@@ -135,18 +152,12 @@ const create = async (data, requestingUser) => {
     }
 
     return queries.create(
-      {
-        amount: parseFloat(data.amount),
-        description: data.description,
-        expenseDate: data.expense_date,
-        paymentMethod: data.payment_method,
-        transferReference: data.transfer_reference || null,
-        categoryId: data.category_id || null,
+      buildExpensePayload(data, {
         createdBy: requestingUser.id,
         registerDate,
         cashSessionId: activeSession.id,
         source,
-      },
+      }),
       client,
     );
   });

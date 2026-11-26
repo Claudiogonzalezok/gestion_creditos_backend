@@ -12,15 +12,8 @@ const FIXED_DIRECTION = {
   MANUAL_INCOME: "IN",
 };
 
-// IMP-6: SALARY_PAYMENT NO se acepta desde el endpoint público — debe pasar
-// por commissions.liquidate, que es la única fuente con trazabilidad de
-// período liquidado y mata el riesgo de doble pago (manual + liquidación).
-const PUBLIC_MOVEMENT_TYPES = [
-  "SUPPLIER_PAYMENT",
-  "EXPENSE",
-  "ADJUSTMENT",
-  "MANUAL_INCOME",
-];
+// IMP-6: SALARY_PAYMENT no es público (ver cashAccounts.constants).
+const { PUBLIC_MOVEMENT_TYPES } = require("./cashAccounts.constants");
 
 const hasValue = (v) =>
   v !== undefined && v !== null && String(v).trim() !== "";

@@ -1,8 +1,9 @@
 const queries = require('./portal.queries');
-const { getValue } = require('../systemConfig/systemConfig.queries');
+const { getGraceDays } = require('../systemConfig/graceDays');
 
-const getGraceDays = async () =>
-  parseInt(await getValue('penalty_grace_days') || '3');
+// Indicador de riesgo del portal: 0 cuotas vencidas = GREEN, hasta
+// YELLOW_MAX_OVERDUE = YELLOW, más = RED.
+const YELLOW_MAX_OVERDUE = 2;
 
 /**
  * Resumen de cuenta del cliente autenticado.
@@ -19,7 +20,7 @@ const getAccountSummary = async (customerId) => {
   // Indicador de riesgo: GREEN / YELLOW / RED
   let statusIndicator;
   if (overdueCount === 0)     statusIndicator = 'GREEN';
-  else if (overdueCount <= 2) statusIndicator = 'YELLOW';
+  else if (overdueCount <= YELLOW_MAX_OVERDUE) statusIndicator = 'YELLOW';
   else                        statusIndicator = 'RED';
 
   return {

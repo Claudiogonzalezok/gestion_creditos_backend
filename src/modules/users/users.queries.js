@@ -24,10 +24,13 @@ const findAll = async ({ role, roles, status, search, pagination } = {}) => {
   return runListQuery(q, params, pagination);
 };
 
+// Columnas del perfil completo (detalle de admin y perfil propio).
+const PROFILE_FIELDS = `id, full_name, dni, email, phone, address, role, status, is_temp_password,
+            failed_attempts, locked_at, last_login_at, created_at, updated_at`;
+
 const findById = async (id) => {
   const result = await pool.query(
-    `SELECT id, full_name, dni, email, phone, address, role, status, is_temp_password,
-            failed_attempts, locked_at, last_login_at, created_at, updated_at
+    `SELECT ${PROFILE_FIELDS}
      FROM users WHERE id = $1`,
     [id]
   );
@@ -64,9 +67,7 @@ const create = async ({ full_name, dni, email, address, password_hash, role }) =
 
 const findOwnProfileById = async (id) => {
   const result = await pool.query(
-    `SELECT id, full_name, dni, email, phone, address, role, status,
-            is_temp_password, failed_attempts, locked_at, last_login_at,
-            created_at, updated_at
+    `SELECT ${PROFILE_FIELDS}
      FROM users WHERE id = $1`,
     [id]
   );
