@@ -239,20 +239,37 @@ const create = async ({ full_name, dni, address, phone, email, assigned_collecto
   return result.rows[0];
 };
 
+/**
+ * Normaliza un campo opcional para UPDATE: distingue "no enviado" (undefined →
+ * no se toca) de "enviado vacío" ('' o null → NULL).
+ * @returns {[boolean, *]} [enviado, valor normalizado]
+ */
+const optionalField = (value) => [value !== undefined, value === '' ? null : (value ?? null)];
+
+/**
+ * Actualiza un cliente. Obligatorios (full_name, dni): null/omitido no cambia.
+ * Opcionales (address, phone, email, assigned_collector_id): omitido no cambia;
+ * null o '' los deja en NULL — así se desasigna el cobrador (issue #65).
+ */
 const update = async (id, { full_name, dni, address, phone, email, assigned_collector_id }) => {
   const result = await pool.query(
     `UPDATE customers
      SET full_name             = COALESCE($1, full_name),
          dni                   = COALESCE($2, dni),
-         address               = COALESCE($3, address),
-         phone                 = COALESCE($4, phone),
-         email                 = COALESCE($5, email),
-         assigned_collector_id = COALESCE($6, assigned_collector_id),
+         address               = CASE WHEN $3::boolean THEN $4::varchar ELSE address END,
+         phone                 = CASE WHEN $5::boolean THEN $6::varchar ELSE phone END,
+         email                 = CASE WHEN $7::boolean THEN $8::varchar ELSE email END,
+         assigned_collector_id = CASE WHEN $9::boolean THEN $10::uuid ELSE assigned_collector_id END,
          updated_at            = NOW()
-     WHERE id = $7
+     WHERE id = $11
      RETURNING id, full_name, dni, address, phone, email,
                status, assigned_collector_id, updated_at`,
-    [full_name, dni, address, phone, email, assigned_collector_id, id]
+    [
+      full_name, dni,
+      ...optionalField(address), ...optionalField(phone), ...optionalField(email),
+      ...optionalField(assigned_collector_id),
+      id,
+    ]
   );
   return result.rows[0] || null;
 };

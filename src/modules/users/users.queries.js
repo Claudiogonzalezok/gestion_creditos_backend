@@ -73,35 +73,50 @@ const findOwnProfileById = async (id) => {
   return result.rows[0] || null;
 };
 
+/**
+ * Normaliza un campo opcional para UPDATE: distingue "no enviado" (undefined →
+ * no se toca) de "enviado vacío" ('' o null → NULL).
+ * @returns {[boolean, *]} [enviado, valor normalizado]
+ */
+const optionalField = (value) => [value !== undefined, value === '' ? null : (value ?? null)];
+
+/**
+ * Actualiza un usuario (Admin). Obligatorios: null/omitido no cambia.
+ * Opcionales (email, address): omitido no cambia; null o '' → NULL (issue #65).
+ */
 const update = async (id, { full_name, dni, email, address, role }, client = pool) => {
   const result = await client.query(
     `UPDATE users
      SET full_name  = COALESCE($1, full_name),
          dni        = COALESCE($2, dni),
-         email      = COALESCE($3, email),
-         address    = COALESCE($4, address),
-         role       = COALESCE($5, role),
+         email      = CASE WHEN $3::boolean THEN $4::varchar ELSE email END,
+         address    = CASE WHEN $5::boolean THEN $6::varchar ELSE address END,
+         role       = COALESCE($7, role),
          updated_at = NOW()
-     WHERE id = $6
+     WHERE id = $8
      RETURNING id, full_name, dni, email, address, role, status`,
-    [full_name, dni, email, address, role, id]
+    [full_name, dni, ...optionalField(email), ...optionalField(address), role, id]
   );
   return result.rows[0] || null;
 };
 
+/**
+ * Actualiza el perfil propio. full_name: null/omitido no cambia.
+ * Opcionales (email, phone, address): omitido no cambia; null o '' → NULL (issue #65).
+ */
 const updateOwnProfile = async (id, { full_name, email, phone, address }) => {
   const result = await pool.query(
     `UPDATE users
      SET full_name  = COALESCE($1, full_name),
-         email      = COALESCE($2, email),
-         phone      = COALESCE($3, phone),
-         address    = COALESCE($4, address),
+         email      = CASE WHEN $2::boolean THEN $3::varchar ELSE email END,
+         phone      = CASE WHEN $4::boolean THEN $5::varchar ELSE phone END,
+         address    = CASE WHEN $6::boolean THEN $7::varchar ELSE address END,
          updated_at = NOW()
-     WHERE id = $5
+     WHERE id = $8
      RETURNING id, full_name, dni, email, phone, address, role, status,
                is_temp_password, failed_attempts, locked_at, last_login_at,
                created_at, updated_at`,
-    [full_name, email, phone, address, id]
+    [full_name, ...optionalField(email), ...optionalField(phone), ...optionalField(address), id]
   );
   return result.rows[0] || null;
 };

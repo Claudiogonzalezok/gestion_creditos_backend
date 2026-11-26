@@ -62,9 +62,9 @@ describe("users.queries — perfil propio", () => {
     expect(sql).not.toContain("dni        =");
     expect(params).toEqual([
       "Usuario Test",
-      "user@test.com",
-      "+54 11 5555-5555",
-      "Av. Test 123",
+      true, "user@test.com",
+      true, "+54 11 5555-5555",
+      true, "Av. Test 123",
       "usr-1",
     ]);
   });

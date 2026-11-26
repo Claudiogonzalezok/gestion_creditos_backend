@@ -573,6 +573,7 @@ const swaggerSpec = {
       put: {
         tags: ['Customers'],
         summary: 'Actualizar cliente',
+        description: 'Campo omitido: no cambia. En phone, email, address y assigned_collector_id, null o "" lo deja en NULL (assigned_collector_id: null desasigna el cobrador).',
         security: [{ internalAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }],
         requestBody: {
@@ -582,10 +583,10 @@ const swaggerSpec = {
                 type: 'object',
                 properties: {
                   full_name:            { type: 'string', minLength: 3, maxLength: 150 },
-                  phone:                { type: 'string' },
-                  email:                { type: 'string', format: 'email' },
-                  address:              { type: 'string', maxLength: 255 },
-                  assigned_collector_id:{ $ref: '#/components/schemas/UUID' },
+                  phone:                { type: 'string', nullable: true },
+                  email:                { type: 'string', format: 'email', nullable: true },
+                  address:              { type: 'string', maxLength: 255, nullable: true },
+                  assigned_collector_id:{ allOf: [{ $ref: '#/components/schemas/UUID' }], nullable: true },
                 },
               },
             },
