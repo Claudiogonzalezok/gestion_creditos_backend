@@ -2,6 +2,10 @@ const pool    = require('../../config/db');
 const queries = require('./productUnits.queries');
 const { withTransaction } = require('../../utils/transaction');
 
+// Tope de unidades por alta masiva (#38), igual al de initial_units en variantes.
+// Se valida también en el middleware.
+const MAX_BULK_UNITS = 10000;
+
 const assertVariantActive = async (variantId) => {
   const r = await pool.query(
     `SELECT pv.status, p.status AS product_status
@@ -45,6 +49,8 @@ const create = async ({ variantId, unitCode, notes }, userId) => {
 };
 
 const createBulk = async (variantId, units, userId) => {
+  if (!Array.isArray(units) || units.length > MAX_BULK_UNITS)
+    throw { status: 400, message: `Se pueden registrar hasta ${MAX_BULK_UNITS} unidades por lote.` };
   await assertVariantActive(variantId);
 
   // Verificar duplicados internos en el batch antes de ir a la DB
@@ -129,4 +135,4 @@ const activate = async (id, userId) => {
   });
 };
 
-module.exports = { getAll, getById, create, createBulk, update, deactivate, activate };
+module.exports = { MAX_BULK_UNITS, getAll, getById, create, createBulk, update, deactivate, activate };

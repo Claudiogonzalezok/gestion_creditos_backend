@@ -383,6 +383,7 @@ Otras cotas de entrada:
 - `GET /api/credits/simulate/products` (público): `limit` 1–50 (default 10).
 - `GET /api/cash-accounts/:id/movements` ya paginaba con `page`/`page_size` (máx. 100).
 - `POST /api/product-variants` y `/bulk`: `initial_units` 0–10.000 por variante y como suma total del lote (las filas sin `initial_units` cuentan 1).
+- `POST /api/product-units/bulk`: `units` admite entre 1 y 10.000 unidades por lote (middleware + servicio).
 - La generación de planillas inserta los detalles por lotes de 1000 filas (límite de 65535 parámetros de Postgres).
 
 

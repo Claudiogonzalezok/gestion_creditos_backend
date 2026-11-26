@@ -147,3 +147,14 @@ describe("cotas de parámetros", () => {
     expect(n.rows[0].n).toBe(0);
   });
 });
+
+describe("unidades bulk — tope de tamaño del lote", () => {
+  const units = (n) => Array.from({ length: n }, (_, i) => ({ unit_code: `P33-U-${i}` }));
+
+  it("el servicio rechaza lotes sobre el tope aunque se saltee el middleware", async () => {
+    const unitsService = require("../../src/modules/productUnits/productUnits.service");
+    await expect(
+      unitsService.createBulk(require("crypto").randomUUID(), units(10001), admin.id),
+    ).rejects.toMatchObject({ status: 400 });
+  });
+});
