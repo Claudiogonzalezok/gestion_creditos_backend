@@ -994,6 +994,8 @@ const swaggerSpec = {
                   unit_ids:                              { type: 'array', items: { $ref: '#/components/schemas/UUID' }, description: 'Requerido para SALE' },
                   down_payment:                          { type: 'number', minimum: 0 },
                   down_payment_method:                   { $ref: '#/components/schemas/PaymentMethod' },
+                  down_payment_cash:                     { type: 'number', minimum: 0, description: 'Split del enganche: parte en efectivo (alternativa a down_payment + down_payment_method)' },
+                  down_payment_transfer:                 { type: 'number', minimum: 0, description: 'Split del enganche: parte por transferencia. Con ambos > 0 se persiste MIXED' },
                   down_payment_transfer_reference:       { type: 'string', maxLength: 100 },
                   prepaid_installments:                  { type: 'integer', minimum: 1, maximum: 120, description: 'Solo SALE' },
                   prepaid_installments_method:           { $ref: '#/components/schemas/PaymentMethod' },

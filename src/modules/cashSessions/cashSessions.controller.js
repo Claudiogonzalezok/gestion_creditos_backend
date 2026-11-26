@@ -25,6 +25,11 @@ const open = async (req, res) => {
   }
 };
 
+/**
+ * Devuelve la caja activa de la jornada.
+ * Nota: el query param `owner` se resuelve pero el service lo ignora — la caja
+ * activa es única por jornada (modelo V4.6), no por cajero.
+ */
 const getActive = async (req, res) => {
   try {
     const ownerUserId =

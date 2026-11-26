@@ -35,8 +35,9 @@ Para SALE con múltiples productos: se calcula por producto de forma proporciona
 
 - El Vendedor lo ingresa al crear la pre-venta (opcional, solo SALE).
 - `capital = total_amount - down_payment`.
-- Al aprobar → registra en `credit_down_payments` tipo `DOWN_PAYMENT` (CASH o TRANSFER).
-- El enganche **reduce el capital** pero **no la comisión** (comisión = `total_amount × 8%`).
+- Se puede declarar con `down_payment_method` (legacy) o con el split `down_payment_cash` / `down_payment_transfer`; con ambos montos > 0 el método queda `MIXED`.
+- Al aprobar → registra en `credit_down_payments` tipo `DOWN_PAYMENT`.
+- El enganche **reduce el capital** pero **no la comisión** (comisión = `total_amount × commission_rate`, default 8%).
 - Impacta en caja directamente (no pasa por doble control de cobrador).
 
 ## Cuotas adelantadas al firmar (prepaid_installments)
@@ -162,7 +163,9 @@ Diferencia      = declared_cash - cash_amount (efectivo)
 ## Planillas de cobro
 
 - El Admin genera la planilla para un Cobrador y una fecha.
-- La planilla incluye cuotas PENDING, OVERDUE y PARTIAL según el filtro elegido.
+- La planilla incluye cuotas PENDING, OVERDUE y PARTIAL según el filtro elegido (default `ALL_PENDING`).
+- Si el filtro no devuelve cuotas → 409 y no se genera planilla.
 - No modifica estados — es informativa (snapshot del momento).
-- Si se regenera para el mismo cobrador y fecha, reemplaza la anterior.
+- Si se regenera para el mismo cobrador y fecha, la anterior pasa a `REGENERATED` (baja lógica, se conserva el historial). Con `skip_if_exists` no se regenera: se devuelve la existente.
+- Cobradores y no-admins no ven las planillas `REGENERATED`.
 - Cada cobrador solo ve su propia planilla.
