@@ -418,7 +418,7 @@ PATCH  /api/users/me/change-password
 GET    /api/customers
 GET    /api/customers/:id            → COLLECTOR: solo clientes asignados (404 si no)
 POST   /api/customers
-PUT    /api/customers/:id
+PUT    /api/customers/:id            # campo omitido no cambia; null o "" en phone/email/address/assigned_collector_id lo deja en NULL
 PATCH  /api/customers/:id/deactivate | activate
 PATCH  /api/customers/:id/enable-portal | disable-portal
 PATCH  /api/customers/:id/reset-portal-password
