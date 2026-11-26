@@ -151,24 +151,6 @@ const swaggerSpec = {
       },
     },
 
-    '/auth/forgot-password': {
-      post: {
-        tags: ['Auth'], summary: 'Pedir enlace de recuperación de contraseña (público, #88)',
-        description: 'Siempre responde 200 con el mismo mensaje exista o no el email. Límite por IP (429).',
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['email'], properties: { email: { type: 'string', format: 'email' } } } } } },
-        responses: { 200: { description: 'Mensaje genérico' }, 400: { description: 'Email inválido' }, 429: { description: 'Demasiados intentos' }, 503: { description: 'NOTIFIER_NOT_CONFIGURED' } },
-      },
-    },
-
-    '/auth/reset-password': {
-      post: {
-        tags: ['Auth'], summary: 'Fijar nueva contraseña con el token recibido (público, #88)',
-        description: 'Token de un solo uso con vencimiento. Cierra todas las sesiones del usuario. No desbloquea la cuenta.',
-        requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['token', 'new_password'], properties: { token: { type: 'string' }, new_password: { type: 'string', minLength: 8, maxLength: 100 } } } } } },
-        responses: { 200: { description: 'Contraseña actualizada' }, 400: { description: 'Validación o INVALID_RESET_TOKEN' }, 429: { description: 'Demasiados intentos' } },
-      },
-    },
-
     '/auth/me': {
       get: {
         tags: ['Auth'],
@@ -1104,23 +1086,6 @@ const swaggerSpec = {
         tags: ['Installments'], summary: 'Condonar mora de una cuota', security: [{ internalAuth: [] }],
         parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }],
         responses: { 200: { description: 'Mora condonada' } },
-      },
-    },
-
-    '/installments/{id}/notify-overdue': {
-      post: {
-        tags: ['Installments'], summary: 'Avisar mora al cliente por email (#88)', security: [{ internalAuth: [] }],
-        description: 'ADMIN, COLLECTOR y SELLER_COLLECTOR (cobradores solo clientes asignados). Idempotente por cuota y día.',
-        parameters: [{ name: 'id', in: 'path', required: true, schema: { $ref: '#/components/schemas/UUID' } }],
-        responses: {
-          201: { description: 'Aviso enviado: { already_notified: false, notice }' },
-          200: { description: 'Ya avisado hoy: { already_notified: true, notice } (no reenvía)' },
-          403: { description: 'Rol sin acceso o cliente no asignado al cobrador' },
-          404: { $ref: '#/components/responses/NotFound' },
-          409: { description: 'INSTALLMENT_NOT_OVERDUE' },
-          422: { description: 'CUSTOMER_NO_EMAIL' },
-          503: { description: 'NOTIFIER_NOT_CONFIGURED' },
-        },
       },
     },
 

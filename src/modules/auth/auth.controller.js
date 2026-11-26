@@ -178,33 +178,7 @@ const me = async (req, res) => {
   }
 };
 
-const MSG_FORGOT_PASSWORD =
-  'Si el email corresponde a una cuenta activa, te enviamos un enlace para recuperar la contraseña.';
-
-// POST /api/auth/forgot-password — misma respuesta exista o no el usuario.
-const forgotPassword = async (req, res) => {
-  try {
-    await require('./passwordReset.service').requestReset(req.body.email);
-    return response.success(res, null, MSG_FORGOT_PASSWORD);
-  } catch (err) {
-    if (err.status === 503) return res.status(503).json({ ok: false, message: err.message, code: err.code });
-    return response.serverError(res, err);
-  }
-};
-
-// POST /api/auth/reset-password
-const resetPassword = async (req, res) => {
-  try {
-    await require('./passwordReset.service').resetPassword(req.body.token, req.body.new_password);
-    return response.success(res, null, 'Contraseña actualizada. Iniciá sesión con tu nueva contraseña.');
-  } catch (err) {
-    if (err.status === 400) return res.status(400).json({ ok: false, message: err.message, code: err.code });
-    return response.serverError(res, err);
-  }
-};
-
 module.exports = {
-  forgotPassword, resetPassword,
   loginInternal, loginPortal,
   refreshInternal, refreshPortal,
   logout, logoutPortal,

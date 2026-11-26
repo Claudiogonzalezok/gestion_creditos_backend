@@ -19,7 +19,7 @@ const DEFAULT_VALUES = {
   commission_pay_day:        { value: '1',      description: 'Día de pago de liquidaciones (ISO: 1=Lun)' },
   company_sale_rate_monthly: { value: '0',      description: 'Tasa mensual de referencia para VENTA (datos de empresa; no reemplaza product_rates)' },
   company_loan_rate_monthly: { value: '0',      description: 'Tasa mensual de referencia para PRÉSTAMO (datos de empresa; no reemplaza interest_rates)' },
-  password_reset_expiry_min: { value: '30',     description: 'Minutos de validez del enlace de recuperación de contraseña' },};
+};
 
 const findAll = async () => {
   const result = await pool.query(

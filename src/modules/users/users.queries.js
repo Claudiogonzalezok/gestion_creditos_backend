@@ -148,23 +148,6 @@ const resetPassword = async (id, password_hash, client = pool) => {
   );
 };
 
-/**
- * Fija la contraseña elegida por el propio usuario al consumir un token de
- * recuperación. No es temporal y NO desbloquea la cuenta (eso sigue siendo
- * exclusivo del ADMIN); sí reinicia el contador de intentos fallidos.
- * @param {string} id
- * @param {string} password_hash
- * @param {Object} [client] - client de una transacción en curso (default: pool)
- */
-const setPasswordFromReset = async (id, password_hash, client = pool) => {
-  await client.query(
-    `UPDATE users
-     SET password_hash = $1, is_temp_password = FALSE, failed_attempts = 0, updated_at = NOW()
-     WHERE id = $2`,
-    [password_hash, id]
-  );
-};
-
 const changePassword = async (id, password_hash) => {
   await pool.query(
     `UPDATE users
@@ -210,6 +193,6 @@ const invalidateSessions = async (id, client = pool) => {
 
 module.exports = {
   findAll, findById, findByDni, findByEmail, countActiveAdmins,
-  create, update, lockActiveAdmins, deactivate, activate, resetPassword, setPasswordFromReset, changePassword, unlock,
+  create, update, lockActiveAdmins, deactivate, activate, resetPassword, changePassword, unlock,
   setForceReloginAt, invalidateSessions, findOwnProfileById, updateOwnProfile,
 };

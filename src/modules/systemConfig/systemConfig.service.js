@@ -15,7 +15,7 @@ const VALID_RANGES = {
   commission_pay_day:        { min: 1,    max: 7        },
   company_sale_rate_monthly: { min: 0,    max: 1        },
   company_loan_rate_monthly: { min: 0,    max: 1        },
-  password_reset_expiry_min: { min: 5,    max: 1440     },};
+};
 
 // Decimal simple: dígitos con parte fraccionaria opcional y signo opcional.
 // Rechaza notación científica, hexadecimal, sufijos ("12abc") y vacíos.

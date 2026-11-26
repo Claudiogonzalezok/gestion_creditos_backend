@@ -31,13 +31,6 @@ router.get('/:id/management-log',
   controller.getManagementLog
 );
 
-// Aviso de mora al cliente (#88). Cobradores: solo clientes asignados (servicio).
-router.post('/:id/notify-overdue',
-  authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'),
-  v.penalties.id, validate,
-  require('../notifications/overdueNotice.controller').notifyOverdue
-);
-
 router.patch('/:id/apply-penalty',
   authorize('ADMIN'), v.penalties.apply,    validate, controller.applyPenalty
 );
