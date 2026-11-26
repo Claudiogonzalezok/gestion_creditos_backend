@@ -311,12 +311,15 @@ const approve = async (
 
 /**
  * Genera el cronograma de cuotas de un crédito con monto fijo y fechas precalculadas.
- * Guarda due_date como original_amount para soporte de corrimiento por pagos adelantados.
+ * Inserta una cuota por fecha (numeradas desde 1) con amount_due y
+ * original_amount iguales a installmentAmount: original_amount congela el monto
+ * pactado al aprobar, aunque luego se sume mora a amount_due.
  * @param {object} client - Cliente de transacción.
  * @param {string} creditId
  * @param {number} installmentAmount - Monto por cuota (uniforme para todas).
  * @param {Date[]} dueDates - Fechas de vencimiento en orden.
  * @param {string} paymentFrequency - DAILY | WEEKLY | BIWEEKLY | MONTHLY.
+ * @returns {Promise<Array<{id: string, installment_number: number, amount_due: number}>>} Cuotas creadas.
  */
 const generateInstallments = async (
   client,

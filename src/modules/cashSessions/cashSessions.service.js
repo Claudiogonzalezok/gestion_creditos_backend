@@ -219,7 +219,9 @@ const resolveOrCreateBusinessDay = async (client, branchId) => {
  * @param {string} [data.owner_user_id]   (cajero del turno)
  * @param {string} [data.branch_id]
  * @param {string} [data.observations]
- * @param {string} [data.shift_label]
+ * @param {string} [data.shift_label] - En desuso desde la migración 037 (sin
+ *   multi-turno): se ignora y no se persiste; la columna se conserva solo por
+ *   compatibilidad con datos históricos.
  * @param {object} requestingUser
  */
 const open = async (data, requestingUser) => {
