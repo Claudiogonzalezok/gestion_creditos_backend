@@ -205,7 +205,9 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
     `WITH collector_payments AS (
        SELECT
          p.*,
-         COALESCE(bd.business_date, p.approved_at::date) AS jornada_date
+         -- Las pre-cargas PENDING no tienen approved_at ni caja: caen a created_at
+         -- para contar en total_payments y en la tasa de aprobación.
+         COALESCE(bd.business_date, p.approved_at::date, p.created_at::date) AS jornada_date
        FROM payments p
        LEFT JOIN cash_sessions cs ON cs.id = p.cash_session_id
        LEFT JOIN business_days bd ON bd.id = cs.business_day_id
@@ -214,17 +216,17 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
        u.id                                                                      AS collector_id,
        u.full_name                                                               AS collector_name,
        u.role,
-       COUNT(p.id)::int                                                          AS total_payments,
-       COUNT(p.id) FILTER (WHERE p.status = 'APPROVED')::int                    AS approved_count,
-       COUNT(p.id) FILTER (WHERE p.status = 'REJECTED')::int                    AS rejected_count,
-       COALESCE(SUM(p.amount_received) FILTER (
-         WHERE p.status = 'APPROVED'
-           AND NOT p.is_reversal
-           AND NOT EXISTS (SELECT 1 FROM payments rev WHERE rev.reversed_by_payment_id = p.id)
-       ), 0)::float8 AS total_collected,
+       -- Las filas is_reversal no son cobros del cobrador: no cuentan en los conteos.
+       COUNT(p.id) FILTER (WHERE NOT p.is_reversal)::int                        AS total_payments,
+       COUNT(p.id) FILTER (WHERE p.status = 'APPROVED' AND NOT p.is_reversal)::int AS approved_count,
+       COUNT(p.id) FILTER (WHERE p.status = 'REJECTED' AND NOT p.is_reversal)::int AS rejected_count,
+       -- Neteo de reversiones igual que getCollectionReport: la reversión RESTA
+       -- en su propia jornada, así ambos reportes coinciden para el mismo rango.
+       COALESCE(SUM(CASE WHEN p.is_reversal THEN -p.amount_received ELSE p.amount_received END)
+         FILTER (WHERE p.status = 'APPROVED'), 0)::float8                      AS total_collected,
        COALESCE(ROUND(
-         COUNT(p.id) FILTER (WHERE p.status = 'APPROVED')::numeric /
-         NULLIF(COUNT(p.id), 0) * 100, 2
+         COUNT(p.id) FILTER (WHERE p.status = 'APPROVED' AND NOT p.is_reversal)::numeric /
+         NULLIF(COUNT(p.id) FILTER (WHERE NOT p.is_reversal), 0) * 100, 2
        ), 0)::float8                                                             AS approval_rate,
        COALESCE(ROUND(
          AVG(EXTRACT(EPOCH FROM (p.approved_at - p.created_at)) / 3600)
@@ -233,7 +235,6 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
      FROM users u
      LEFT JOIN collector_payments p
        ON p.collector_id = u.id
-       AND p.status = 'APPROVED'
        AND p.jornada_date BETWEEN $1 AND $2
      WHERE u.role IN ('COLLECTOR','SELLER_COLLECTOR','ADMIN') AND u.status = 'ACTIVE'
      GROUP BY u.id, u.full_name, u.role
