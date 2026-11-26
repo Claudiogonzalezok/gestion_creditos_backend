@@ -22,6 +22,20 @@ const assertVariantActive = async (variantId) => {
     throw { status: 409, message: 'No se pueden agregar unidades a un producto inactivo.' };
 };
 
+/**
+ * Construye el error 409 para un unit_code ya existente, distinguiendo si
+ * pertenece a una unidad dada de baja (no reutilizable) o a una vigente.
+ * @param {string} unitCode - Código en conflicto.
+ * @param {{status:string}} existing - Unidad encontrada con ese código.
+ * @returns {{status:number, message:string}}
+ */
+const unitCodeConflictError = (unitCode, existing) => ({
+  status: 409,
+  message: existing.status === 'INACTIVE'
+    ? `El código "${unitCode}" pertenece a una unidad dada de baja y no puede reutilizarse.`
+    : `Ya existe una unidad con el código "${unitCode}".`,
+});
+
 const getAll = async (filters) => queries.findAll(filters);
 
 const getById = async (id) => {
@@ -34,12 +48,7 @@ const create = async ({ variantId, unitCode, notes }, userId) => {
   await assertVariantActive(variantId);
 
   const existing = await queries.findByUnitCode(unitCode);
-  if (existing) {
-    const detail = existing.status === 'INACTIVE'
-      ? `El código "${unitCode}" pertenece a una unidad dada de baja y no puede reutilizarse.`
-      : `Ya existe una unidad con el código "${unitCode}".`;
-    throw { status: 409, message: detail };
-  }
+  if (existing) throw unitCodeConflictError(unitCode, existing);
 
   // findById se llama fuera de la transacción para que lea datos ya committeados
   const inserted = await withTransaction(async (client) => {
@@ -64,12 +73,7 @@ const createBulk = async (variantId, units, userId) => {
     const ids = [];
     for (const u of units) {
       const existing = await queries.findByUnitCodeForClient(client, u.unit_code);
-      if (existing) {
-        const detail = existing.status === 'INACTIVE'
-          ? `El código "${u.unit_code}" pertenece a una unidad dada de baja y no puede reutilizarse.`
-          : `Ya existe una unidad con el código "${u.unit_code}".`;
-        throw { status: 409, message: detail };
-      }
+      if (existing) throw unitCodeConflictError(u.unit_code, existing);
       const unit = await queries.create(client, {
         variantId, unitCode: u.unit_code, notes: u.notes, userId,
       });

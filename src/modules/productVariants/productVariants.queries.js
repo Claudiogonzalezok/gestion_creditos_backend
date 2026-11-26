@@ -76,16 +76,6 @@ const findByProductId = async (productId) => {
   return r.rows;
 };
 
-const create = async ({ productId, color, size, capacity, currentPrice }) => {
-  const r = await pool.query(
-    `INSERT INTO product_variants (product_id, color, size, capacity, current_price)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, product_id, color, size, capacity, current_price::float8, status, created_at, updated_at`,
-    [productId, color || null, size || null, capacity || null, currentPrice]
-  );
-  return r.rows[0];
-};
-
 /**
  * Crea una variante usando un cliente transaccional.
  * @param {object} client - Cliente de PostgreSQL.
@@ -169,6 +159,6 @@ const findDuplicate = async (productId, color, size, capacity, excludeId = null)
 
 module.exports = {
   findAll, findById, findByProductId,
-  create, createWithClient, update, deactivate, activate,
+  createWithClient, update, deactivate, activate,
   hasActiveUnits, findActiveProductById, findDuplicate,
 };
