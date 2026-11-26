@@ -24,4 +24,21 @@ const computeAvailableCash = (session, totals) =>
   totals.conversions_cash_delta -
   totals.drops_cash;
 
-module.exports = { computeAvailableCash };
+/**
+ * Saldo esperado en transferencias de la caja: misma fórmula que el efectivo
+ * pero sobre las columnas *_transfer (la apertura en transferencia es 0).
+ * @param {object} totals - Resultado de computeSessionTotals.
+ * @returns {number} Transferencia esperada.
+ */
+const computeExpectedTransfer = (totals) =>
+  0 +
+  totals.collections_payments_transfer +
+  totals.collections_down_payments_transfer +
+  totals.collections_manual_incomes_transfer -
+  totals.outflows_expenses_transfer -
+  totals.outflows_commissions_transfer -
+  totals.outflows_loans_transfer +
+  totals.conversions_transfer_delta -
+  totals.drops_transfer;
+
+module.exports = { computeAvailableCash, computeExpectedTransfer };

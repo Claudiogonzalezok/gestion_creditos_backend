@@ -17,15 +17,12 @@ const idParam = [
 
 // IMP-6: SALARY_PAYMENT excluido del POST público (única vía:
 // commissions.liquidate). Sí se acepta como filtro de listado.
-const PUBLIC_TYPES = [
-  "SUPPLIER_PAYMENT",
-  "EXPENSE",
-  "ADJUSTMENT",
-  "MANUAL_INCOME",
-];
+const {
+  PUBLIC_MOVEMENT_TYPES: PUBLIC_TYPES,
+  ALL_MOVEMENT_TYPES: ALL_TYPES,
+} = require("./cashAccounts.constants");
 // Tipos públicos que siempre son egreso (ADJUSTMENT depende de direction).
 const OUT_TYPES = ["SUPPLIER_PAYMENT", "EXPENSE"];
-const ALL_TYPES = ["DROP_IN", "SALARY_PAYMENT", ...PUBLIC_TYPES];
 
 router.get("/", controller.getAll);
 
