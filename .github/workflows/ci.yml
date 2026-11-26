@@ -54,19 +54,23 @@ jobs:
           echo "integration=$(node -p "require('./scope.json').integrationTests.filter(f => require('fs').existsSync(f)).join(' ')")" >> "$GITHUB_OUTPUT"
           echo "lint=$(node -p "require('./scope.json').lintFiles.filter(f => require('fs').existsSync(f)).join(' ')")" >> "$GITHUB_OUTPUT"
 
+      # Versión de pnpm tomada de `packageManager` en package.json.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        if: steps.scope.outputs.mode != 'none'
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.scope.outputs.mode != 'none'
         with:
-          node-version: 22
-          cache: npm
+          node-version-file: .nvmrc
+          cache: pnpm
 
       - name: Install
         if: steps.scope.outputs.mode != 'none'
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Scope script tests
         if: steps.scope.outputs.mode != 'none'
-        run: npm run test:scope
+        run: pnpm run test:scope
 
       - name: Lint changed files
         if: steps.scope.outputs.mode != 'none'
@@ -77,35 +81,35 @@ jobs:
           if [ "$EVENT" != "pull_request" ]; then
             echo "El lint corre solo sobre el diff del PR (adopción incremental)."
           elif [ -n "$FILES" ]; then
-            npx eslint --max-warnings 0 $FILES
+            pnpm exec eslint --max-warnings 0 $FILES
           else
             echo "No hay archivos lintables cambiados."
           fi
 
       - name: Unit tests (full, with coverage threshold)
         if: steps.scope.outputs.mode == 'full'
-        run: npm run test:unit:ci
+        run: pnpm run test:unit:ci
 
       - name: Unit tests (related to changed files)
         if: steps.scope.outputs.mode == 'affected' && steps.scope.outputs.unit != ''
         env:
           NODE_ENV: test
           FILES: ${{ steps.scope.outputs.unit }}
-        run: npx jest --config jest.unit.config.js --runInBand --passWithNoTests --findRelatedTests $FILES
+        run: pnpm exec jest --config jest.unit.config.js --runInBand --passWithNoTests --findRelatedTests $FILES
 
       - name: Start test database
         if: steps.scope.outputs.mode == 'full' || steps.scope.outputs.integration != ''
-        run: npm run test:db:up
+        run: pnpm run test:db:up
 
       - name: Integration tests (full)
         if: steps.scope.outputs.mode == 'full'
-        run: npm run test:integration
+        run: pnpm run test:integration
 
       - name: Integration tests (affected modules)
         if: steps.scope.outputs.mode == 'affected' && steps.scope.outputs.integration != ''
         env:
           FILES: ${{ steps.scope.outputs.integration }}
-        run: npx jest --config jest.integration.config.js --runInBand $FILES
+        run: pnpm exec jest --config jest.integration.config.js --runInBand $FILES
 
   nightly-report:
     name: Report nightly failure

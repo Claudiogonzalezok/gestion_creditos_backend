@@ -40,6 +40,9 @@ test('el código compartido obliga a la suite completa', () => {
     'src/jobs/overdueInstallments.job.js',
     'package.json',
     'package-lock.json',
+    'pnpm-lock.yaml',
+    'pnpm-workspace.yaml',
+    '.nvmrc',
     'tests/integration/helpers/fixtures.js',
     'tests/integration/globalSetup.js',
     'jest.unit.config.js',
@@ -92,7 +95,7 @@ test('la corrida forzada ignora la lista de archivos', () => {
   assert.equal(resolveScope(['README.md'], { forceFull: true }).mode, 'full');
 });
 
-test('install.mjs de husky es compartido: corre en cada npm ci', () => {
+test('install.mjs de husky es compartido: corre en cada pnpm install', () => {
   assert.equal(resolveScope(['.husky/install.mjs']).mode, 'full');
   assert.equal(resolveScope(['.husky/pre-commit']).mode, 'none');
 });

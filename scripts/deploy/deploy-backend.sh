@@ -6,7 +6,7 @@
 #   --ref <rama>   rama de origin a desplegar (default: main)
 #   --force        reinicia aunque no haya commits nuevos
 #
-# Pasos: backup de la base → fast-forward a origin/<ref> → npm ci (solo si cambió
+# Pasos: backup de la base → fast-forward a origin/<ref> → pnpm install (solo si cambió
 # el lock) → migraciones → restart PM2 → health check. Si algo falla después de
 # mover el código, vuelve solo al commit anterior. Las migraciones NO se revierten:
 # si una migración ya aplicada rompe algo, restaurar el dump de pre-deploy.
@@ -77,10 +77,22 @@ log "💾 Backup de la base antes de desplegar"
 
 # ── Rollback de código ante cualquier falla a partir de acá ──────────────────
 deps_changed=0
+
+# Instala dependencias de producción con el gestor del commit actual: pnpm si hay
+# pnpm-lock.yaml; npm si el rollback vuelve a un commit previo a la migración (#60).
+# CI=true evita que pnpm pida confirmación (sin TTY) al reemplazar un node_modules de npm.
+install_deps() {
+  if [[ -f pnpm-lock.yaml ]]; then
+    CI=true pnpm install --frozen-lockfile --prod
+  else
+    npm ci --omit=dev --no-audit --no-fund
+  fi
+}
+
 rollback() {
   log "↩️  Falla: volviendo a $(git rev-parse --short "$PREV")"
   git reset --quiet --hard "$PREV"
-  if (( deps_changed )); then npm ci --omit=dev --no-audit --no-fund >>"$LOG_FILE" 2>&1 || true; fi
+  if (( deps_changed )); then install_deps >>"$LOG_FILE" 2>&1 || true; fi
   pm2 restart "$PM2_NAME" --update-env >/dev/null || true
   log "↩️  Código revertido. Si se aplicó alguna migración, NO se deshizo: evaluar restaurar el dump de arriba."
 }
@@ -88,14 +100,14 @@ trap 'rollback; rm -f "$DEPLOY_SELF"' ERR
 
 git merge --quiet --ff-only "$NEXT"
 
-if ! git diff --quiet "$PREV" "$NEXT" -- package.json package-lock.json; then
+if ! git diff --quiet "$PREV" "$NEXT" -- package.json package-lock.json pnpm-lock.yaml pnpm-workspace.yaml; then
   deps_changed=1
-  log "📦 Cambiaron las dependencias: npm ci --omit=dev"
-  npm ci --omit=dev --no-audit --no-fund >>"$LOG_FILE" 2>&1
+  log "📦 Cambiaron las dependencias: pnpm install --frozen-lockfile --prod"
+  install_deps >>"$LOG_FILE" 2>&1
 fi
 
 log "🗄️  Migraciones"
-npm run --silent migration:run 2>&1 | grep -E '▶️|✅|❌|🎉|✔️' | tee -a "$LOG_FILE"
+pnpm run --silent migration:run 2>&1 | grep -E '▶️|✅|❌|🎉|✔️' | tee -a "$LOG_FILE"
 
 log "🔄 Reiniciando $PM2_NAME"
 pm2 restart "$PM2_NAME" --update-env >/dev/null

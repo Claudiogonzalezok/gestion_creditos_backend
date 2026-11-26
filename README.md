@@ -228,18 +228,52 @@ Para SALE con múltiples productos, la cuota se calcula por producto de forma pr
 ## Instalación
 
 ```bash
-# 1. Instalar dependencias (respeta package-lock.json; también instala los hooks de git)
-npm ci
+# 0. Node 22.13+ (ver .nvmrc) y pnpm en la versión de `packageManager`
+corepack enable
+
+# 1. Instalar dependencias (respeta pnpm-lock.yaml; también instala los hooks de git)
+pnpm install --frozen-lockfile
 
 # 2. Configurar variables de entorno
 cp .env.example .env
 
 # 3. Crear la base de datos, aplicar migraciones y cargar datos iniciales
-npm run db:setup
+pnpm run db:setup
 
 # 4. Iniciar
-npm run dev
+pnpm run dev
 ```
+
+### Gestor de paquetes: pnpm
+
+El repo usa **pnpm** (versión fijada en `packageManager` de `package.json`; Node en `.nvmrc` y `engines`).
+La configuración vive en `pnpm-workspace.yaml`:
+
+- `allowBuilds`: los scripts de instalación de dependencias están bloqueados. Solo corren los
+  paquetes listados con `true`. Hoy ninguno lo necesita (`bcryptjs` es JS puro); `@scarf/scarf`
+  (telemetría) queda denegado.
+- `minimumReleaseAge`: no se instalan versiones publicadas hace menos de 3 días.
+- `node_modules` estricto: importar un paquete no declarado en `package.json` falla.
+
+Para agregar una dependencia: `pnpm add <paquete>` (o `pnpm add -D`). Nunca usar `npm install`:
+generaría un `package-lock.json` que no se versiona.
+
+### Migrar el servidor (VPS) a pnpm — pasos manuales, una sola vez
+
+El script de deploy (`scripts/deploy/deploy-backend.sh`) ya usa pnpm, pero el servidor tiene que
+tenerlo antes del primer deploy con esta versión. Hacerlo primero en staging, con el rollback listo:
+
+```bash
+node -v                       # debe ser >= 22.13 (lo exige pnpm 11); si no, actualizar Node
+corepack enable               # activa pnpm según `packageManager`
+cd ~/apps/backend
+corepack prepare --activate   # descarga la versión de pnpm fijada en package.json
+pnpm -v                       # debe coincidir con `packageManager`
+```
+
+Después, desplegar normalmente. Como cambian `package.json` y el lockfile, el script corre
+`pnpm install --frozen-lockfile --prod`, que reemplaza el `node_modules` de npm. Si el deploy
+falla y vuelve a un commit anterior a la migración, el rollback reinstala con `npm ci`.
 
 ### Variables de entorno
 
@@ -273,35 +307,35 @@ ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
 > - El arranque falla si `ENABLE_TEST_ROUTES=true` o si falta `DB_USER` / `DB_PASSWORD` (no hay fallback a `postgres` sin contraseña).
 > - La documentación Swagger (`/api/docs`) no se monta y responde 404. En desarrollo sigue disponible.
 
-### Scripts npm
+### Scripts
 
 | Comando                          | Descripción                                                |
 | -------------------------------- | ---------------------------------------------------------- |
-| `npm run db:setup`               | Primer setup: crea la BD si no existe + migraciones + seed |
-| `npm run db:reset`               | ⚠️ Reset total: borra todo, recrea, migra y seedea         |
-| `npm run migration:run`          | Solo aplica migraciones nuevas (no destructivo)            |
-| `npm run seed`                   | Solo ejecuta el seed                                       |
-| `npm run dev`                    | Servidor en modo desarrollo con hot reload                 |
-| `npm run dev:e2e`                | Servidor sin rate limit en login + test routes activas     |
-| `npm start`                      | Servidor en modo producción                                |
-| `npm run test:unit`              | Tests unitarios con Jest (mock de BD)                      |
-| `npm run test:unit:ci`           | Unitarios con cobertura y umbral mínimo (como en CI)       |
-| `npm run test:scope`             | Tests del script que decide el alcance de CI               |
-| `npm run lint -- <archivos>`     | ESLint sobre archivos puntuales (sin warnings permitidos)  |
-| `npm run format -- <archivos>`   | Prettier sobre archivos puntuales                          |
-| `npm run test:integration`       | Tests de integración con BD real (Docker)                  |
-| `npm run test:integration:local` | Tests de integración con BD local (sin Docker)             |
-| `npm run test:all`               | Unit + integration en secuencia                            |
-| `npm run test:db:up`             | Levanta BD PostgreSQL de test en Docker                    |
+| `pnpm run db:setup`               | Primer setup: crea la BD si no existe + migraciones + seed |
+| `pnpm run db:reset`               | ⚠️ Reset total: borra todo, recrea, migra y seedea         |
+| `pnpm run migration:run`          | Solo aplica migraciones nuevas (no destructivo)            |
+| `pnpm run seed`                   | Solo ejecuta el seed                                       |
+| `pnpm run dev`                    | Servidor en modo desarrollo con hot reload                 |
+| `pnpm run dev:e2e`                | Servidor sin rate limit en login + test routes activas     |
+| `pnpm start`                      | Servidor en modo producción                                |
+| `pnpm run test:unit`              | Tests unitarios con Jest (mock de BD)                      |
+| `pnpm run test:unit:ci`           | Unitarios con cobertura y umbral mínimo (como en CI)       |
+| `pnpm run test:scope`             | Tests del script que decide el alcance de CI               |
+| `pnpm run lint -- <archivos>`     | ESLint sobre archivos puntuales (sin warnings permitidos)  |
+| `pnpm run format -- <archivos>`   | Prettier sobre archivos puntuales                          |
+| `pnpm run test:integration`       | Tests de integración con BD real (Docker)                  |
+| `pnpm run test:integration:local` | Tests de integración con BD local (sin Docker)             |
+| `pnpm run test:all`               | Unit + integration en secuencia                            |
+| `pnpm run test:db:up`             | Levanta BD PostgreSQL de test en Docker                    |
 
 **Setup re-ejecutable.** `migration:run` y `seed` se pueden correr las veces que haga falta:
 
 - Las migraciones aplicadas se registran por nombre en `_migrations` y no se repiten. Un advisory lock evita que dos procesos migren a la vez. Los prefijos repetidos históricos (002, 006, 007, 033, 037) ya están aplicados en producción y no se renumeran; un prefijo repetido nuevo aborta el runner. Las correcciones van en migraciones nuevas (p. ej. 051 bloquea el `DELETE` físico de planillas).
 - Las semillas abortan con `NODE_ENV=production`, no cambian contraseñas de usuarios existentes y no duplican datos. La demo de planillas admin solo se regenera a mano con `node src/seeds/11_admin_collections_ui_refresh.seed.js`.
 - `tests/integration/idempotent-setup.test.js` corre migraciones y semillas dos veces sobre una BD vacía y compara `password_hash` y conteos.
-| `npm run test:db:down`           | Baja y elimina el contenedor de test                       |
-| `npm run cron:run`               | Ejecuta un cron job manualmente                            |
-| `npm run db:studio`              | Explorador de BD liviano en consola                        |
+| `pnpm run test:db:down`           | Baja y elimina el contenedor de test                       |
+| `pnpm run cron:run`               | Ejecuta un cron job manualmente                            |
+| `pnpm run db:studio`              | Explorador de BD liviano en consola                        |
 
 ### Migration runner
 
@@ -326,15 +360,15 @@ Usan Jest con mocks de `../../config/db`. Cada suite hace `cache.clearAll()` en 
 
 ### Integración (`test:integration`)
 
-Corren contra una BD PostgreSQL real levantada en Docker (`docker-compose.test.yml`). Requieren `npm run test:db:up` antes de ejecutarlos. Usan `supertest` sobre la app Express completa.
+Corren contra una BD PostgreSQL real levantada en Docker (`docker-compose.test.yml`). Requieren `pnpm run test:db:up` antes de ejecutarlos. Usan `supertest` sobre la app Express completa.
 
 ---
 
 ## Calidad y CI
 
-**Hooks de git** (Husky, se instalan con `npm ci`; en producción con `--omit=dev` se omiten sin error):
+**Hooks de git** (Husky, se instalan con `pnpm install`; en producción con `--prod` se omiten sin error):
 - `pre-commit`: ESLint (`--max-warnings 0`) y Prettier (`--write`) solo sobre los archivos staged.
-- `pre-push`: tests del script de alcance y suite unitaria (`npm run test:unit`).
+- `pre-push`: tests del script de alcance y suite unitaria (`pnpm run test:unit`).
 
 **Lint incremental:** no se reformatea el repo de una vez. Cada archivo que tocás tiene que quedar limpio. Reglas: `eslint:recommended`, sin `console.log` (se permiten `console.warn` y `console.error`; los scripts, seeds, jobs y tests quedan exentos). La regla "sin `any`" no aplica: el backend es JavaScript.
 
@@ -834,7 +868,7 @@ Tesorería (cash_accounts):
 | `tokenCleanup`          | `0 4 * * *`            | Elimina tokens expirados de blacklist    |
 
 Cada ejecución queda registrada en `cron_execution_log` (estado, duración, error si hubo).  
-`npm run cron:run` permite disparar un job manualmente en desarrollo.
+`pnpm run cron:run` permite disparar un job manualmente en desarrollo.
 
 Cada corrida toma un advisory lock de PostgreSQL por job (`pg_try_advisory_lock(hashtext('cron:<job>'))`):
 si otra instancia (PM2 en cluster, `cron:run` manual) ya está ejecutando ese job, la corrida se saltea
