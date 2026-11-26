@@ -86,6 +86,11 @@ const findCredits = async (customerId, graceDays = 0) => {
         WHERE i2.credit_id = c.id AND i2.status IN ('PENDING','OVERDUE','PARTIAL')
         ORDER BY i2.due_date ASC LIMIT 1)                           AS next_due_amount,
        COALESCE(SUM(i.amount_due), 0)::float8               AS total_to_return,
+       -- Mismo cálculo que total_owed del resumen y que el detalle (#98).
+       COALESCE(SUM(i.amount_paid), 0)::float8              AS amount_paid,
+       COALESCE(SUM(i.amount_due - i.amount_paid)
+                FILTER (WHERE i.status IN ('PENDING','OVERDUE','PARTIAL')), 0)::float8
+                                                            AS remaining_amount,
        COALESCE(SUM(i.penalty_amount) FILTER (WHERE ${IS_OVERDUE_DERIVED('i', '$2')}), 0)::float8
                                                             AS pending_penalty,
        BOOL_OR(${IS_OVERDUE_DERIVED('i', '$2')})            AS has_overdue,
@@ -107,6 +112,25 @@ const findCredits = async (customerId, graceDays = 0) => {
      GROUP BY c.id
      ORDER BY c.created_at DESC`,
     [customerId, graceDays],
+  );
+  return r.rows;
+};
+
+/**
+ * Cuotas de varios créditos (para el listado del portal, #98).
+ * @param {string[]} creditIds
+ * @returns {Promise<object[]>} filas ordenadas por crédito y número de cuota
+ */
+const findInstallmentsByCreditIds = async (creditIds) => {
+  if (creditIds.length === 0) return [];
+  const r = await pool.query(
+    `SELECT
+       credit_id, id, installment_number, due_date,
+       amount_due::float8, amount_paid::float8, penalty_amount::float8, status
+     FROM installments
+     WHERE credit_id = ANY($1::uuid[])
+     ORDER BY credit_id, installment_number ASC`,
+    [creditIds],
   );
   return r.rows;
 };
@@ -151,4 +175,4 @@ const findCreditById = async (creditId, customerId) => {
   return { ...creditRes.rows[0], installments: installmentsRes.rows };
 };
 
-module.exports = { getAccountSummary, findCredits, findCreditById };
+module.exports = { getAccountSummary, findCredits, findCreditById, findInstallmentsByCreditIds };
