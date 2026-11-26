@@ -19,6 +19,7 @@ const MSG_BAD_CREDENTIALS = 'Credenciales incorrectas. Verificá tus datos e int
 const MSG_USER_LOCKED     = 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el administrador del sistema para reactivarla.';
 const MSG_PORTAL_GENERIC  = 'DNI o contraseña incorrectos. Verificá tus datos e intentá nuevamente.';
 const MSG_SESSION_REVOKED = 'Sesión inválida por seguridad. Ingresá nuevamente.';
+const MSG_WRONG_TOKEN_TYPE = 'El refresh token no corresponde a esta sesión.';
 
 // Hash ficticio para igualar el tiempo de respuesta cuando el DNI no existe
 // (evita enumerar cuentas por timing). Se calcula una sola vez, de forma diferida.
@@ -156,6 +157,10 @@ const loginPortal = async (dni, password) => {
       full_name:               customer.full_name,
       portal_is_temp_password: customer.portal_is_temp_password,
     },
+    // Cambio obligatorio de contraseña temporal (#97).
+    passwordChangeFlags: customer.portal_is_temp_password
+      ? { must_change_password: true, code: 'TEMP_PASSWORD_REQUIRED' }
+      : { must_change_password: false },
   };
 };
 
@@ -167,6 +172,9 @@ const refreshInternalToken = async (rawToken) => {
   const stored = await queries.findRefreshToken(hashed);
 
   if (!stored) throw { status: 401, message: 'Refresh token inválido.' };
+
+  // Token de portal en el refresh interno: 401 sin revocar nada (#101).
+  if (!stored.user_id) throw { status: 401, code: 'INVALID_TOKEN_TYPE', message: MSG_WRONG_TOKEN_TYPE };
 
   // Detección de robo: token ya revocado → invalida toda la familia
   if (stored.revoked) {
@@ -220,6 +228,9 @@ const refreshPortalToken = async (rawToken) => {
 
   if (!stored) throw { status: 401, message: 'Refresh token inválido.' };
 
+  // Token interno en el refresh del portal: 401 sin revocar nada (#101).
+  if (!stored.customer_id) throw { status: 401, code: 'INVALID_TOKEN_TYPE', message: MSG_WRONG_TOKEN_TYPE };
+
   if (stored.revoked) {
     await queries.revokeFamilyRefreshTokens(stored.family_id);
     throw { status: 401, code: 'SESSION_REVOKED', message: MSG_SESSION_REVOKED };
@@ -269,13 +280,22 @@ const logout = async (payload, isPortal = false, rawRefreshToken = null) => {
     expiresAt
   );
 
-  if (rawRefreshToken) {
-    const hashed = jwtUtil.hashRefreshToken(rawRefreshToken);
-    const stored  = await queries.findRefreshToken(hashed);
-    if (stored && !stored.revoked) {
-      await queries.revokeRefreshToken(stored.id);
-    }
-  }
+  return revokeOwnedRefreshToken(payload, isPortal, rawRefreshToken);
+};
+
+/**
+ * Revoca un refresh token solo si pertenece a la misma audiencia y titular del
+ * access token: el logout de una sesión no debe cerrar la otra (#101).
+ * @returns {Promise<boolean>} true si el token fue revocado.
+ */
+const revokeOwnedRefreshToken = async (payload, isPortal, rawRefreshToken) => {
+  if (!rawRefreshToken) return false;
+  const hashed = jwtUtil.hashRefreshToken(rawRefreshToken);
+  const stored = await queries.findRefreshToken(hashed);
+  const owner = isPortal ? stored?.customer_id : stored?.user_id;
+  if (!stored || stored.revoked || owner !== payload.sub) return false;
+  await queries.revokeRefreshToken(stored.id);
+  return true;
 };
 
 // ── Logout global — cierra todas las sesiones del usuario ─────────────────────
@@ -312,6 +332,7 @@ const changePortalPassword = async (customerId, currentPassword, newPassword) =>
 };
 
 module.exports = {
+  revokeOwnedRefreshToken,
   loginInternal, loginPortal,
   refreshInternalToken, refreshPortalToken,
   logout, logoutAll,

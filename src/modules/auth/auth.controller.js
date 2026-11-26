@@ -3,15 +3,33 @@ const service  = require('./auth.service');
 const response = require('../../utils/response');
 const jwtUtil  = require('../../utils/jwt');
 
-const RT_COOKIE = 'rt';
+// Cookies de refresh separadas por audiencia para que las sesiones interna y
+// de portal no se pisen en el mismo navegador (#101).
+const RT_COOKIE       = 'rt';
+const RT_PATH         = '/api/auth';
+const PORTAL_RT_COOKIE = 'prt';
+const PORTAL_RT_PATH   = '/api/auth/portal';
 
-const _rtCookieOptions = (expires) => ({
+/**
+ * Opciones de la cookie HttpOnly del refresh token.
+ * @param {Date} expires - vencimiento del refresh token
+ * @param {string} [path] - path de la cookie (interno por defecto)
+ * @returns {object} opciones para res.cookie
+ */
+const _rtCookieOptions = (expires, path = RT_PATH) => ({
   httpOnly: true,
   secure:   process.env.NODE_ENV === 'production',
   sameSite: 'strict',
-  path:     '/api/auth',
+  path,
   expires,
 });
+
+/**
+ * Refresh token del portal: cookie `prt`; si falta, acepta la cookie `rt`
+ * legada (sesiones previas a #101). El tipo se valida en el servicio.
+ * @returns {string|undefined} refresh token crudo
+ */
+const _portalRefreshToken = (req) => req.cookies?.[PORTAL_RT_COOKIE] || req.cookies?.[RT_COOKIE];
 
 /**
  * Responde 401 conservando la forma { ok, message } y agregando, si existen,
@@ -52,11 +70,12 @@ const loginPortal = async (req, res) => {
     const { dni, password } = req.body;
     const result = await service.loginPortal(dni, password);
 
-    res.cookie(RT_COOKIE, result.refreshTokenRaw, _rtCookieOptions(result.rtExpiresAt));
+    res.cookie(PORTAL_RT_COOKIE, result.refreshTokenRaw, _rtCookieOptions(result.rtExpiresAt, PORTAL_RT_PATH));
 
     return response.success(res, {
       token:    result.accessToken,
       customer: result.customer,
+      ...result.passwordChangeFlags,
     }, 'Inicio de sesión exitoso.');
   } catch (err) {
     if (err.status === 401) return _authError(res, err);
@@ -82,10 +101,10 @@ const refreshInternal = async (req, res) => {
 // POST /api/auth/portal/refresh
 const refreshPortal = async (req, res) => {
   try {
-    const rawToken = req.cookies?.[RT_COOKIE];
+    const rawToken = _portalRefreshToken(req);
     const result   = await service.refreshPortalToken(rawToken);
 
-    res.cookie(RT_COOKIE, result.refreshTokenRaw, _rtCookieOptions(result.rtExpiresAt));
+    res.cookie(PORTAL_RT_COOKIE, result.refreshTokenRaw, _rtCookieOptions(result.rtExpiresAt, PORTAL_RT_PATH));
 
     return response.success(res, { token: result.accessToken }, 'Token renovado correctamente.');
   } catch (err) {
@@ -101,7 +120,7 @@ const logout = async (req, res) => {
     const payload = jwtUtil.verifyInternalToken(token);
     await service.logout(payload, false, req.cookies?.[RT_COOKIE]);
 
-    res.clearCookie(RT_COOKIE, { path: '/api/auth' });
+    res.clearCookie(RT_COOKIE, { path: RT_PATH });
     return response.success(res, null, 'Sesión cerrada correctamente.');
   } catch (err) {
     return response.serverError(res, err);
@@ -113,9 +132,14 @@ const logoutPortal = async (req, res) => {
   try {
     const token   = req.headers['authorization'].split(' ')[1];
     const payload = jwtUtil.verifyPortalToken(token);
-    await service.logout(payload, true, req.cookies?.[RT_COOKIE]);
+    await service.logout(payload, true, req.cookies?.[PORTAL_RT_COOKIE]);
+    // Sesiones de portal previas a #101 guardan su refresh en la cookie legacy
+    // `rt`: se revoca y limpia solo si es de este cliente, para no cerrar una
+    // sesión interna que comparta el navegador.
+    const legacyRevoked = await service.revokeOwnedRefreshToken(payload, true, req.cookies?.[RT_COOKIE]);
+    if (legacyRevoked) res.clearCookie(RT_COOKIE, { path: RT_PATH });
 
-    res.clearCookie(RT_COOKIE, { path: '/api/auth' });
+    res.clearCookie(PORTAL_RT_COOKIE, { path: PORTAL_RT_PATH });
     return response.success(res, null, 'Sesión cerrada correctamente.');
   } catch (err) {
     return response.serverError(res, err);
@@ -129,7 +153,7 @@ const logoutAll = async (req, res) => {
     const payload = jwtUtil.verifyInternalToken(token);
     await service.logoutAll(payload, false);
 
-    res.clearCookie(RT_COOKIE, { path: '/api/auth' });
+    res.clearCookie(RT_COOKIE, { path: RT_PATH });
     return response.success(res, null, 'Sesión cerrada en todos los dispositivos.');
   } catch (err) {
     return response.serverError(res, err);
@@ -143,7 +167,7 @@ const logoutAllPortal = async (req, res) => {
     const payload = jwtUtil.verifyPortalToken(token);
     await service.logoutAll(payload, true);
 
-    res.clearCookie(RT_COOKIE, { path: '/api/auth' });
+    res.clearCookie(PORTAL_RT_COOKIE, { path: PORTAL_RT_PATH });
     return response.success(res, null, 'Sesión cerrada en todos los dispositivos.');
   } catch (err) {
     return response.serverError(res, err);

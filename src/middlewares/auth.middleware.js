@@ -10,6 +10,17 @@ const response      = require('../utils/response');
 const _sessionRevoked = (res, message) =>
   res.status(401).json({ ok: false, message, code: 'SESSION_REVOKED' });
 
+/**
+ * 403 con code TEMP_PASSWORD_REQUIRED: la contraseña es temporal y debe
+ * cambiarse antes de usar cualquier otra ruta (#97, #105).
+ */
+const _tempPasswordRequired = (res) =>
+  res.status(403).json({
+    ok: false,
+    message: 'Debés cambiar tu contraseña antes de continuar.',
+    code: 'TEMP_PASSWORD_REQUIRED',
+  });
+
 // ── Helper interno: verifica blacklist y estado del usuario ───
 // allowTempPassword: true en la ruta de cambio de contraseña para
 // que el usuario con contraseña temporal pueda usarla sin bloquearse.
@@ -65,7 +76,7 @@ const _verifyInternalSession = async (req, res, next, allowTempPassword) => {
 
     // Bloquear acceso si la contraseña es temporal, salvo en la ruta de cambio
     if (!allowTempPassword && user.rows[0].is_temp_password) {
-      return response.forbidden(res, 'Debés cambiar tu contraseña antes de continuar.');
+      return _tempPasswordRequired(res);
     }
 
     delete user.rows[0].locked_at;
@@ -86,8 +97,9 @@ const authenticate = (req, res, next) => _verifyInternalSession(req, res, next, 
 // usuario con contraseña temporal pueda cambiarla.
 const authenticateAllowTemp = (req, res, next) => _verifyInternalSession(req, res, next, true);
 
-// ── Middleware: verificar token del portal público ─────────────
-const authenticatePortal = async (req, res, next) => {
+// ── Helper interno: verifica token del portal público ──────────
+// allowTempPassword: true solo en cambio de contraseña y logout del portal.
+const _verifyPortalSession = async (req, res, next, allowTempPassword) => {
   const token = extractToken(req);
   if (!token) return response.unauthorized(res);
 
@@ -113,7 +125,7 @@ const authenticatePortal = async (req, res, next) => {
     }
 
     const customer = await pool.query(
-      'SELECT id, full_name, dni, status, portal_enabled, portal_locked_at FROM customers WHERE id = $1',
+      'SELECT id, full_name, dni, status, portal_enabled, portal_locked_at, portal_is_temp_password FROM customers WHERE id = $1',
       [payload.sub]
     );
     if (!customer.rows.length || customer.rows[0].status !== 'ACTIVE') {
@@ -126,7 +138,13 @@ const authenticatePortal = async (req, res, next) => {
       return _sessionRevoked(res, 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el negocio para reactivarla.');
     }
 
+    // Contraseña temporal: bloquea el portal salvo el cambio de contraseña (#97).
+    if (!allowTempPassword && customer.rows[0].portal_is_temp_password) {
+      return _tempPasswordRequired(res);
+    }
+
     delete customer.rows[0].portal_locked_at;
+    delete customer.rows[0].portal_is_temp_password;
     req.customer = customer.rows[0];
     next();
   } catch (err) {
@@ -134,6 +152,14 @@ const authenticatePortal = async (req, res, next) => {
     return response.serverError(res, err);
   }
 };
+
+// ── Middleware: verificar token del portal público ─────────────
+// Bloquea clientes con contraseña temporal (deben cambiarla primero).
+const authenticatePortal = (req, res, next) => _verifyPortalSession(req, res, next, false);
+
+// ── Middleware: igual que authenticatePortal pero permite contraseña temporal ──
+// Usar exclusivamente en cambio de contraseña y logout del portal.
+const authenticatePortalAllowTemp = (req, res, next) => _verifyPortalSession(req, res, next, true);
 
 // ── Middleware: verificar roles ───────────────────────────────
 // Uso: authorize('ADMIN') o authorize('ADMIN', 'SELLER')
@@ -147,4 +173,4 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { authenticate, authenticateAllowTemp, authenticatePortal, authorize };
+module.exports = { authenticate, authenticateAllowTemp, authenticatePortal, authenticatePortalAllowTemp, authorize };
