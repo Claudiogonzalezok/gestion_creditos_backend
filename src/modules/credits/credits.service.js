@@ -16,7 +16,6 @@ const {
   getInstallmentAmount,
   getTotalToReturn,
   getTotalWithInterest,
-  getDueDates,
   getDueDatesFromFirstPayment,
   adjustDueDatesWithBusinessDayRule,
   getWeekBounds,
@@ -1259,7 +1258,7 @@ const approve = async (id, adminId, newInstallmentsCount) => {
  * @param {string} adminId - Admin que ejecuta el cambio.
  * @returns {Promise<object>} Crédito actualizado.
  */
-const changeSeller = async (creditId, sellerId, adminId) => {
+const changeSeller = async (creditId, sellerId, _adminId) => {
   const credit = await queries.findById(creditId);
   if (!credit) throw { status: 404, message: "Crédito no encontrado." };
   if (credit.status !== "PENDING_APPROVAL")
@@ -1662,7 +1661,11 @@ const refinance = async (creditId, data, adminId) => {
  *  - nuevo_total = capital × (1 + tasa_nuevo_plan); nuevo_saldo = nuevo_total − total_pagado.
  *  - La cuota sobreviviente es la (pagadas+1); las posteriores se anulan.
  *  - Si nuevo_saldo ≤ 0, el crédito se cancela (no sobrevive ninguna cuota).
- *  - V1: solo LOAN.
+ *  - Si nuevo_saldo < 0, el cliente pagó de más: el excedente (excessAmount) se
+ *    informa y la ejecución exige elegir su destino (excess_disposition).
+ *  - Aplica a LOAN (tasa de interest_rates) y SALE (tasa de product_rates).
+ *  - Simulación y ejecución comparten este núcleo: cancelledInstallments es
+ *    exactamente lo que se anula al ejecutar.
  *
  * @param {object} credit - Crédito con type, status, total_amount, down_payment,
  *   installments_count, payment_frequency, interest_rate.
@@ -1778,6 +1781,9 @@ const _resolvePlanChange = async (credit, rawInstallments, db = pool) => {
 
   const toPct = (coef) => Math.round(parseFloat(coef) * 10000) / 100;
 
+  // Excedente del cliente: lo pagado por encima del total del nuevo plan.
+  const excessAmount = newBalance < 0 ? round2(-newBalance) : 0;
+
   const result = {
     currentPlan: {
       installments: credit.installments_count,
@@ -1788,14 +1794,17 @@ const _resolvePlanChange = async (credit, rawInstallments, db = pool) => {
     newCreditTotal,
     newBalance,
     survivingInstallmentId: willSettle ? null : surviving.id,
-    cancelledInstallments: cancelledAfter.map((i) => i.installment_number),
+    cancelledInstallments: cancelledForExecute.map((i) => i.installment_number),
     creditWillBeSettled: willSettle,
+    excessAmount,
+    requiresExcessDisposition: excessAmount > 0,
   };
 
   const plan = {
     surviving,
     newBalance,
     willSettle,
+    excessAmount,
     cancelledForExecuteIds: cancelledForExecute.map((i) => i.id),
     snapshot: {
       original_installments_count: credit.installments_count,
@@ -1830,19 +1839,33 @@ const simulatePlanChange = async (creditId) => {
   return result;
 };
 
+/** Destinos válidos del sobrepago en un cambio de plan (elige el cliente). */
+const EXCESS_DISPOSITIONS = ["CREDIT_BALANCE", "REFUND"];
+
 /**
- * CAMBIO DE PLAN — Etapa 2: EJECUCIÓN (admin-only, sin doble aprobación, sin caja).
+ * CAMBIO DE PLAN — Etapa 2: EJECUCIÓN (admin-only, sin doble aprobación).
  *
  * Operación atómica: bloquea crédito + cuotas, revalida (mismo núcleo que la
- * simulación), aplica el recálculo y registra la auditoría. No genera movimientos
- * de caja/tesorería ni estado PENDING. Definitiva (sin reversión en V1).
+ * simulación), aplica el recálculo y registra la auditoría. Sin estado PENDING.
+ * Definitiva (sin reversión en V1).
+ *
+ * Sobrepago (saldo recalculado < 0): el cliente elige el destino del excedente.
+ *  - CREDIT_BALANCE: queda como saldo a favor en credits.credit_balance (sin caja).
+ *  - REFUND: se devuelve en efectivo desde la caja operativa activa de la
+ *    jornada (409 NO_ACTIVE_SESSION si no hay).
+ * Si hay excedente y excess_disposition falta o es inválido → 422
+ * EXCESS_DISPOSITION_REQUIRED.
  *
  * @param {string} creditId
- * @param {{ reason?: string }} data
+ * @param {{ reason?: string, excess_disposition?: string }} data
  * @param {string} adminId
  * @returns {Promise<object>} Resultado del cambio + id de auditoría.
  */
-const changePlan = async (creditId, { reason } = {}, adminId) => {
+const changePlan = async (
+  creditId,
+  { reason, excess_disposition } = {},
+  adminId,
+) => {
   const graceDays = parseInt((await getValue("penalty_grace_days")) || "3");
 
   return withTransaction(async (client) => {
@@ -1873,13 +1896,46 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
       client,
     );
 
+    // El excedente nunca se descarta: el cliente debe elegir su destino.
+    if (
+      plan.excessAmount > 0 &&
+      !EXCESS_DISPOSITIONS.includes(excess_disposition)
+    )
+      throw {
+        status: 422,
+        code: "EXCESS_DISPOSITION_REQUIRED",
+        message: `El cliente pagó $${plan.excessAmount.toFixed(2)} de más. Indicá excess_disposition: CREDIT_BALANCE (saldo a favor) o REFUND (devolución en efectivo).`,
+      };
+    const excessDisposition =
+      plan.excessAmount > 0 ? excess_disposition : null;
+
+    // Devolución: egreso de efectivo imputado a la caja activa de la jornada.
+    let refundCashSessionId = null;
+    if (excessDisposition === "REFUND") {
+      const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
+      const activeSession =
+        await cashSessionsQueries.lockActiveSessionForCurrentJornada(client);
+      if (!activeSession)
+        throw {
+          status: 409,
+          code: "NO_ACTIVE_SESSION",
+          message:
+            "No hay caja operativa abierta. Abrí una caja para devolver el excedente al cliente.",
+        };
+      refundCashSessionId = activeSession.id;
+    }
+
     if (plan.willSettle) {
       // Saldo ≤ 0: se anulan todas las pendientes y el crédito queda cancelado.
       await queries.cancelInstallmentsForPlanChange(
         client,
         plan.cancelledForExecuteIds,
       );
-      await queries.settleCreditByPlanChange(client, creditId);
+      await queries.settleCreditByPlanChange(
+        client,
+        creditId,
+        excessDisposition === "CREDIT_BALANCE" ? plan.excessAmount : 0,
+      );
     } else {
       // Saldo > 0: la sobreviviente toma el nuevo saldo; las futuras se anulan.
       await queries.setSurvivingInstallment(
@@ -1921,12 +1977,16 @@ const changePlan = async (creditId, { reason } = {}, adminId) => {
       surviving_installment_id: plan.willSettle ? null : plan.surviving.id,
       cancelled_installment_ids: plan.cancelledForExecuteIds,
       credit_cancelled: plan.willSettle,
+      excess_amount: plan.excessAmount,
+      excess_disposition: excessDisposition,
+      refund_cash_session_id: refundCashSessionId,
       reason: reason || null,
       executed_by: adminId,
     });
 
     return {
       ...result,
+      excessDisposition,
       plan_change_id: record.id,
       executed_at: record.executed_at,
       message: plan.willSettle

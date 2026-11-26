@@ -802,15 +802,18 @@ const cancelInstallmentsForPlanChange = async (client, installmentIds) => {
  * Liquida un crédito por cambio de plan cuando el saldo recalculado es <= 0.
  * @param {object} client
  * @param {string} creditId
+ * @param {number} [creditBalance=0] - Sobrepago que el cliente eligió dejar
+ *   como saldo a favor (se suma a credits.credit_balance).
  */
-const settleCreditByPlanChange = async (client, creditId) => {
+const settleCreditByPlanChange = async (client, creditId, creditBalance = 0) => {
   await client.query(
     `UPDATE credits
        SET status = 'SETTLED', settled_at = NOW(),
            settlement_type = 'PLAN_CHANGE', settlement_amount = 0,
+           credit_balance = credit_balance + $2,
            updated_at = NOW()
      WHERE id = $1`,
-    [creditId],
+    [creditId, creditBalance],
   );
 };
 
@@ -899,6 +902,9 @@ const createPlanChangeRecord = async (
     surviving_installment_id,
     cancelled_installment_ids,
     credit_cancelled,
+    excess_amount = 0,
+    excess_disposition = null,
+    refund_cash_session_id = null,
     reason,
     executed_by,
   },
@@ -908,8 +914,9 @@ const createPlanChangeRecord = async (
        (credit_id, original_installments_count, original_rate, original_total,
         paid_so_far, pending_before, new_installments_count, new_rate, new_total,
         new_balance, surviving_installment_id, cancelled_installment_ids,
-        credit_cancelled, reason, executed_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+        credit_cancelled, reason, executed_by,
+        excess_amount, excess_disposition, refund_cash_session_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
      RETURNING id, executed_at`,
     [
       credit_id,
@@ -927,6 +934,9 @@ const createPlanChangeRecord = async (
       credit_cancelled,
       reason || null,
       executed_by,
+      excess_amount,
+      excess_disposition,
+      refund_cash_session_id,
     ],
   );
   return r.rows[0];

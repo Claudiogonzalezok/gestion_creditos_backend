@@ -150,7 +150,10 @@ describe('payments.service holiday-related behavior', () => {
     queries.updateInstallment.mockResolvedValue('PAID');
     queries.getPendingInstallmentsFrom.mockResolvedValue([
       { id: 'inst-2', amount_due: 1000, amount_paid: 0 },
+      // Recibe el excedente parcial (500): todo el cobro queda imputado (#32).
+      { id: 'inst-3', amount_due: 1000, amount_paid: 0 },
     ]);
+    queries.createPartialAdvancePayment = jest.fn().mockResolvedValue(undefined);
     queries.markInstallmentAsPrepaid = jest.fn().mockResolvedValue(undefined);
 
     await service.approve('payment-1', 'admin-1');
@@ -161,5 +164,35 @@ describe('payments.service holiday-related behavior', () => {
       'WEEKLY',
       '2026-05-04',
     );
+  });
+
+  it('no rechaza un cobro exacto por residuos de punto flotante (#32)', async () => {
+    // 0.9 - 0.3 - 0.6 en float deja ~1e-16: el cobro cubre exactamente la deuda.
+    queries.lockAndGetPayment.mockResolvedValue({
+      id: 'payment-1',
+      installment_id: 'inst-1',
+      amount_received: 0.9,
+      amount_cash: 0.9,
+      amount_transfer: 0,
+      payment_method: 'CASH',
+      transfer_reference: null,
+      status: 'PENDING',
+      amount_due: 0.3,
+      amount_paid: 0,
+      installment_number: 1,
+      due_date: '2026-05-04',
+      credit_id: 'credit-1',
+      payment_frequency: 'WEEKLY',
+    });
+    queries.lockAndGetInstallment.mockResolvedValue(freshInstShape({ amount_due: 0.3 }));
+    queries.updateInstallment.mockResolvedValue('PAID');
+    queries.getPendingInstallmentsFrom.mockResolvedValue([
+      { id: 'inst-2', amount_due: 0.6, amount_paid: 0 },
+    ]);
+    queries.createPartialAdvancePayment = jest.fn().mockResolvedValue(undefined);
+    queries.markInstallmentAsPrepaid = jest.fn().mockResolvedValue(undefined);
+
+    await expect(service.approve('payment-1', 'admin-1')).resolves.not.toThrow();
+    expect(queries.approve).toHaveBeenCalled();
   });
 });
