@@ -265,6 +265,11 @@ BCRYPT_SALT_ROUNDS=10
 DISABLE_LOGIN_RATE_LIMIT=false   # Poner true en entorno e2e
 TRUST_PROXY=loopback             # Proxies confiables para la IP real del cliente (default loopback: nginx en el mismo host)
 ENABLE_TEST_ROUTES=false          # Poner true en entorno e2e
+
+NOTIFIER_TRANSPORT=log            # log (solo dev/test) | disabled. En producción queda disabled hasta enchufar un transporte real
+PASSWORD_RESET_URL=http://localhost:4200/reset-password   # Default: primer ALLOWED_ORIGINS + /reset-password
+PASSWORD_RESET_RATE_LIMIT_MAX=5   # Pedidos por IP y ventana a forgot/reset-password
+PASSWORD_RESET_RATE_LIMIT_WINDOW_MS=900000
 ```
 
 > `JWT_EXPIRY_INTERNAL` y `JWT_EXPIRY_PORTAL` son valores por defecto. Los valores reales se leen dinámicamente de `system_config` en cada login.
@@ -396,7 +401,18 @@ POST /api/auth/logout              → Cerrar sesión (invalida JWT)
 GET  /api/auth/me                  → Usuario autenticado
 POST /api/auth/portal/login        → Login portal público
 POST /api/auth/portal/logout       → Cerrar sesión portal
+POST /api/auth/forgot-password     → Pedir enlace de recuperación { email } (público)
+POST /api/auth/reset-password      → Fijar contraseña con el token { token, new_password } (público)
 ```
+
+#### Recuperación de contraseña (#88)
+
+- Solo usuarios internos `ACTIVE` (el portal de clientes no participa). `forgot-password` responde siempre `200` con el mismo mensaje, exista o no el email.
+- El token (32 bytes aleatorios, base64url) viaja por email en `PASSWORD_RESET_URL?token=...`; en la tabla `password_reset_tokens` (migración 054) se guarda solo su SHA-256. Vence a los `password_reset_expiry_min` minutos (`system_config`, default 30) y sirve una sola vez; pedir uno nuevo invalida los anteriores.
+- `reset-password` exige la misma política que el cambio de contraseña (8–100 caracteres, al menos un número), cierra todas las sesiones (`users.queries.invalidateSessions`) y deja `is_temp_password = false`. **No desbloquea** la cuenta: desbloquear sigue siendo exclusivo del ADMIN. Token inválido, usado o vencido → `400 INVALID_RESET_TOKEN`.
+- Límite por IP compartido entre ambos endpoints: `PASSWORD_RESET_RATE_LIMIT_MAX` (default 5) por `PASSWORD_RESET_RATE_LIMIT_WINDOW_MS` (default 15 min) → `429`.
+- Envío: `src/modules/notifications/notifier.js`. Sin transporte (`NOTIFIER_TRANSPORT=disabled`, o producción sin transporte registrado) responde `503 NOTIFIER_NOT_CONFIGURED` antes de buscar al usuario, así no revela nada. El repo no trae SMTP: para producción hay que registrar un transporte con `notifier.setTransport({ send })`.
+- Decisión: es autoservicio por token del propio usuario; el reseteo de contraseña **de otro** usuario sigue siendo solo del ADMIN (`PATCH /api/users/:id/reset-password`).
 
 ### Usuarios
 

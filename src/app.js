@@ -128,6 +128,21 @@ const refreshLimiter = rateLimit({
 app.use("/api/auth/refresh", refreshLimiter);
 app.use("/api/auth/portal/refresh", refreshLimiter);
 
+// Recuperación de contraseña (#88): límite propio y estricto por IP. No se
+// apaga con DISABLE_LOGIN_RATE_LIMIT (no hay flujo E2E que lo necesite).
+const passwordResetLimiter = rateLimit({
+  windowMs: parseInt(
+    process.env.PASSWORD_RESET_RATE_LIMIT_WINDOW_MS || String(15 * 60 * 1000),
+    10,
+  ),
+  max: parseInt(process.env.PASSWORD_RESET_RATE_LIMIT_MAX || "5", 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: rateLimitMessage("Demasiadas solicitudes de recuperación de contraseña."),
+});
+app.use("/api/auth/forgot-password", passwordResetLimiter);
+app.use("/api/auth/reset-password", passwordResetLimiter);
+
 // ── Rutas ─────────────────────────────────────────────────────
 app.use("/api/auth", require("./modules/auth/auth.routes"));
 app.use("/api/users", require("./modules/users/users.routes"));

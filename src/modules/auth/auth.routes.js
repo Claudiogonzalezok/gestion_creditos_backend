@@ -3,6 +3,7 @@ const { body }     = require('express-validator');
 const controller   = require('./auth.controller');
 const { validate } = require('../../middlewares/validate.middleware');
 const { authenticate, authenticatePortal } = require('../../middlewares/auth.middleware');
+const { isPassword } = require('../../utils/validators');
 
 const loginRules = [
   body('dni').trim().notEmpty().withMessage('El DNI es obligatorio.'),
@@ -28,6 +29,22 @@ router.post('/logout',      authenticate, controller.logout);
 router.post('/logout/all',  authenticate, controller.logoutAll);
 router.post('/refresh',     controller.refreshInternal);   // sin authenticate — el AT puede estar vencido
 router.get('/me',           authenticate, controller.me);
+
+// ── Recuperación de contraseña (autoservicio por token, #88) ──────────────────
+const forgotPasswordRules = [
+  body('email').isString().withMessage('El email es obligatorio.').bail()
+    .trim().notEmpty().withMessage('El email es obligatorio.')
+    .isEmail().withMessage('El email debe tener un formato válido.')
+    .isLength({ max: 150 }).withMessage('El email no puede superar los 150 caracteres.'),
+];
+const resetPasswordRules = [
+  body('token').isString().withMessage('El token es obligatorio.').bail()
+    .trim().notEmpty().withMessage('El token es obligatorio.')
+    .isLength({ max: 200 }).withMessage('El token es inválido.'),
+  isPassword('new_password', 'La nueva contraseña'),
+];
+router.post('/forgot-password', forgotPasswordRules, validate, controller.forgotPassword);
+router.post('/reset-password',  resetPasswordRules,  validate, controller.resetPassword);
 
 // ── Portal público ────────────────────────────────────────────────────────────
 router.post('/portal/login',           loginRules, validate, controller.loginPortal);
