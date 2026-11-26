@@ -13,6 +13,21 @@ const _rtCookieOptions = (expires) => ({
   expires,
 });
 
+/**
+ * Responde 401 conservando la forma { ok, message } y agregando, si existen,
+ * `code` (ACCOUNT_LOCKED, ACCOUNT_TEMP_LOCKED, SESSION_REVOKED,
+ * REFRESH_TOKEN_ROTATED) y `retry_after_seconds` (+ header Retry-After).
+ */
+const _authError = (res, err) => {
+  const body = { ok: false, message: err.message };
+  if (err.code) body.code = err.code;
+  if (err.retry_after_seconds) {
+    body.retry_after_seconds = err.retry_after_seconds;
+    res.set('Retry-After', String(err.retry_after_seconds));
+  }
+  return res.status(401).json(body);
+};
+
 // POST /api/auth/login
 const loginInternal = async (req, res) => {
   try {
@@ -26,7 +41,7 @@ const loginInternal = async (req, res) => {
       user:  result.user,
     }, 'Inicio de sesión exitoso.');
   } catch (err) {
-    if (err.status === 401) return response.unauthorized(res, err.message);
+    if (err.status === 401) return _authError(res, err);
     return response.serverError(res, err);
   }
 };
@@ -44,7 +59,7 @@ const loginPortal = async (req, res) => {
       customer: result.customer,
     }, 'Inicio de sesión exitoso.');
   } catch (err) {
-    if (err.status === 401) return response.unauthorized(res, err.message);
+    if (err.status === 401) return _authError(res, err);
     return response.serverError(res, err);
   }
 };
@@ -59,7 +74,7 @@ const refreshInternal = async (req, res) => {
 
     return response.success(res, { token: result.accessToken }, 'Token renovado correctamente.');
   } catch (err) {
-    if (err.status === 401) return response.unauthorized(res, err.message);
+    if (err.status === 401) return _authError(res, err);
     return response.serverError(res, err);
   }
 };
@@ -74,7 +89,7 @@ const refreshPortal = async (req, res) => {
 
     return response.success(res, { token: result.accessToken }, 'Token renovado correctamente.');
   } catch (err) {
-    if (err.status === 401) return response.unauthorized(res, err.message);
+    if (err.status === 401) return _authError(res, err);
     return response.serverError(res, err);
   }
 };

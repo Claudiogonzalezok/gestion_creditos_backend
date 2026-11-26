@@ -73,8 +73,8 @@ const findOwnProfileById = async (id) => {
   return result.rows[0] || null;
 };
 
-const update = async (id, { full_name, dni, email, address, role }) => {
-  const result = await pool.query(
+const update = async (id, { full_name, dni, email, address, role }, client = pool) => {
+  const result = await client.query(
     `UPDATE users
      SET full_name  = COALESCE($1, full_name),
          dni        = COALESCE($2, dni),
@@ -138,11 +138,11 @@ const activate = async (id) => {
   );
 };
 
-const resetPassword = async (id, password_hash) => {
-  await pool.query(
+const resetPassword = async (id, password_hash, client = pool) => {
+  await client.query(
     `UPDATE users
      SET password_hash = $1, is_temp_password = TRUE,
-         failed_attempts = 0, locked_at = NULL, updated_at = NOW()
+         failed_attempts = 0, locked_at = NULL, locked_until = NULL, updated_at = NOW()
      WHERE id = $2`,
     [password_hash, id]
   );
@@ -159,7 +159,7 @@ const changePassword = async (id, password_hash) => {
 
 const unlock = async (id) => {
   await pool.query(
-    `UPDATE users SET locked_at = NULL, failed_attempts = 0, updated_at = NOW() WHERE id = $1`,
+    `UPDATE users SET locked_at = NULL, locked_until = NULL, failed_attempts = 0, updated_at = NOW() WHERE id = $1`,
     [id]
   );
 };
@@ -169,9 +169,24 @@ const unlock = async (id) => {
  * El middleware compara el iat del token con este timestamp y rechaza tokens anteriores.
  * Requiere: ALTER TABLE users ADD COLUMN force_relogin_at TIMESTAMPTZ;
  */
-const setForceReloginAt = async (id) => {
-  await pool.query(
+const setForceReloginAt = async (id, client = pool) => {
+  await client.query(
     `UPDATE users SET force_relogin_at = NOW(), updated_at = NOW() WHERE id = $1`,
+    [id]
+  );
+};
+
+/**
+ * Cierra todas las sesiones del usuario: invalida los access tokens emitidos
+ * (force_relogin_at) y revoca sus refresh tokens activos (#42).
+ * @param {string} id - id del usuario
+ * @param {Object} [client] - client de una transacción en curso (default: pool)
+ */
+const invalidateSessions = async (id, client = pool) => {
+  await setForceReloginAt(id, client);
+  await client.query(
+    `UPDATE refresh_tokens SET revoked = TRUE, revoked_at = NOW()
+     WHERE user_id = $1 AND revoked = FALSE`,
     [id]
   );
 };
@@ -179,5 +194,5 @@ const setForceReloginAt = async (id) => {
 module.exports = {
   findAll, findById, findByDni, findByEmail, countActiveAdmins,
   create, update, lockActiveAdmins, deactivate, activate, resetPassword, changePassword, unlock,
-  setForceReloginAt, findOwnProfileById, updateOwnProfile,
+  setForceReloginAt, invalidateSessions, findOwnProfileById, updateOwnProfile,
 };

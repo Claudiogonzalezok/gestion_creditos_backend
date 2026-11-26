@@ -2,6 +2,14 @@ const pool          = require('../config/db');
 const { verifyInternalToken, verifyPortalToken, extractToken } = require('../utils/jwt');
 const response      = require('../utils/response');
 
+/**
+ * 401 con code SESSION_REVOKED: la sesión fue cerrada del lado del servidor
+ * (bloqueo, desactivación, reset de contraseña, cambio de rol). El cliente
+ * debe descartar sus tokens y volver al login sin intentar refresh.
+ */
+const _sessionRevoked = (res, message) =>
+  res.status(401).json({ ok: false, message, code: 'SESSION_REVOKED' });
+
 // ── Helper interno: verifica blacklist y estado del usuario ───
 // allowTempPassword: true en la ruta de cambio de contraseña para
 // que el usuario con contraseña temporal pueda usarla sin bloquearse.
@@ -31,21 +39,27 @@ const _verifyInternalSession = async (req, res, next, allowTempPassword) => {
     }
 
     const user = await pool.query(
-      `SELECT id, full_name, dni, role, status, is_temp_password, force_relogin_at
+      `SELECT id, full_name, dni, role, status, is_temp_password, force_relogin_at, locked_at
        FROM users WHERE id = $1`,
       [payload.sub]
     );
     if (!user.rows.length || user.rows[0].status !== 'ACTIVE') {
-      return response.unauthorized(res, 'Tu cuenta no está activa.');
+      return _sessionRevoked(res, 'Tu cuenta no está activa.');
     }
 
-    // Verificar invalidación forzada por cambio de rol (CU02)
-    // Requiere columna force_relogin_at TIMESTAMPTZ en la tabla users.
+    // Usuario bloqueado por seguridad: sus tokens dejan de valer (#42).
+    if (user.rows[0].locked_at && user.rows[0].role !== 'ADMIN') {
+      return _sessionRevoked(res, 'Tu cuenta fue bloqueada por seguridad. Ingresá nuevamente cuando sea reactivada.');
+    }
+
+    // Invalidación forzada (cambio de rol, reset de contraseña, desactivación,
+    // bloqueo). iat tiene resolución de segundos: se compara en milisegundos y
+    // un token emitido en el mismo segundo que la invalidación se rechaza.
     if (user.rows[0].force_relogin_at) {
-      const tokenIat       = payload.iat; // segundos (epoch)
-      const forceReloginAt = Math.floor(new Date(user.rows[0].force_relogin_at).getTime() / 1000);
-      if (tokenIat < forceReloginAt) {
-        return response.unauthorized(res, 'Tu sesión fue invalidada. Ingresá nuevamente.');
+      const tokenIatMs       = payload.iat * 1000;
+      const forceReloginAtMs = new Date(user.rows[0].force_relogin_at).getTime();
+      if (tokenIatMs < forceReloginAtMs) {
+        return _sessionRevoked(res, 'Tu sesión fue invalidada. Ingresá nuevamente.');
       }
     }
 
@@ -54,6 +68,7 @@ const _verifyInternalSession = async (req, res, next, allowTempPassword) => {
       return response.forbidden(res, 'Debés cambiar tu contraseña antes de continuar.');
     }
 
+    delete user.rows[0].locked_at;
     req.user = user.rows[0];
     next();
   } catch (err) {
@@ -98,16 +113,20 @@ const authenticatePortal = async (req, res, next) => {
     }
 
     const customer = await pool.query(
-      'SELECT id, full_name, dni, status, portal_enabled FROM customers WHERE id = $1',
+      'SELECT id, full_name, dni, status, portal_enabled, portal_locked_at FROM customers WHERE id = $1',
       [payload.sub]
     );
     if (!customer.rows.length || customer.rows[0].status !== 'ACTIVE') {
-      return response.unauthorized(res, 'Tu cuenta no está disponible.');
+      return _sessionRevoked(res, 'Tu cuenta no está disponible.');
     }
     if (!customer.rows[0].portal_enabled) {
-      return response.unauthorized(res, 'Tu acceso al portal aún no fue habilitado.');
+      return _sessionRevoked(res, 'Tu acceso al portal aún no fue habilitado.');
+    }
+    if (customer.rows[0].portal_locked_at) {
+      return _sessionRevoked(res, 'Tu cuenta fue bloqueada por seguridad. Comunicarte con el negocio para reactivarla.');
     }
 
+    delete customer.rows[0].portal_locked_at;
     req.customer = customer.rows[0];
     next();
   } catch (err) {
