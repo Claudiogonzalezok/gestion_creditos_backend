@@ -91,7 +91,7 @@ describe('#93 — saldo de Caja General por medio', () => {
     expect(bal).toMatchObject({ cash_balance: 800, transfer_balance: 400 });
   });
 
-  it('egreso OUT sin desglose (retrocompatible) solo valida el total y se imputa a efectivo', async () => {
+  it('egreso OUT sin desglose (retrocompatible) solo valida el total y se imputa a efectivo y el faltante a transferencia', async () => {
     const { acc, admin } = await seed();
     await cashAccountsService.registerMovement(
       acc.id,
@@ -101,8 +101,8 @@ describe('#93 — saldo de Caja General por medio', () => {
     const bal = await cashAccountsService.getBalance(acc.id);
     expect(bal).toMatchObject({
       current_balance: 300,
-      cash_balance: -200,
-      transfer_balance: 500,
+      cash_balance: 0,
+      transfer_balance: 300,
     });
   });
 

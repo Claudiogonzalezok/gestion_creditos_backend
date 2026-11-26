@@ -56,11 +56,16 @@ const resolveDirection = (movementType, requestedDirection) => {
  * @returns {Promise<{cash_balance:number, transfer_balance:number}>}
  */
 const getMethodBalances = async (db, account) => {
-  const transfer = round2(await queries.computeTransferBalance(account.id, db));
-  return {
-    cash_balance: round2(account.current_balance - transfer),
-    transfer_balance: transfer,
-  };
+  let transfer = round2(await queries.computeTransferBalance(account.id, db));
+  let cash = round2(account.current_balance - transfer);
+  // Los egresos sin medio declarado se imputan primero a efectivo; si el
+  // efectivo no alcanza, el resto se descuenta de transferencia, así ningún
+  // medio queda negativo y la suma sigue siendo current_balance.
+  if (cash < 0) {
+    transfer = round2(transfer + cash);
+    cash = 0;
+  }
+  return { cash_balance: cash, transfer_balance: transfer };
 };
 
 const METHOD_LABEL = { CASH: "efectivo", TRANSFER: "transferencia" };
