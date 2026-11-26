@@ -1,5 +1,6 @@
 const queries = require("./reports.queries");
 const { getGraceDays } = require("../systemConfig/graceDays");
+const { getValue } = require("../systemConfig/systemConfig.queries");
 const {
   getActiveJornadaDate,
 } = require("../businessDays/businessDays.service");
