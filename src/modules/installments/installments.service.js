@@ -3,11 +3,20 @@ const queries = require("./installments.queries");
 const paymentsQueries = require("../payments/payments.queries");
 const paymentsService = require("../payments/payments.service");
 const { getValue } = require("../systemConfig/systemConfig.queries");
+const { localDate } = require("../../utils/date");
 
+/**
+ * Lista cuotas. `overdue=true` equivale a vencidas antes de la fecha de la
+ * jornada (hoy en la TZ del negocio); si además viene `due_before`, se usa la
+ * fecha más temprana de las dos.
+ */
 const getAll = async (filters, requestingUser) => {
+  const { overdue, due_before, ...rest } = filters;
+  const cutoffs = [overdue ? localDate() : null, due_before || null].filter(Boolean);
+  if (cutoffs.length) rest.overdueBefore = cutoffs.sort()[0];
   if (["COLLECTOR", "SELLER_COLLECTOR"].includes(requestingUser.role))
-    filters = { ...filters, collector_id: requestingUser.id };
-  return queries.findAll(filters);
+    rest.collector_id = requestingUser.id;
+  return queries.findAll(rest);
 };
 
 const getById = async (id) => {
@@ -19,10 +28,23 @@ const getById = async (id) => {
 const applyPenalty = async (id, penaltyAmount) => {
   const inst = await queries.findById(id);
   if (!inst) throw { status: 404, message: "Cuota no encontrada." };
-  if (!["OVERDUE"].includes(inst.status))
+  if (inst.status === "PAID")
     throw {
       status: 409,
-      message: `No se puede aplicar mora a una cuota en estado ${inst.status}. Solo se aplica mora a cuotas OVERDUE.`,
+      message: "La cuota ya fue pagada. No se puede aplicar mora a una cuota cancelada.",
+    };
+  // #89: además de OVERDUE, se admite mora sobre PENDING/PARTIAL vencidas por
+  // fecha (due_date < fecha de la jornada) con saldo, aunque el cron todavía
+  // no haya actualizado el status.
+  const isOpen = ["PENDING", "PARTIAL"].includes(inst.status);
+  const balance = parseFloat(inst.amount_due) - parseFloat(inst.amount_paid);
+  const overdueByDate = isOpen && String(inst.due_date) < localDate() && balance > 0;
+  if (inst.status !== "OVERDUE" && !overdueByDate)
+    throw {
+      status: 409,
+      message: isOpen
+        ? "La cuota no está vencida o no tiene saldo pendiente. Solo se aplica mora a cuotas vencidas."
+        : `No se puede aplicar mora a una cuota en estado ${inst.status}.`,
     };
 
   const maxRate = parseFloat((await getValue("penalty_max_rate")) || "0.50");
