@@ -79,11 +79,12 @@ const update = async (id, { unitCode, notes }) => {
   const r = await pool.query(
     `UPDATE product_units
      SET unit_code  = COALESCE($1, unit_code),
-         notes      = COALESCE($2, notes),
+         notes      = CASE WHEN $4::boolean THEN $2 ELSE notes END,
          updated_at = NOW()
      WHERE id = $3
      RETURNING id, unit_code, status, notes, updated_at`,
-    [unitCode || null, notes !== undefined ? notes : null, id]
+    // notes omitida conserva la nota; '' o null la limpian explícitamente
+    [unitCode || null, notes || null, id, notes !== undefined]
   );
   return r.rows[0] || null;
 };

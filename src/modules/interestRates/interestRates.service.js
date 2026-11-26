@@ -13,7 +13,16 @@ const create = async (data) => {
 
   const exact = await queries.findExact(payment_frequency, installments_count, min_amount, max_amount);
   if (exact) {
-    if (!exact.active) return queries.reactivate(exact.id, rate);
+    if (!exact.active) {
+      // Reactivar no puede solapar otra tasa activa del mismo plan
+      const overlapOnReactivate = await queries.findOverlap(
+        payment_frequency, installments_count, min_amount, max_amount, exact.id
+      );
+      if (overlapOnReactivate) {
+        throw { status: 409, message: 'El rango de montos se superpone con una tasa activa existente.' };
+      }
+      return queries.reactivate(exact.id, rate);
+    }
     throw { status: 409, message: 'Ya existe una tasa activa para esta combinación y rango de montos.' };
   }
 

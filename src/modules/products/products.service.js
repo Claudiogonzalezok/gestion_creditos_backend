@@ -1,4 +1,5 @@
 const queries = require('./products.queries');
+const productRatesQueries = require('../productRates/productRates.queries');
 
 const getAll = async (filters) => queries.findAll(filters);
 
@@ -39,7 +40,10 @@ const update = async (id, { title, description, model, brand_id, category_id }) 
 
   await validateCategory(category_id);
   await validateBrand(brand_id);
-  return queries.update(id, { title, description, model, brand_id, category_id });
+  const updated = await queries.update(id, { title, description, model, brand_id, category_id });
+  // La caché de tasas de producto guarda el título del producto: invalidarla
+  productRatesQueries.invalidateCache();
+  return updated;
 };
 
 /**
