@@ -16,7 +16,7 @@
 | 10 | `payments` | Pre-cargas de cobro. `installment_id`, `collector_id`, `amount_received`, `payment_method`, `status` (PENDING/APPROVED/REJECTED). |
 | 11 | `credit_down_payments` | Enganches y prepagos. `credit_id`, `payment_type` (DOWN_PAYMENT/PREPAID_INSTALLMENT), `amount`, `payment_method`. |
 | 12 | `cash_registers` | Cierres diarios. `register_date` (UNIQUE), `total_collected`, `declared_cash`, `difference`, `difference_status`. |
-| 13 | `collection_sheets` | `collector_id`, `sheet_date`, `filter_used`. UNIQUE por (date, collector). |
+| 13 | `collection_sheets` | `collector_id`, `sheet_date`, `filter_used`, `status` (ACTIVE/REGENERATED). Una sola ACTIVE por (collector, date) — índice parcial, migración 014. |
 | 14 | `collection_sheet_details` | `sheet_id`, `installment_id`, `order_number`, `planned_amount`. |
 | 15 | `token_blacklist` | `token_jti`, `user_id` o `customer_id`, `expires_at`. |
 | 16 | `salaries` | `user_id`, `weekly_amount`, `active`. Solo para COLLECTOR/SELLER_COLLECTOR. |
@@ -29,16 +29,17 @@
 
 ```
 type                VARCHAR   SALE | LOAN
-status              VARCHAR   PENDING_APPROVAL | ACTIVE | SETTLED | REJECTED | EXPIRED
+status              VARCHAR   PENDING_APPROVAL | ACTIVE | SETTLED | REJECTED | EXPIRED | REFINANCED | WRITTEN_OFF
 total_amount        NUMERIC   Suma de historical_price de los productos
 down_payment        NUMERIC   Enganche (solo SALE, default 0)
-down_payment_method VARCHAR   CASH | TRANSFER
+down_payment_method VARCHAR   CASH | TRANSFER | MIXED (derivado del split efectivo/transferencia)
+down_payment_cash / down_payment_transfer NUMERIC  Split del enganche (migración 033)
 down_payment_transfer_reference VARCHAR  Referencia si fue transferencia
 prepaid_installments SMALLINT Cuotas pagadas al firmar (solo SALE, default 0)
-prepaid_installments_method VARCHAR  CASH | TRANSFER
+prepaid_installments_method VARCHAR  CASH | TRANSFER | MIXED
 interest_rate       NUMERIC   Coeficiente LOAN (NULL para SALE)
 installments_count  SMALLINT  Cantidad de cuotas
-payment_frequency   VARCHAR   WEEKLY | BIWEEKLY | MONTHLY
+payment_frequency   VARCHAR   DAILY | WEEKLY | BIWEEKLY | MONTHLY  (DAILY desde migración 045)
 ```
 
 ## Estados de `installments`
@@ -47,6 +48,9 @@ payment_frequency   VARCHAR   WEEKLY | BIWEEKLY | MONTHLY
 - `PAID` — pagada
 - `PARTIAL` — pago parcial recibido
 - `OVERDUE` — vencida (pasó días de gracia)
+- `REFINANCED` — cuota de un crédito refinanciado (excluida de mora, planillas y reportes)
+- `PLAN_CHANGE_CANCELLED` — cuota anulada por cambio de plan
+- `WRITTEN_OFF` — cuota de un crédito castigado
 
 ## Parámetros configurables — `system_config`
 

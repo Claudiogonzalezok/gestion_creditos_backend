@@ -173,9 +173,9 @@ Reportes: recaudación, cartera, mora, cobradores, productos, vencimientos próx
 
 ## CU14 — Generar planilla de cobro
 
-**Admin** genera para un Cobrador y fecha (filtros: TODAY / OVERDUE / TODAY_AND_OVERDUE / ALL_PENDING).
+**Admin** genera para un Cobrador y fecha (filtros: TODAY / OVERDUE / TODAY_AND_OVERDUE / ALL_PENDING; default ALL_PENDING). Sin cuotas → 409.
 La planilla es informativa (snapshot), no modifica estados.
-Si se regenera para el mismo cobrador y fecha, reemplaza la anterior.
+Si se regenera para el mismo cobrador y fecha, la anterior pasa a REGENERATED (no se borra); con `skip_if_exists` se conserva la existente.
 Cada cobrador solo ve su propia planilla.
 
 ---
