@@ -497,7 +497,7 @@ const close = async (id, data, requestingUser) => {
 
 // ── PENDING_RECONCILIATION ─────────────────────────────────────────────────
 
-const markPending = async (id, data, requestingUser) => {
+const markPending = async (id, data, _requestingUser) => {
   const reason = (data.reason || "").trim();
   if (!reason)
     throw {
