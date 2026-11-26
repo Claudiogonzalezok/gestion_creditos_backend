@@ -29,8 +29,18 @@ const getCollectorsReport = async (dateFrom, dateTo) =>
 const getSellersReport = async (dateFrom, dateTo) =>
   queries.getSellersReport(dateFrom, dateTo);
 
-const getProductsReport = (stockThreshold) =>
-  queries.getProductsReport(stockThreshold);
+/**
+ * Reporte de productos. Si no llega umbral, usa low_stock_threshold de
+ * system_config (#106).
+ * @param {number} [stockThreshold]
+ * @returns {Promise<object[]>}
+ */
+const getProductsReport = async (stockThreshold) => {
+  const threshold = stockThreshold !== undefined
+    ? stockThreshold
+    : Number(await getValue("low_stock_threshold"));
+  return queries.getProductsReport(threshold);
+};
 
 const getUpcomingReport = (days) => queries.getUpcomingReport(days);
 

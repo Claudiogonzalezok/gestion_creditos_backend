@@ -827,8 +827,8 @@ POST   /api/system-config/:key/reset
 ### Datos y tasas de la empresa (solo ADMIN)
 
 ```
-GET    /api/company          → { company: {...}, rates: {...} }
-PUT    /api/company          → actualiza datos (parcial)
+GET    /api/company          → { company: {...}, rates: {...}, low_stock_threshold }
+PUT    /api/company          → actualiza datos y/o low_stock_threshold (parcial)
 PUT    /api/company/rates    → actualiza tasas (parcial, atómico)
 ```
 
@@ -844,6 +844,7 @@ PUT    /api/company/rates    → actualiza tasas (parcial, atómico)
 | `grace_period_days` | `penalty_grace_days` | 0–30 (entero) |
 
   Si un valor es inválido no se guarda ninguno (`400`).
+- `low_stock_threshold` (entero 0–100000, clave `system_config` homónima, default 5, migración 056): umbral de stock bajo. `GET /api/reports/products` lo usa cuando no llega `stock_threshold`.
 
 ### Portal público
 
@@ -852,6 +853,8 @@ GET    /api/portal/me
 GET    /api/portal/credits
 GET    /api/portal/credits/:id
 ```
+
+- `GET /api/portal/credits`: cada crédito incluye `installments[]` (con `amount_paid` por cuota), `amount_paid` total y `remaining_amount` = Σ (`amount_due` − `amount_paid`) de cuotas `PENDING`/`OVERDUE`/`PARTIAL`. El detalle devuelve los mismos dos totales.
 
 ---
 

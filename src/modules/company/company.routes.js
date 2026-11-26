@@ -36,8 +36,13 @@ const companyRules = [
     .isLength({ max: 150 }).withMessage('contact_email admite hasta 150 caracteres.'),
   optionalText('phone', 30),
   optionalText('address', 255),
+  body('low_stock_threshold')
+    .optional()
+    .isInt({ min: 0, max: 100000 }).withMessage('low_stock_threshold debe ser un entero entre 0 y 100000.')
+    .bail()
+    .toInt(),
   body().custom((b) => {
-    const fields = ['system_name', 'contact_email', 'phone', 'address'];
+    const fields = ['system_name', 'contact_email', 'phone', 'address', 'low_stock_threshold'];
     if (!b || !fields.some((f) => b[f] !== undefined))
       throw new Error('Debe enviar al menos un campo a actualizar.');
     return true;

@@ -13,10 +13,14 @@ const get = async (req, res) => {
 // PUT /api/company
 const updateCompany = async (req, res) => {
   try {
-    const { system_name, contact_email, phone, address } = req.body;
-    const data = await service.updateCompany({ system_name, contact_email, phone, address }, req.user.id);
+    const { system_name, contact_email, phone, address, low_stock_threshold } = req.body;
+    const data = await service.updateCompany(
+      { system_name, contact_email, phone, address, low_stock_threshold },
+      req.user.id,
+    );
     return response.success(res, data, 'Datos de la empresa actualizados correctamente.');
   } catch (err) {
+    if (err.status === 400) return response.badRequest(res, err.message);
     return response.serverError(res, err);
   }
 };
