@@ -133,6 +133,11 @@ const logoutPortal = async (req, res) => {
     const token   = req.headers['authorization'].split(' ')[1];
     const payload = jwtUtil.verifyPortalToken(token);
     await service.logout(payload, true, req.cookies?.[PORTAL_RT_COOKIE]);
+    // Sesiones de portal previas a #101 guardan su refresh en la cookie legacy
+    // `rt`: se revoca y limpia solo si es de este cliente, para no cerrar una
+    // sesión interna que comparta el navegador.
+    const legacyRevoked = await service.revokeOwnedRefreshToken(payload, true, req.cookies?.[RT_COOKIE]);
+    if (legacyRevoked) res.clearCookie(RT_COOKIE, { path: RT_PATH });
 
     res.clearCookie(PORTAL_RT_COOKIE, { path: PORTAL_RT_PATH });
     return response.success(res, null, 'Sesión cerrada correctamente.');

@@ -189,4 +189,18 @@ describe("#101 · cookies de refresh interno y portal separadas", () => {
     expect(getCookie(out, "prt")).toBeNull();
     expect((await request(app).post("/api/auth/portal/refresh").set("Cookie", jar)).status).toBe(200);
   });
+
+  it('logout del portal revoca y limpia la cookie legacy rt de una sesión de portal previa', async () => {
+    const c = await portalCustomer(false);
+    const lp = await loginPortal(c.dni);
+    const legacyJar = 'rt=' + getCookie(lp, 'prt').value;
+
+    const out = await request(app)
+      .post('/api/auth/portal/logout')
+      .set('Authorization', 'Bearer ' + lp.body.data.token)
+      .set('Cookie', legacyJar);
+    expect(out.status).toBe(200);
+    expect(getCookie(out, 'rt').raw).toMatch(/Path=\/api\/auth;/);
+    expect((await request(app).post('/api/auth/portal/refresh').set('Cookie', legacyJar)).status).toBe(401);
+  });
 });

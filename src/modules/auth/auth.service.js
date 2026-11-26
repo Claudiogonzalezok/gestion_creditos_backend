@@ -280,16 +280,22 @@ const logout = async (payload, isPortal = false, rawRefreshToken = null) => {
     expiresAt
   );
 
-  if (rawRefreshToken) {
-    const hashed = jwtUtil.hashRefreshToken(rawRefreshToken);
-    const stored  = await queries.findRefreshToken(hashed);
-    // Solo revoca el refresh de la misma audiencia y titular: el logout de una
-    // sesión no debe cerrar la otra (#101).
-    const owner = isPortal ? stored?.customer_id : stored?.user_id;
-    if (stored && !stored.revoked && owner === payload.sub) {
-      await queries.revokeRefreshToken(stored.id);
-    }
-  }
+  return revokeOwnedRefreshToken(payload, isPortal, rawRefreshToken);
+};
+
+/**
+ * Revoca un refresh token solo si pertenece a la misma audiencia y titular del
+ * access token: el logout de una sesión no debe cerrar la otra (#101).
+ * @returns {Promise<boolean>} true si el token fue revocado.
+ */
+const revokeOwnedRefreshToken = async (payload, isPortal, rawRefreshToken) => {
+  if (!rawRefreshToken) return false;
+  const hashed = jwtUtil.hashRefreshToken(rawRefreshToken);
+  const stored = await queries.findRefreshToken(hashed);
+  const owner = isPortal ? stored?.customer_id : stored?.user_id;
+  if (!stored || stored.revoked || owner !== payload.sub) return false;
+  await queries.revokeRefreshToken(stored.id);
+  return true;
 };
 
 // ── Logout global — cierra todas las sesiones del usuario ─────────────────────
@@ -326,6 +332,7 @@ const changePortalPassword = async (customerId, currentPassword, newPassword) =>
 };
 
 module.exports = {
+  revokeOwnedRefreshToken,
   loginInternal, loginPortal,
   refreshInternalToken, refreshPortalToken,
   logout, logoutAll,
