@@ -24,7 +24,7 @@ const SHARED_PATTERNS = [
   /^\.env\.test$/,
   /^scripts\/ci-scope/,
   /^\.github\//,
-  // Corre en cada `npm ci`, incluido el deploy de producción.
+  // Corre en cada `pnpm install`, incluido el deploy de producción.
   /^\.husky\/install\.mjs$/,
 ];
 

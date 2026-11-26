@@ -4,14 +4,14 @@
 - Leer **SOLO** los archivos mencionados explícitamente en cada prompt.
 - **NO** indexar ni explorar el proyecto completo al iniciar sesión.
 - **NO** leer directorios: `node_modules/`, `dist/`, `.angular/`, `coverage/`, `.git/`.
-- **NO** leer archivos: `*.lock`, `*.log`, `*.map`, `package-lock.json`.
+- **NO** leer archivos: `*.lock`, `*.log`, `*.map`, `pnpm-lock.yaml`.
 - Ante una tarea nueva: preguntar qué archivos son relevantes antes de explorar.
 - Leer un archivo a la vez. No leer carpetas completas salvo que se indique.
 
 ---
 
 ## Stack tecnológico
-- **Backend:** Node.js + Express · **BD:** PostgreSQL · **Auth:** JWT · **Arch:** MVC estricta
+- **Backend:** Node.js 22 + Express · **Gestor:** pnpm (`pnpm install --frozen-lockfile`; nunca npm) · **BD:** PostgreSQL · **Auth:** JWT · **Arch:** MVC estricta
 - **Frontend:** Angular + PrimeNG + Tailwind CSS
 
 ## Regla transversal Frontend (moneda)

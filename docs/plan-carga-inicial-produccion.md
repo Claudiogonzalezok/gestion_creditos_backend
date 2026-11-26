@@ -225,7 +225,7 @@ PostgreSQL producción
 ## 7. Dependencia de despliegue — ⚠️ ANTES de la carga
 
 1. **Mergear y desplegar `feat/frecuencia-daily`** (backend + frontend): hay 1 crédito diario en el origen y el negocio opera con diarias. Sin esto, ese crédito no se puede cargar y no se pueden configurar tasas diarias.
-2. Verificar que la migración `045_payment_frequency_daily.sql` corrió en producción (`npm run migration:run`).
+2. Verificar que la migración `045_payment_frequency_daily.sql` corrió en producción (`pnpm run migration:run`).
 
 ---
 

@@ -1,0 +1,18 @@
+# Configuración de pnpm (pnpm 11 lee los settings de este archivo).
+# Scripts de instalación: bloqueados salvo los listados con `true`.
+# Hoy ninguna dependencia necesita compilar (bcryptjs es JS puro);
+# @scarf/scarf (telemetría de swagger-ui-dist) queda denegado explícitamente.
+allowBuilds:
+  '@scarf/scarf': false
+
+# No instalar versiones publicadas hace menos de 3 días (en minutos).
+minimumReleaseAge: 4320
+
+# Excepción temporal: versiones ya resueltas en el package-lock.json importado (#60),
+# publicadas hace menos de 3 días al migrar. Se conservan para no cambiar versiones
+# en el PR de migración. Borrar esta lista después del 2026-11-28.
+minimumReleaseAgeExclude:
+  - '@types/estree@1.0.11'
+  - brace-expansion@5.1.0
+  - caniuse-lite@1.0.30001828
+  - electron-to-chromium@1.5.494

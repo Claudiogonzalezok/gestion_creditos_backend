@@ -10,7 +10,7 @@ ssh creditos '~/apps/backend/scripts/deploy/deploy-backend.sh --ref X'  # otra r
 ```
 
 Hace, en orden: backup de la base (`~/bin/backup-db.sh`) → `git merge --ff-only origin/<ref>` →
-`npm ci --omit=dev` (solo si cambió `package.json`/`package-lock.json`) → `npm run migration:run` →
+`pnpm install --frozen-lockfile --prod` (solo si cambió `package.json`, `pnpm-lock.yaml` o `pnpm-workspace.yaml`) → `pnpm run migration:run` →
 `pm2 restart finflow-backend` → health check en `/api/health` (30 s).
 
 - Si falla después de mover el código, vuelve solo al commit anterior y reinicia.
