@@ -750,6 +750,27 @@ POST   /api/system-config/:key/reset
 
 `PUT /api/system-config/:key` valida el `value` de forma estricta: debe ser un decimal simple (`"5"`, `"0.08"`, o un número JSON). Se rechazan con `400` los valores con texto (`"12abc"`), notación científica o hexadecimal, vacíos, `NaN`/`Infinity`, tipos no escalares y cualquier negativo; además cada clave conocida tiene su rango. El valor se guarda normalizado (`" 7 "` → `"7"`).
 
+### Datos y tasas de la empresa (solo ADMIN)
+
+```
+GET    /api/company          → { company: {...}, rates: {...} }
+PUT    /api/company          → actualiza datos (parcial)
+PUT    /api/company/rates    → actualiza tasas (parcial, atómico)
+```
+
+- `company`: `system_name`, `contact_email`, `phone`, `address`, `updated_at`, `updated_by`. Fila única en `company_settings` (migración 053). En `PUT`, `null` o `""` vacían un campo opcional; `system_name` no puede quedar vacío; hay que enviar al menos un campo.
+- `rates` (todas numéricas, guardadas en `system_config`):
+
+| Campo API | Clave `system_config` | Rango |
+|---|---|---|
+| `sale_rate_monthly` | `company_sale_rate_monthly` (referencia, no reemplaza `product_rates`) | 0–1 |
+| `loan_rate_monthly` | `company_loan_rate_monthly` (referencia, no reemplaza `interest_rates`) | 0–1 |
+| `mora_rate_daily` | `penalty_rate_daily` (la que usa el cálculo de mora) | 0–0.5 |
+| `seller_commission_rate` | `commission_rate` (la que usa la comisión de ventas) | 0–1 |
+| `grace_period_days` | `penalty_grace_days` | 0–30 (entero) |
+
+  Si un valor es inválido no se guarda ninguno (`400`).
+
 ### Portal público
 
 ```

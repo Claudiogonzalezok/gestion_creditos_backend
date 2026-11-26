@@ -3,6 +3,7 @@ jest.mock("./systemConfig.queries", () => ({
   findByKey: jest.fn(),
   getValue: jest.fn(),
   update: jest.fn(),
+  updateMany: jest.fn(),
   resetToDefault: jest.fn(),
 }));
 
@@ -69,5 +70,22 @@ describe("systemConfig.service.update — validación numérica estricta", () =>
   it("devuelve 404 si la clave no existe", async () => {
     queries.findByKey.mockResolvedValue(null);
     await expect(service.update("nope", "1", "u1")).rejects.toEqual({ status: 404, message: "Parámetro no encontrado." });
+  });
+});
+
+describe("systemConfig.service.updateMany — atomicidad", () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it("valida todas las claves antes de escribir: una inválida no persiste ninguna", async () => {
+    await expect(
+      service.updateMany({ commission_rate: "0.1", penalty_rate_daily: "0.9" }, "u1"),
+    ).rejects.toEqual({ status: 400, message: "El valor debe estar entre 0 y 0.5." });
+    expect(queries.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("normaliza y persiste todas en una sola llamada", async () => {
+    queries.updateMany.mockResolvedValue([]);
+    await service.updateMany({ commission_rate: "0.10", penalty_grace_days: 5 }, "u1");
+    expect(queries.updateMany).toHaveBeenCalledWith({ commission_rate: "0.1", penalty_grace_days: "5" }, "u1");
   });
 });

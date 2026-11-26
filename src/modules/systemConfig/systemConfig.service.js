@@ -13,7 +13,8 @@ const VALID_RANGES = {
   login_max_attempts:        { min: 1,    max: 10       },
   commission_week_close_day: { min: 1,    max: 7        },
   commission_pay_day:        { min: 1,    max: 7        },
-};
+  company_sale_rate_monthly: { min: 0,    max: 1        },
+  company_loan_rate_monthly: { min: 0,    max: 1        },};
 
 // Decimal simple: dígitos con parte fraccionaria opcional y signo opcional.
 // Rechaza notación científica, hexadecimal, sufijos ("12abc") y vacíos.
@@ -42,10 +43,14 @@ const getByKey = async (key) => {
   return param;
 };
 
-const update = async (key, value, userId) => {
-  const param = await queries.findByKey(key);
-  if (!param) throw { status: 404, message: 'Parámetro no encontrado.' };
-
+/**
+ * Valida el valor de un parámetro (numérico estricto, rango y validaciones
+ * cruzadas). No verifica que la clave exista ni persiste nada.
+ * @param {string} key - clave de system_config
+ * @param {*} value - valor recibido
+ * @returns {Promise<string>} el valor normalizado a guardar
+ */
+const validateValue = async (key, value) => {
   const num   = parseStrictNumber(value);
   const range = VALID_RANGES[key];
   if (num === null) throw { status: 400, message: 'El valor debe ser numérico.' };
@@ -75,7 +80,29 @@ const update = async (key, value, userId) => {
       throw { status: 400, message: 'El día de pago no puede ser igual al día de cierre del ciclo.' };
   }
 
-  return queries.update(key, String(num), userId);
+  return String(num);
+};
+
+const update = async (key, value, userId) => {
+  const param = await queries.findByKey(key);
+  if (!param) throw { status: 404, message: 'Parámetro no encontrado.' };
+  const normalized = await validateValue(key, value);
+  return queries.update(key, normalized, userId);
+};
+
+/**
+ * Actualiza varios parámetros de forma atómica: valida todos antes de
+ * escribir y persiste en una única transacción.
+ * @param {Object<string, *>} entries - { clave: valor }
+ * @param {string} userId - usuario que realiza el cambio
+ * @returns {Promise<object[]>} filas actualizadas
+ */
+const updateMany = async (entries, userId) => {
+  const normalized = {};
+  for (const [key, value] of Object.entries(entries)) {
+    normalized[key] = await validateValue(key, value);
+  }
+  return queries.updateMany(normalized, userId);
 };
 
 const resetToDefault = async (key, userId) => {
@@ -84,4 +111,4 @@ const resetToDefault = async (key, userId) => {
   return queries.resetToDefault(key, userId);
 };
 
-module.exports = { getAll, getByKey, update, resetToDefault };
+module.exports = { getAll, getByKey, update, updateMany, validateValue, resetToDefault };
