@@ -425,11 +425,13 @@ Otras cotas de entrada:
 
 ```
 POST /api/auth/login               → Login sistema interno
-POST /api/auth/refresh             → Renovar access token (cookie rt, rotación atómica)
+POST /api/auth/refresh             → Renovar access token (cookie rt, path /api/auth, rotación atómica)
 POST /api/auth/logout              → Cerrar sesión (invalida JWT)
 GET  /api/auth/me                  → Usuario autenticado
 POST /api/auth/portal/login        → Login portal público
-POST /api/auth/portal/logout       → Cerrar sesión portal
+POST /api/auth/portal/refresh      → Renovar access token portal (cookie prt, path /api/auth/portal)
+POST /api/auth/portal/logout       → Cerrar sesión portal (solo borra prt)
+POST /api/auth/portal/change-password → Cambiar contraseña portal (permitido con contraseña temporal)
 ```
 
 ### Usuarios
@@ -961,7 +963,8 @@ sin registrarse en `cron_execution_log`. Si no hay conexión para tomar el lock,
   - Portal: el login responde siempre el mismo mensaje genérico si el DNI no existe, el portal no está habilitado, la cuenta está inactiva o la contraseña es incorrecta. El bloqueo solo se informa con la contraseña correcta.
 - **Rate limit:** `express-rate-limit` en los endpoints de login. Desactivable con `DISABLE_LOGIN_RATE_LIMIT=true` para entornos e2e. El mensaje 429 indica los minutos que faltan para que venza la ventana real (`LOGIN_RATE_LIMIT_WINDOW_MS`).
 - **IP real del cliente (`TRUST_PROXY`):** `app.set('trust proxy', ...)` cuenta el rate limit por la IP de `X-Forwarded-For` solo si la conexión viene de un proxy confiable. Default `loopback`: producción tiene nginx en el mismo host proxyando a `127.0.0.1:3001` (un salto). Valores: `true`/`false`, un número de saltos (`1`) o una lista de subredes (`loopback, 10.0.0.0/8`). No usar `true` a ciegas: permitiría falsificar la IP con el header.
-- **Contraseña temporal:** `is_temp_password = true` bloquea todos los endpoints salvo `/me/change-password`.
+- **Contraseña temporal:** `is_temp_password = true` bloquea todos los endpoints salvo `/me/change-password` con `403 { code: "TEMP_PASSWORD_REQUIRED" }`. En el portal, `portal_is_temp_password = true` hace que el login devuelva `must_change_password: true` y `code: "TEMP_PASSWORD_REQUIRED"`, y que `/api/portal/*` responda el mismo 403 hasta usar `/api/auth/portal/change-password` (logout también permitido).
+- **Cookies de refresh separadas:** interno usa `rt` (path `/api/auth`), portal usa `prt` (path `/api/auth/portal`); ambas sesiones conviven en el mismo navegador. El logout de una no toca la cookie ni el refresh de la otra. Un refresh con token del tipo equivocado responde `401 INVALID_TOKEN_TYPE` sin revocarlo. `/portal/refresh` acepta la cookie `rt` legada si falta `prt`.
 - **Cierre de sesiones del lado del servidor:** cambiar el rol, resetear la contraseña, desactivar o bloquear a un usuario fija `force_relogin_at` y revoca todos sus refresh tokens en la misma transacción. El middleware rechaza los access tokens emitidos antes (y los de usuarios bloqueados); `/refresh` rechaza usuarios bloqueados.
 - **Rotación atómica del refresh token:** el token usado se revoca con `UPDATE ... WHERE revoked = FALSE RETURNING`. Si dos pestañas refrescan a la vez con la misma cookie, solo una obtiene token nuevo; la otra recibe `401 REFRESH_TOKEN_ROTATED`.
 
@@ -976,6 +979,8 @@ Las respuestas de login, refresh y del middleware mantienen el status **401** y 
 | `ACCOUNT_TEMP_LOCKED`   | login interno (solo ADMIN)              | Bloqueo temporal. `retry_after_seconds` indica cuándo reintentar.                                           |
 | `SESSION_REVOKED`       | refresh y endpoints protegidos (middleware) | La sesión fue cerrada del lado del servidor (bloqueo, desactivación, reset, cambio de rol o reuso de un refresh revocado). Descartar tokens e ir al login sin reintentar refresh. |
 | `REFRESH_TOKEN_ROTATED` | refresh                                 | Otro refresh concurrente ya rotó el token. La cookie vigente es la del ganador: reintentar el refresh una vez o ir al login. |
+| `INVALID_TOKEN_TYPE`    | refresh                                 | La cookie es de la otra audiencia (interno vs portal). No se revoca nada: ir al login de esta audiencia. |
+| `TEMP_PASSWORD_REQUIRED` | **403** en endpoints protegidos (interno y portal); login portal | Contraseña temporal: redirigir al cambio de contraseña. |
 | `TOKEN_EXPIRED`         | endpoints protegidos (en `message`, sin cambios) | Access token vencido: hacer refresh.                                                                    |
 
 Nota: `iat` del JWT tiene resolución de segundos; un token emitido en el mismo segundo que la invalidación también se rechaza.

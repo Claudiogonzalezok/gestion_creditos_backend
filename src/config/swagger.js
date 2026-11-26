@@ -207,7 +207,42 @@ const swaggerSpec = {
           },
         },
         responses: {
-          200: { description: 'Login exitoso — retorna token de portal' },
+          200: {
+            description: 'Login exitoso — retorna token de portal y setea la cookie HttpOnly `prt` (path `/api/auth/portal`). ' +
+              'Si la contraseña es temporal, `data.must_change_password = true` y `data.code = "TEMP_PASSWORD_REQUIRED"`: ' +
+              'todas las rutas del portal salvo change-password y logout responden 403 con ese code hasta cambiarla.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    ok: { type: 'boolean' },
+                    data: {
+                      type: 'object',
+                      properties: {
+                        token:                { type: 'string' },
+                        customer:             { type: 'object' },
+                        must_change_password: { type: 'boolean' },
+                        code:                 { type: 'string', enum: ['TEMP_PASSWORD_REQUIRED'], description: 'Solo si must_change_password' },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+          401: { $ref: '#/components/responses/Unauthorized' },
+        },
+      },
+    },
+
+    '/auth/portal/refresh': {
+      post: {
+        tags: ['Auth'],
+        summary: 'Renovar access token del portal (cookie `prt`)',
+        description: 'Lee la cookie `prt` (o la `rt` legada). Un refresh token interno responde 401 `INVALID_TOKEN_TYPE` sin revocarlo ni borrar cookies.',
+        responses: {
+          200: { description: 'Token renovado; rota la cookie `prt`' },
           401: { $ref: '#/components/responses/Unauthorized' },
         },
       },

@@ -2,7 +2,7 @@ const router       = require('express').Router();
 const { body }     = require('express-validator');
 const controller   = require('./auth.controller');
 const { validate } = require('../../middlewares/validate.middleware');
-const { authenticate, authenticatePortal } = require('../../middlewares/auth.middleware');
+const { authenticate, authenticatePortalAllowTemp } = require('../../middlewares/auth.middleware');
 
 const loginRules = [
   body('dni').trim().notEmpty().withMessage('El DNI es obligatorio.'),
@@ -31,9 +31,9 @@ router.get('/me',           authenticate, controller.me);
 
 // ── Portal público ────────────────────────────────────────────────────────────
 router.post('/portal/login',           loginRules, validate, controller.loginPortal);
-router.post('/portal/logout',          authenticatePortal, controller.logoutPortal);
-router.post('/portal/logout/all',      authenticatePortal, controller.logoutAllPortal);
+router.post('/portal/logout',          authenticatePortalAllowTemp, controller.logoutPortal);
+router.post('/portal/logout/all',      authenticatePortalAllowTemp, controller.logoutAllPortal);
 router.post('/portal/refresh',         controller.refreshPortal);
-router.post('/portal/change-password', authenticatePortal, changePortalPasswordRules, validate, controller.changePortalPassword);
+router.post('/portal/change-password', authenticatePortalAllowTemp, changePortalPasswordRules, validate, controller.changePortalPassword);
 
 module.exports = router;
