@@ -579,12 +579,19 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
       ),
       // Egreso de préstamos (LOAN) desembolsados desde esta caja (rama DAILY).
       // Por ahora el desembolso es 100% efectivo — no soporta split cash/transfer.
+      // También suma las devoluciones de sobrepago por cambio de plan (P10 / #45):
+      // ambas son efectivo entregado al cliente por un crédito, y así el esperado
+      // de caja las descuenta sin cambiar la fórmula de cashSessions.calculations.
       db.query(
         `SELECT
-         COALESCE(SUM(total_amount), 0)::float8 AS loans_cash
-       FROM credits
-       WHERE disbursement_cash_session_id = $1
-         AND type = 'LOAN'`,
+         (SELECT COALESCE(SUM(total_amount), 0)
+            FROM credits
+           WHERE disbursement_cash_session_id = $1
+             AND type = 'LOAN')::float8 AS loans_cash,
+         (SELECT COALESCE(SUM(excess_amount), 0)
+            FROM credit_plan_changes
+           WHERE refund_cash_session_id = $1
+             AND excess_disposition = 'REFUND')::float8 AS refunds_cash`,
         [cashSessionId],
       ),
       db.query(
@@ -617,7 +624,9 @@ const computeSessionTotals = async (cashSessionId, db = pool) => {
     outflows_expenses_transfer: expenses.rows[0].expenses_transfer,
     outflows_commissions_cash: 0, // DEPRECATED: ahora se imputa a Caja General
     outflows_commissions_transfer: 0, // DEPRECATED
-    outflows_loans_cash: loans.rows[0].loans_cash,
+    // Incluye las devoluciones de sobrepago (desglosadas en la key siguiente).
+    outflows_loans_cash: loans.rows[0].loans_cash + loans.rows[0].refunds_cash,
+    outflows_plan_change_refunds_cash: loans.rows[0].refunds_cash,
     outflows_loans_transfer: 0, // sin soporte de split todavía
     conversions_cash_delta: conversions.rows[0].conversions_cash_delta,
     conversions_transfer_delta: conversions.rows[0].conversions_transfer_delta,

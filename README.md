@@ -482,8 +482,24 @@ PATCH  /api/credits/:id/approve
 PATCH  /api/credits/:id/reject
 PATCH  /api/credits/:id/early-settlement
 PATCH  /api/credits/:id/write-off     → Castigo de crédito irrecuperable (ADMIN)
-PATCH  /api/credits/:id/plan-change   → Modificación de plan de pago (ADMIN)
+GET    /api/credits/:id/plan-change/simulate → Simulación del cambio de plan (ADMIN, no persiste)
+POST   /api/credits/:id/plan-change   → Ejecución del cambio de plan (ADMIN)
 ```
+
+#### Cambio de plan con sobrepago (`excess_disposition`)
+
+Si el cliente ya pagó más que el total del nuevo plan, el saldo recalculado es negativo y el excedente **no se descarta**: el cliente elige qué hacer con él.
+
+| Aspecto | Contrato |
+|---|---|
+| Simulación | La respuesta incluye `excessAmount` (monto pagado de más, `0` si no hay) y `requiresExcessDisposition` (`true` si `excessAmount > 0`). `cancelledInstallments` es exactamente lo que anula la ejecución (si el crédito se cancela, incluye la cuota sobreviviente). |
+| Body de ejecución | `reason` (opcional) y `excess_disposition`: `"CREDIT_BALANCE"` o `"REFUND"`. Obligatorio solo si hay excedente; sin excedente se ignora. |
+| Falta o es inválido con excedente | `422` con `code: "EXCESS_DISPOSITION_REQUIRED"`. No se modifica nada. |
+| `CREDIT_BALANCE` | El excedente queda como saldo a favor en `credits.credit_balance`. Sin movimiento de caja. |
+| `REFUND` | Devolución en efectivo imputada a la caja operativa activa de la jornada (`credit_plan_changes.refund_cash_session_id`). Se descuenta del esperado de caja dentro de `outflows_loans_cash` (desglose en `outflows_plan_change_refunds_cash`). Sin caja activa → `409` con `code: "NO_ACTIVE_SESSION"`. |
+| Respuesta de ejecución | Igual que la simulación, más `excessDisposition` (`null` sin excedente), `plan_change_id` y `executed_at`. |
+
+La auditoría (`credit_plan_changes`) guarda `excess_amount`, `excess_disposition` y `refund_cash_session_id` (migración 050). Aplica a créditos LOAN y SALE.
 
 **Body crear SALE:**
 
@@ -538,7 +554,7 @@ La reversión (`POST /api/payments/:id/reverse`, body `reason` de 5 a 500 caract
 
 Soporta cobros con método mixto (efectivo + transferencia): campos `amount_cash` / `amount_transfer` opcionales.
 
-El endpoint `approve` detecta automáticamente si `amount_received` supera el saldo de la cuota actual y aplica el excedente a las siguientes cuotas en orden. Si se pagan cuotas adicionales completas, sus fechas se recorren con `shiftInstallmentDates`.
+El endpoint `approve` detecta automáticamente si `amount_received` supera el saldo de la cuota actual y aplica el excedente a las siguientes cuotas en orden. Si se pagan cuotas adicionales completas, sus fechas se recorren con `shiftInstallmentDates`. Si después de cubrir todas las cuotas pendientes todavía sobra dinero (el saldo bajó entre la pre-carga y la aprobación), la aprobación se rechaza con `409` y no se registra ningún movimiento de caja: todo lo que entra a caja queda imputado a una cuota.
 
 #### Pre-carga idempotente: `client_request_id`
 

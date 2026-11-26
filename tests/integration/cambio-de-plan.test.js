@@ -145,7 +145,12 @@ describe("changePlan — ejecución contra DB", () => {
        VALUES ('MONTHLY', 5, 0, 200000, 0.10, TRUE)`,
     );
 
-    const r = await creditsService.changePlan(credit.id, {}, admin.id);
+    // Saldo −10000: el cliente debe elegir el destino del excedente (#45).
+    const r = await creditsService.changePlan(
+      credit.id,
+      { excess_disposition: "CREDIT_BALANCE" },
+      admin.id,
+    );
 
     expect(r.creditWillBeSettled).toBe(true);
     expect(r.newBalance).toBe(-10000);
