@@ -21,8 +21,14 @@ const {
   getWeekBounds,
   getProductInstallmentContribution,
   buildScheduleAmounts,
+  buildSaleScheduleAmounts,
 } = require("../../utils/creditCalculator");
-const { round2, toCents, fromCents, splitMoney } = require("../../utils/money");
+const {
+  round2,
+  toCents,
+  fromCents,
+  parseMoneyInput,
+} = require("../../utils/money");
 const {
   moveToNextBusinessDay,
   getActiveHolidayKeysInRange,
@@ -227,30 +233,14 @@ const buildSaleSimulationSchedule = async ({
     paymentFrequency,
   );
 
-  // Capital de cada línea repartido en centavos: su suma es exactamente el
-  // capital financiado de la línea (la última cuota absorbe el resto).
-  const groupCapitals = groups.map((group) =>
-    splitMoney(group.financed_line_total, group.installments_count).map(
-      toCents,
-    ),
-  );
+  // Montos en centavos: capital exacto por línea e interés nunca negativo.
+  const amounts = buildSaleScheduleAmounts(groups, dueDates.length);
 
   const rows = dueDates.map((dueDate, index) => {
-    let amountCents = 0;
-    let capitalCents = 0;
-
-    groups.forEach((group, groupIndex) => {
-      if (index >= group.installments_count) return;
-      amountCents += toCents(group.installment_contribution);
-      capitalCents += groupCapitals[groupIndex][index];
-    });
-
     return {
       installment_number: index + 1,
       due_date: toApiDate(dueDate),
-      amount: fromCents(amountCents),
-      capital: fromCents(capitalCents),
-      interest: fromCents(amountCents - capitalCents),
+      ...amounts[index],
     };
   });
 
@@ -1601,7 +1591,7 @@ const refinance = async (creditId, data, adminId) => {
 
     // ── 4. Calcular monto total trasladado ───────────────────────────────────
     const extraCharges =
-      round2(parseFloat(data.extra_charges || 0));
+      parseMoneyInput(data.extra_charges, "Los cargos adicionales");
     if (extraCharges < 0)
       throw {
         status: 400,

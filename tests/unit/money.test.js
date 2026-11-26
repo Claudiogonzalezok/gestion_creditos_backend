@@ -44,3 +44,22 @@ describe("utils/money", () => {
     expect(splitMoney(100, 0)).toEqual([]);
   });
 });
+
+describe("parseMoneyInput", () => {
+  const { parseMoneyInput } = require("../../src/utils/money");
+
+  it("vacío/undefined vale 0 y redondea a centavos", () => {
+    expect(parseMoneyInput(undefined, "x")).toBe(0);
+    expect(parseMoneyInput("", "x")).toBe(0);
+    expect(parseMoneyInput("10.005", "x")).toBe(10.01);
+  });
+
+  it("valor no numérico lanza 400 en vez de convertirse en 0", () => {
+    expect(() => parseMoneyInput("abc", "Los cargos adicionales")).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+    expect(() => parseMoneyInput("Infinity", "x")).toThrow(
+      expect.objectContaining({ status: 400 }),
+    );
+  });
+});

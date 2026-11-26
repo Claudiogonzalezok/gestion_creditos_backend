@@ -51,9 +51,23 @@ describe("P32 #46 — getCollectorsReport", () => {
       [reversal.id, reversedOriginal.id],
     );
 
+    // Demora de aprobación: los cobros aprobados tardan 2h; el rechazo y la
+    // reversión tardan mucho más y NO deben entrar en avg_approval_hours.
+    await pool.query(
+      `UPDATE payments SET created_at = approved_at - INTERVAL '2 hours'
+        WHERE id = ANY($1::uuid[])`,
+      [[ok.id, reversedOriginal.id]],
+    );
+    await pool.query(
+      `UPDATE payments SET created_at = approved_at - INTERVAL '10 hours'
+        WHERE id = ANY($1::uuid[])`,
+      [[rejected.id, reversal.id]],
+    );
+
     const rows = await reportsQueries.getCollectorsReport(today(), today());
     const row = rows.find((r) => r.collector_id === collector.id);
 
+    expect(row.avg_approval_hours).toBeCloseTo(2, 2);
     expect(row.total_payments).toBe(3);
     expect(row.approved_count).toBe(2);
     expect(row.rejected_count).toBe(1);

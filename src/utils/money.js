@@ -52,7 +52,8 @@ const subtractMoney = (a, b) => fromCents(toCents(a) - toCents(b));
 
 /**
  * Reparte un total en `count` partes cuya suma es exactamente el total.
- * Cada parte recibe el cociente entero de centavos y la última absorbe el resto.
+ * Cada parte recibe el cociente entero de centavos y el resto se reparte de a un
+ * centavo en las primeras partes: las partes difieren a lo sumo en 1 centavo.
  * @param {number|string} total - Monto a repartir.
  * @param {number} count - Cantidad de partes (> 0).
  * @returns {number[]} Partes en unidades monetarias.
@@ -62,12 +63,32 @@ const splitMoney = (total, count) => {
   if (!Number.isInteger(n) || n <= 0) return [];
   const totalCents = toCents(total);
   const base = Math.trunc(totalCents / n);
-  const parts = Array.from({ length: n }, () => base);
-  parts[n - 1] = totalCents - base * (n - 1);
-  return parts.map(fromCents);
+  const rest = totalCents - base * n;
+  const step = Math.sign(rest);
+  return Array.from({ length: n }, (_, i) =>
+    fromCents(base + (i < Math.abs(rest) ? step : 0)),
+  );
+};
+
+/**
+ * Interpreta un monto opcional recibido por API: vacío vale 0 y un valor no
+ * numérico o infinito lanza 400 en vez de convertirse silenciosamente en 0.
+ * @param {*} value - Valor recibido.
+ * @param {string} label - Nombre del campo para el mensaje de error.
+ * @returns {number} Monto redondeado a centavos.
+ * @throws {{ status: 400, message: string }} si el valor no es numérico.
+ */
+const parseMoneyInput = (value, label) => {
+  if (value === undefined || value === null || String(value).trim() === "")
+    return 0;
+  const n = Number(value);
+  if (!Number.isFinite(n))
+    throw { status: 400, message: `${label} deben ser un monto numérico válido.` };
+  return round2(n);
 };
 
 module.exports = {
+  parseMoneyInput,
   toCents,
   fromCents,
   round2,

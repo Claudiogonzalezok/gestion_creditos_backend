@@ -218,17 +218,52 @@ const buildScheduleAmounts = ({
   let remainingCents = toCents(totalToReturn);
   return capitals.map((capital) => {
     remainingCents = Math.max(0, remainingCents - amountCents);
+    // Nunca interés negativo: si la cuota no cubre el capital (caso degenerado
+    // de tasa ~0 con total menor al financiado), el capital se recorta a la cuota.
+    const capitalCents = Math.min(toCents(capital), amountCents);
     return {
       amount: fromCents(amountCents),
-      capital,
-      interest: fromCents(amountCents - toCents(capital)),
+      capital: fromCents(capitalCents),
+      interest: fromCents(amountCents - capitalCents),
       remaining_estimated: fromCents(remainingCents),
+    };
+  });
+};
+
+/**
+ * Agrega en centavos las líneas de una venta en filas de cronograma.
+ * El capital de cada línea se reparte con splitMoney (suma exacta por línea) y
+ * el interés de cada fila nunca es negativo (capital recortado a la cuota).
+ * @param {Array<object>} groups - Líneas con financed_line_total, installments_count e installment_contribution.
+ * @param {number} installmentsCount - Cantidad de filas del cronograma.
+ * @returns {Array<{amount:number, capital:number, interest:number}>}
+ */
+const buildSaleScheduleAmounts = (groups, installmentsCount) => {
+  const groupCapitals = groups.map((group) =>
+    splitMoney(group.financed_line_total, group.installments_count).map(
+      toCents,
+    ),
+  );
+  return Array.from({ length: installmentsCount }, (_, index) => {
+    let amountCents = 0;
+    let capitalCents = 0;
+    groups.forEach((group, groupIndex) => {
+      if (index >= group.installments_count) return;
+      amountCents += toCents(group.installment_contribution);
+      capitalCents += groupCapitals[groupIndex][index];
+    });
+    capitalCents = Math.min(capitalCents, amountCents);
+    return {
+      amount: fromCents(amountCents),
+      capital: fromCents(capitalCents),
+      interest: fromCents(amountCents - capitalCents),
     };
   });
 };
 
 module.exports = {
   buildScheduleAmounts,
+  buildSaleScheduleAmounts,
   getInstallmentAmount,
   getTotalWithInterest,
   getTotalToReturn,

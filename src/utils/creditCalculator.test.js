@@ -135,3 +135,37 @@ describe("buildScheduleAmounts (P32 #39)", () => {
     },
   );
 });
+
+describe("interés nunca negativo (P32 review)", () => {
+  const cents = (n) => Math.round(n * 100);
+
+  it("buildScheduleAmounts con tasa casi cero no emite interés negativo", () => {
+    const rows = buildScheduleAmounts({
+      financedAmount: 100.01,
+      installmentAmount: 33.34,
+      installmentsCount: 3,
+      totalToReturn: 100.02,
+    });
+    rows.forEach((r) => {
+      expect(r.interest).toBeGreaterThanOrEqual(0);
+      expect(cents(r.capital) + cents(r.interest)).toBe(cents(r.amount));
+    });
+    expect(rows.reduce((a, r) => a + cents(r.capital), 0)).toBe(10001);
+  });
+
+  it("buildSaleScheduleAmounts suma capital exacto por línea sin interés negativo", () => {
+    const { buildSaleScheduleAmounts } = require("./creditCalculator");
+    const groups = [
+      { financed_line_total: 100.01, installments_count: 3, installment_contribution: 33.34 },
+      { financed_line_total: 50, installments_count: 2, installment_contribution: 30 },
+    ];
+    const rows = buildSaleScheduleAmounts(groups, 3);
+    expect(rows).toHaveLength(3);
+    rows.forEach((r) => {
+      expect(r.interest).toBeGreaterThanOrEqual(0);
+      expect(cents(r.capital) + cents(r.interest)).toBe(cents(r.amount));
+    });
+    expect(rows.reduce((a, r) => a + cents(r.capital), 0)).toBe(15001);
+    expect(rows[2].amount).toBe(33.34);
+  });
+});

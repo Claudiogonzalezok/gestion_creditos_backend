@@ -230,7 +230,7 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
        ), 0)::float8                                                             AS approval_rate,
        COALESCE(ROUND(
          AVG(EXTRACT(EPOCH FROM (p.approved_at - p.created_at)) / 3600)
-         FILTER (WHERE p.status = 'APPROVED')::numeric, 2
+         FILTER (WHERE p.status = 'APPROVED' AND NOT p.is_reversal)::numeric, 2
        ), 0)::float8                                                             AS avg_approval_hours
      FROM users u
      LEFT JOIN collector_payments p
