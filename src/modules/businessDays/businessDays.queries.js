@@ -51,7 +51,8 @@ const findById = async (id, db = pool) => {
 const lockAndGetById = async (client, id) => {
   const r = await client.query(
     `SELECT id, business_date, branch_id, status,
-            opened_at, ready_to_close_at, closed_at, audited_at
+            opened_at, ready_to_close_at, closed_at, audited_at,
+            observations
      FROM business_days
      WHERE id = $1
      FOR UPDATE`,
@@ -61,17 +62,27 @@ const lockAndGetById = async (client, id) => {
 };
 
 /**
- * Crea una jornada para (fecha, sucursal). Si ya existe (race) la unique
- * constraint blinda la duplicación: el caller debe recuperar la existente.
+ * Crea la jornada de (fecha, sucursal) o devuelve la existente. Usa
+ * ON CONFLICT DO NOTHING para que una carrera con otra request no aborte la
+ * transacción del caller (#43): si otra transacción la creó en simultáneo,
+ * el INSERT espera su COMMIT, no inserta nada y se relee la fila confirmada.
  */
 const create = async (client, { businessDate, branchId }) => {
   const r = await client.query(
     `INSERT INTO business_days (business_date, branch_id)
      VALUES ($1::date, $2)
+     ON CONFLICT (business_date, branch_id) DO NOTHING
      RETURNING id, business_date, branch_id, status, opened_at`,
     [businessDate, branchId],
   );
-  return r.rows[0];
+  if (r.rows[0]) return r.rows[0];
+  const existing = await client.query(
+    `SELECT id, business_date, branch_id, status, opened_at
+     FROM business_days
+     WHERE business_date = $1::date AND branch_id = $2`,
+    [businessDate, branchId],
+  );
+  return existing.rows[0];
 };
 
 /**

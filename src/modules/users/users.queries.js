@@ -45,8 +45,8 @@ const findByEmail = async (email) => {
   return result.rows[0] || null;
 };
 
-const countActiveAdmins = async () => {
-  const result = await pool.query(
+const countActiveAdmins = async (db = pool) => {
+  const result = await db.query(
     `SELECT COUNT(*) FROM users WHERE role = 'ADMIN' AND status = 'ACTIVE' AND locked_at IS NULL`
   );
   return parseInt(result.rows[0].count);
@@ -106,10 +106,30 @@ const updateOwnProfile = async (id, { full_name, email, phone, address }) => {
   return result.rows[0] || null;
 };
 
-const deactivate = async (id) => {
-  await pool.query(
-    `UPDATE users SET status = 'INACTIVE', updated_at = NOW() WHERE id = $1`, [id]
+/**
+ * Bloquea (FOR UPDATE) las filas de admins activos para serializar la guarda
+ * del último admin. Orden fijo por id para evitar deadlocks.
+ * @param {object} client - Cliente de transacción.
+ */
+const lockActiveAdmins = async (client) => {
+  await client.query(
+    `SELECT id FROM users
+     WHERE role = 'ADMIN' AND status = 'ACTIVE' AND locked_at IS NULL
+     ORDER BY id
+     FOR UPDATE`
   );
+};
+
+/**
+ * Desactiva un usuario solo si sigue activo.
+ * @returns {Promise<boolean>} true si efectivamente cambió de estado.
+ */
+const deactivate = async (id, db = pool) => {
+  const r = await db.query(
+    `UPDATE users SET status = 'INACTIVE', updated_at = NOW()
+     WHERE id = $1 AND status <> 'INACTIVE'`, [id]
+  );
+  return r.rowCount === 1;
 };
 
 const activate = async (id) => {
@@ -158,6 +178,6 @@ const setForceReloginAt = async (id) => {
 
 module.exports = {
   findAll, findById, findByDni, findByEmail, countActiveAdmins,
-  create, update, deactivate, activate, resetPassword, changePassword, unlock,
+  create, update, lockActiveAdmins, deactivate, activate, resetPassword, changePassword, unlock,
   setForceReloginAt, findOwnProfileById, updateOwnProfile,
 };

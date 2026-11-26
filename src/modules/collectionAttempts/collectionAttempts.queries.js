@@ -5,8 +5,8 @@ const pool = require('../../config/db');
  * @param {{ installmentId, collectorId, createdBy, attemptType, reason, nextVisitDate, notes }} data
  * @returns {Promise<object>}
  */
-const create = async ({ installmentId, collectorId, createdBy, attemptType, reason, nextVisitDate, notes }) => {
-  const r = await pool.query(
+const create = async ({ installmentId, collectorId, createdBy, attemptType, reason, nextVisitDate, notes }, db = pool) => {
+  const r = await db.query(
     `INSERT INTO collection_attempts
        (installment_id, collector_id, created_by, attempt_type, reason, next_visit_date, notes)
      VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -76,7 +76,8 @@ const findById = async (id) => {
 const findRawById = async (id) => {
   const r = await pool.query(
     `SELECT id, installment_id, collector_id, created_by, attempt_type,
-            created_at, voided_at, voided_by
+            created_at, voided_at, voided_by,
+            (created_at::date = CURRENT_DATE) AS created_today
      FROM collection_attempts
      WHERE id = $1`,
     [id]
@@ -87,12 +88,14 @@ const findRawById = async (id) => {
 /**
  * Marca un intento como anulado (supersede pattern). No realiza DELETE físico.
  * El intento sigue visible en el management log con badge "ANULADO".
+ * Solo anula si sigue vigente (voided_at IS NULL): devuelve null si otra
+ * request ya lo anuló (#49).
  */
-const markVoided = async (id, voidedBy) => {
-  const r = await pool.query(
+const markVoided = async (id, voidedBy, db = pool) => {
+  const r = await db.query(
     `UPDATE collection_attempts
      SET voided_at = NOW(), voided_by = $2
-     WHERE id = $1
+     WHERE id = $1 AND voided_at IS NULL
      RETURNING id, voided_at, voided_by`,
     [id, voidedBy]
   );
