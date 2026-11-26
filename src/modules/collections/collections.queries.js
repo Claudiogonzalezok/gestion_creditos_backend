@@ -468,6 +468,23 @@ const create = async ({ collectorId, date, filter, adminId }, db = pool) => {
  */
 const createDetails = async (sheetId, items, db = pool) => {
   if (!items.length) return;
+  // Inserción por lotes (#38): Postgres admite hasta 65535 parámetros por
+  // query; con 26 columnas por fila, 1000 filas = 26000 parámetros.
+  // order_number se calcula sobre el índice global para no reiniciarse por lote.
+  const CHUNK_SIZE = 1000;
+  for (let start = 0; start < items.length; start += CHUNK_SIZE) {
+    await insertDetailsChunk(sheetId, items.slice(start, start + CHUNK_SIZE), start, db);
+  }
+};
+
+/**
+ * Inserta un lote de detalles de planilla en un único INSERT multi-fila.
+ * @param {string} sheetId
+ * @param {Array<object>} items - lote de filas
+ * @param {number} offset - índice global de la primera fila del lote
+ * @param {import('pg').PoolClient} db
+ */
+const insertDetailsChunk = async (sheetId, items, offset, db) => {
   const COLS_PER_ROW = 26;
   const values = items
     .map((_, i) => {
@@ -480,7 +497,7 @@ const createDetails = async (sheetId, items, db = pool) => {
   const params = items.flatMap((item, i) => [
     sheetId,
     item.installment_id,
-    i + 1,
+    offset + i + 1,
     item.amount_due, // planned_amount
     item.inclusion_criteria || "DUE_DATE",
     item.antecedent_type || null,

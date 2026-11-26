@@ -2,6 +2,10 @@ const queries = require('./productVariants.queries');
 const unitQueries = require('../productUnits/productUnits.queries');
 const { withTransaction } = require('../../utils/transaction');
 
+// Tope de unidades iniciales por request (#38): evita transacciones con
+// millones de inserts. Se valida también en el middleware.
+const MAX_INITIAL_UNITS = 10000;
+
 /**
  * Genera un unit_code automático válido para stock inicial.
  * @returns {string} Código de unidad único.
@@ -57,6 +61,9 @@ const create = async ({ product_id, color, size, capacity, current_price, initia
   const initialUnits = Number.isInteger(Number(initial_units))
     ? Math.max(0, Number(initial_units))
     : 1;
+
+  if (initialUnits > MAX_INITIAL_UNITS)
+    throw { status: 400, message: `initial_units no puede superar ${MAX_INITIAL_UNITS}.` };
 
   return withTransaction(async (client) => {
     const variant = await queries.createWithClient(client, {
@@ -154,6 +161,10 @@ const createBulk = async ({ product_id, rows }) => {
     };
   }
 
+  const totalUnits = validRows.reduce((acc, r) => acc + r.initialUnits, 0);
+  if (totalUnits > MAX_INITIAL_UNITS)
+    throw { status: 400, message: `La suma de initial_units no puede superar ${MAX_INITIAL_UNITS}.` };
+
   // Todo o nada: una sola transacción para el lote completo, así un fallo en
   // la fila k no deja k-1 variantes creadas que bloqueen el reintento.
   await withTransaction(async (client) => {
@@ -213,4 +224,4 @@ const activate = async (id) => {
   await queries.activate(id);
 };
 
-module.exports = { getAll, getById, create, createBulk, update, deactivate, activate };
+module.exports = { MAX_INITIAL_UNITS, getAll, getById, create, createBulk, update, deactivate, activate };

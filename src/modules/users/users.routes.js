@@ -1,3 +1,4 @@
+const { paginationRules } = require('../../utils/pagination');
 const router      = require('express').Router();
 const controller  = require('./users.controller');
 const v           = require('../../utils/validators');
@@ -24,6 +25,7 @@ router.patch('/me', v.users.updateMe, validate, controller.updateMe);
 router.get('/',
   authorize('ADMIN'),
   [
+    ...paginationRules(),
     query('role').optional().isIn(['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR']).withMessage('role inválido.'),
     query('roles').optional().custom((value) => {
       const valid = ['ADMIN','SELLER','COLLECTOR','SELLER_COLLECTOR'];

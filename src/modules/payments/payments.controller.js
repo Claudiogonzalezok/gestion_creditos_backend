@@ -1,10 +1,12 @@
 const service  = require('./payments.service');
+const { parsePagination, sendList } = require('../../utils/pagination');
 const response = require('../../utils/response');
 
 const getAll = async (req, res) => {
   try {
     const { status, collector_id, installment_id, date_from, date_to } = req.query;
-    return response.success(res, await service.getAll({ status, collector_id, installment_id, date_from, date_to }, req.user));
+    const pagination = parsePagination(req.query);
+    return sendList(res, await service.getAll({ status, collector_id, installment_id, date_from, date_to, pagination }, req.user));
   } catch (err) { return response.serverError(res, err); }
 };
 

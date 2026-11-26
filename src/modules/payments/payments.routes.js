@@ -1,3 +1,4 @@
+const { paginationRules } = require('../../utils/pagination');
 const router        = require('express').Router();
 const controller    = require('./payments.controller');
 const { query }     = require('express-validator');
@@ -11,6 +12,7 @@ router.use(authenticate);
 router.get('/',
   authorize('ADMIN','COLLECTOR','SELLER_COLLECTOR'),
   [
+    ...paginationRules(),
     query('status').optional()
       .isIn(['PENDING','APPROVED','REJECTED'])
       .withMessage('status debe ser PENDING, APPROVED o REJECTED.'),

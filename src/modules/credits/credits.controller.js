@@ -156,7 +156,7 @@ const getSimulateProducts = async (req, res) => {
     const search = String(req.query.search || "")
       .trim()
       .slice(0, 100);
-    const limit = parseInt(req.query.limit) || 10;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 10, 50);
     return response.success(
       res,
       await prQueries.findProductsWithActiveRates({ search, limit }),

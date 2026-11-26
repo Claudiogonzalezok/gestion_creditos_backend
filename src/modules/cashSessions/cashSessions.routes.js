@@ -1,3 +1,4 @@
+const { paginationRules } = require('../../utils/pagination');
 const router = require("express").Router();
 const controller = require("./cashSessions.controller");
 const { param, query, body } = require("express-validator");
@@ -52,6 +53,7 @@ router.get("/active", controller.getActive);
 router.get(
   "/",
   [
+    ...paginationRules(),
     query("status")
       .optional()
       .isIn(["OPEN", "PENDING_RECONCILIATION", "CLOSED"]),

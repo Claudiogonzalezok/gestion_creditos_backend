@@ -1,4 +1,5 @@
 const pool = require("../../config/db");
+const { runListQuery } = require("../../utils/pagination");
 
 // ── Cash sessions ───────────────────────────────────────────────────────────
 
@@ -232,8 +233,8 @@ const findAll = async (filters = {}) => {
     params.push(filters.branchId);
     q += ` AND bd.branch_id = $${params.length}`;
   }
-  q += ` ORDER BY cs.opened_at DESC`;
-  return (await pool.query(q, params)).rows;
+  q += ` ORDER BY cs.opened_at DESC, cs.id DESC`;
+  return runListQuery(q, params, filters.pagination);
 };
 
 const create = async (

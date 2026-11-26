@@ -361,6 +361,31 @@ Backup diario cifrado de la base, con copia en Google Drive y ensayo de restore 
 
 ## Endpoints
 
+### Paginación de listados (opcional)
+
+Los listados `GET /api/payments`, `/api/installments`, `/api/users`, `/api/commissions`, `/api/collection-attempts` y `/api/cash-sessions` aceptan paginación **opcional** (helper `src/utils/pagination.js`):
+
+| Parámetro | Rango | Notas |
+|---|---|---|
+| `limit` | 1–100 | Tamaño de página. Si solo se envía `page`/`offset`, vale 50. |
+| `offset` | 0–1.000.000 | Filas a saltear. Tiene prioridad sobre `page`. |
+| `page` | 1–100.000 | Página 1-based; `offset = (page - 1) × limit`. |
+
+- **Sin ninguno de los tres**, la respuesta es la de siempre: `data` es el array completo (compatibilidad con el frontend actual).
+- **Con alguno**, `data` trae solo la página y se agrega `pagination: { total, limit, offset }`, donde `total` es la cantidad de filas que cumplen los filtros.
+- Valores fuera de rango o no numéricos → `400`.
+
+Ejemplo: `GET /api/payments?status=APPROVED&limit=20&page=2` →
+`{ "ok": true, "message": "OK", "data": [...20 filas], "pagination": { "total": 137, "limit": 20, "offset": 20 } }`
+
+Otras cotas de entrada:
+- `GET /api/notifications`: `page` 1–100.000 y `limit` 1–100 (default 20). Mantiene su formato propio.
+- `GET /api/credits/simulate/products` (público): `limit` 1–50 (default 10).
+- `GET /api/cash-accounts/:id/movements` ya paginaba con `page`/`page_size` (máx. 100).
+- `POST /api/product-variants` y `/bulk`: `initial_units` 0–10.000 por variante y como suma total del lote (las filas sin `initial_units` cuentan 1).
+- La generación de planillas inserta los detalles por lotes de 1000 filas (límite de 65535 parámetros de Postgres).
+
+
 ### Autenticación
 
 ```

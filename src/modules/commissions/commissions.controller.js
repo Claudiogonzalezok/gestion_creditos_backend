@@ -1,10 +1,12 @@
 const service  = require('./commissions.service');
+const { parsePagination, sendList } = require('../../utils/pagination');
 const response = require('../../utils/response');
 
 const getCommissions = async (req, res) => {
   try {
     const { user_id, status, week_start } = req.query;
-    return response.success(res, await service.getCommissions({ userId: user_id, status, weekStart: week_start }, req.user));
+    const pagination = parsePagination(req.query);
+    return sendList(res, await service.getCommissions({ userId: user_id, status, weekStart: week_start, pagination }, req.user));
   } catch (err) { return response.serverError(res, err); }
 };
 

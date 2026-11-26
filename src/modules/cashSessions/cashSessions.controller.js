@@ -1,4 +1,5 @@
 const service = require("./cashSessions.service");
+const { parsePagination, sendList } = require('../../utils/pagination');
 const response = require("../../utils/response");
 
 const handleError = (res, err) => {
@@ -52,8 +53,9 @@ const getAll = async (req, res) => {
       businessDayId: req.query.business_day_id,
       businessDate: req.query.business_date,
       branchId: req.query.branch_id,
+      pagination: parsePagination(req.query),
     };
-    return response.success(res, await service.getAll(filters));
+    return sendList(res, await service.getAll(filters));
   } catch (err) {
     return handleError(res, err);
   }

@@ -1,9 +1,9 @@
 const pool = require("../../config/db");
-const { getWeekBounds } = require("../../utils/creditCalculator");
+const { runListQuery } = require("../../utils/pagination");
 
 // ── Comisiones ────────────────────────────────────────────────
 
-const findCommissions = async ({ userId, status, weekStart } = {}) => {
+const findCommissions = async ({ userId, status, weekStart, pagination } = {}) => {
   let q = `
     SELECT cm.id, cm.user_id, cm.credit_id, cm.amount::float8, cm.status,
            cm.week_start, cm.week_end, cm.created_at,
@@ -28,8 +28,8 @@ const findCommissions = async ({ userId, status, weekStart } = {}) => {
     params.push(weekStart);
     q += ` AND cm.week_start = $${params.length}`;
   }
-  q += ` ORDER BY cm.created_at DESC`;
-  return (await pool.query(q, params)).rows;
+  q += ` ORDER BY cm.created_at DESC, cm.id DESC`;
+  return runListQuery(q, params, pagination);
 };
 
 // Suma neto de todas las comisiones pendientes de un usuario (sin filtro de semana)
