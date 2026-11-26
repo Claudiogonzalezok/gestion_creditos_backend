@@ -5,6 +5,8 @@ const variantQueries = require('../../src/modules/productVariants/productVariant
 const variantService = require('../../src/modules/productVariants/productVariants.service');
 const rateService = require('../../src/modules/interestRates/interestRates.service');
 const unitQueries = require('../../src/modules/productUnits/productUnits.queries');
+const productRatesQueries = require('../../src/modules/productRates/productRates.queries');
+const productService = require('../../src/modules/products/products.service');
 
 setupTestSuite();
 
@@ -75,6 +77,11 @@ describe('createBulk de variantes — todo o nada', () => {
 });
 
 describe('interestRates — reactivar sin solaparse', () => {
+  // Limpieza de datos propios del test para que la suite sea re-ejecutable
+  beforeEach(async () => {
+    await pool.query(`DELETE FROM interest_rates WHERE installments_count IN (77, 78)`);
+  });
+
   it('reactivar una tasa que se solapa con otra activa devuelve 409 y no la activa', async () => {
     const old = await rateService.create({
       payment_frequency: 'WEEKLY', installments_count: 77, min_amount: 0, max_amount: 1000, rate: 10,
@@ -105,6 +112,25 @@ describe('interestRates — reactivar sin solaparse', () => {
     });
     expect(again.id).toBe(old.id);
     expect(again.active).toBe(true);
+  });
+});
+
+describe('productRates — caché tras renombrar producto', () => {
+  it('el listado de tasas muestra el nombre nuevo inmediatamente después de renombrar', async () => {
+    const productId = await createProduct();
+    await pool.query(
+      `INSERT INTO product_rates (product_id, payment_frequency, installments_count, rate)
+       VALUES ($1, 'WEEKLY', 10, 0.1)`,
+      [productId],
+    );
+    const before = await productRatesQueries.findAll(productId);
+    expect(before[0].product_name).toMatch(/^Producto P34/);
+
+    const newTitle = `Renombrado P34 ${Date.now()}`;
+    await productService.update(productId, { title: newTitle });
+
+    const after = await productRatesQueries.findAll(productId);
+    expect(after[0].product_name).toBe(newTitle);
   });
 });
 
