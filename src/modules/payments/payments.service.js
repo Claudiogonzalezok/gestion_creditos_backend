@@ -1013,7 +1013,11 @@ const _runIdempotentAdminOperation = async (
   try {
     return await run(find);
   } catch (err) {
-    if (_isClientRequestIdConflict(err)) {
+    // Choque con el índice UNIQUE, o guarda de negocio que falló porque una
+    // request concurrente con la misma clave confirmó entre el chequeo inicial
+    // y las validaciones (ej. "pagos pendientes"): si la clave ya existe, el
+    // efecto ocurrió una vez → replay.
+    if (_isClientRequestIdConflict(err) || (err && err.status === 409)) {
       const winner = await find();
       if (winner) return resolve(winner);
     }
