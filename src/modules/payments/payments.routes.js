@@ -24,6 +24,18 @@ router.get('/',
       .isISO8601().withMessage('date_from debe ser una fecha válida (YYYY-MM-DD).'),
     query('date_to').optional()
       .isISO8601().withMessage('date_to debe ser una fecha válida (YYYY-MM-DD).'),
+    // Filtro por fecha de registro (created_at), incluye pre-cargas PENDING.
+    query('created_from').optional()
+      .isISO8601({ strict: true }).withMessage('created_from debe ser una fecha válida (YYYY-MM-DD).'),
+    query('created_to').optional()
+      .isISO8601({ strict: true }).withMessage('created_to debe ser una fecha válida (YYYY-MM-DD).')
+      .bail()
+      .custom((value, { req }) => {
+        const from = req.query.created_from;
+        if (from && new Date(from) > new Date(value))
+          throw new Error('created_to debe ser mayor o igual a created_from.');
+        return true;
+      }),
   ],
   validate,
   controller.getAll

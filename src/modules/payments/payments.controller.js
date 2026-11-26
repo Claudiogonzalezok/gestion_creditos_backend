@@ -4,9 +4,9 @@ const response = require('../../utils/response');
 
 const getAll = async (req, res) => {
   try {
-    const { status, collector_id, installment_id, date_from, date_to } = req.query;
+    const { status, collector_id, installment_id, date_from, date_to, created_from, created_to } = req.query;
     const pagination = parsePagination(req.query);
-    return sendList(res, await service.getAll({ status, collector_id, installment_id, date_from, date_to, pagination }, req.user));
+    return sendList(res, await service.getAll({ status, collector_id, installment_id, date_from, date_to, created_from, created_to, pagination }, req.user));
   } catch (err) { return response.serverError(res, err); }
 };
 

@@ -9,6 +9,8 @@ const findAll = async ({
   installment_id,
   date_from,
   date_to,
+  created_from,
+  created_to,
   pagination,
 } = {}) => {
   let q = `
@@ -51,6 +53,16 @@ const findAll = async ({
   if (date_to) {
     params.push(date_to);
     q += ` AND p.approved_at::date <= $${params.length}`;
+  }
+  // Filtro por fecha de registro (created_at): incluye pre-cargas PENDING y
+  // REJECTED, a diferencia de date_from/date_to que solo ven cobros aprobados.
+  if (created_from) {
+    params.push(created_from);
+    q += ` AND p.created_at::date >= $${params.length}`;
+  }
+  if (created_to) {
+    params.push(created_to);
+    q += ` AND p.created_at::date <= $${params.length}`;
   }
   q += ` ORDER BY p.created_at DESC, p.id DESC`;
   return runListQuery(q, params, pagination);

@@ -1126,8 +1126,12 @@ const swaggerSpec = {
           { name: 'status',         in: 'query', schema: { type: 'string', enum: ['PENDING','APPROVED','REJECTED'] } },
           { name: 'collector_id',   in: 'query', schema: { $ref: '#/components/schemas/UUID' } },
           { name: 'installment_id', in: 'query', schema: { $ref: '#/components/schemas/UUID' } },
+          { name: 'date_from',      in: 'query', description: 'Fecha de aprobación desde (approved_at, excluye PENDING)', schema: { $ref: '#/components/schemas/Date' } },
+          { name: 'date_to',        in: 'query', description: 'Fecha de aprobación hasta (approved_at, excluye PENDING)', schema: { $ref: '#/components/schemas/Date' } },
+          { name: 'created_from',   in: 'query', description: 'Fecha de registro desde (created_at, incluye PENDING)', schema: { $ref: '#/components/schemas/Date' } },
+          { name: 'created_to',     in: 'query', description: 'Fecha de registro hasta (created_at, incluye PENDING). Debe ser >= created_from', schema: { $ref: '#/components/schemas/Date' } },
         ],
-        responses: { 200: { description: 'Lista de cobros' } },
+        responses: { 200: { description: 'Lista de cobros' }, 400: { description: 'Parámetros inválidos' } },
       },
       post: {
         tags: ['Payments'], summary: 'Registrar pre-carga de cobro', security: [{ internalAuth: [] }],
