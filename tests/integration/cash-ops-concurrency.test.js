@@ -92,7 +92,7 @@ describe('#48 — operaciones de caja concurrentes', () => {
 
     const results = await Promise.allSettled(amounts.map((amount) => expensesService.create({
       amount, description: 'proveedor', expense_date: today(),
-      payment_method: 'TRANSFER', source: 'COMPANY',
+      payment_method: 'CASH', source: 'COMPANY',
     }, asUser(admin))));
 
     expect(outcome(results)).toEqual({ ok: 1, conflicts: 1 });

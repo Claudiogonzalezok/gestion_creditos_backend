@@ -45,10 +45,15 @@ jest.mock("../cashAccounts/cashAccounts.queries", () => ({
   findGeneralCashAccount: jest.fn(),
 }));
 
+jest.mock("../cashAccounts/cashAccounts.service", () => ({
+  assertMethodAvailable: jest.fn().mockResolvedValue({}),
+}));
+
 const queries = require("./cashRegister.queries");
 const businessDaysQueries = require("../businessDays/businessDays.queries");
 const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
 const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
+const cashAccountsService = require("../cashAccounts/cashAccounts.service");
 const { localDate } = require("../../utils/date");
 const service = require("./cashRegister.service");
 
@@ -281,5 +286,30 @@ describe("createConversion()", () => {
       expect.anything(),
       expect.objectContaining({ cashSessionId: null }),
     );
+    expect(cashAccountsService.assertMethodAvailable).toHaveBeenCalledWith(
+      expect.anything(),
+      "acc-general",
+      "CASH",
+      50,
+    );
+  });
+
+  it("COMPANY sin saldo en el medio de origen → propaga 409 y no crea la conversión (#93)", async () => {
+    cashAccountsQueries.findGeneralCashAccount.mockResolvedValue({
+      id: "acc-general",
+      current_balance: 1500,
+    });
+    cashAccountsService.assertMethodAvailable.mockRejectedValueOnce({
+      status: 409,
+      code: "INSUFFICIENT_METHOD_BALANCE",
+    });
+
+    await expect(
+      service.createConversion(
+        { criteria: "COMPANY", source_method: "CASH", amount: 1200 },
+        "admin-001",
+      ),
+    ).rejects.toMatchObject({ status: 409, code: "INSUFFICIENT_METHOD_BALANCE" });
+    expect(queries.createConversion).not.toHaveBeenCalled();
   });
 });

@@ -229,6 +229,14 @@ const createConversion = async (data, adminId) => {
           code: "INSUFFICIENT_BALANCE",
         };
       }
+      // Valida también el saldo del medio de origen (#93), bajo el mismo lock de la cuenta.
+      const cashAccountsService = require("../cashAccounts/cashAccounts.service");
+      try {
+        await cashAccountsService.assertMethodAvailable(client, account.id, sourceMethod, amount);
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      }
     } else {
       // DAILY: V4.3, la conversión se imputa a la caja activa de la jornada.
       // El chequeo de caja legacy cerrada solo aplica a esta rama — COMPANY

@@ -405,6 +405,30 @@ describe("P — Integración Caja General (drops + commissions)", () => {
       expect(bal.current_balance).toBe(4200);
     });
 
+    it("#93: liquidación por TRANSFER sin saldo en transferencia → 409 INSUFFICIENT_METHOD_BALANCE y nada persiste", async () => {
+      const acc = await getGeneralCashAccount();
+      const admin = await createUserFixture({ role: "ADMIN" });
+      const collector = await createUserFixture({ role: "COLLECTOR" });
+
+      // Solo efectivo: el total alcanza pero el medio declarado no.
+      await cashAccountsService.registerMovement(
+        acc.id,
+        { movementType: "MANUAL_INCOME", amount_cash: 5000 },
+        asUser(admin),
+      );
+      await seedPendingCommission(collector.id, 800);
+
+      await expect(
+        commissionsService.liquidate(
+          { user_id: collector.id, payment_method: "TRANSFER" },
+          admin.id,
+        ),
+      ).rejects.toMatchObject({ status: 409, code: "INSUFFICIENT_METHOD_BALANCE" });
+
+      const bal = await cashAccountsService.getBalance(acc.id);
+      expect(bal).toMatchObject({ current_balance: 5000, cash_balance: 5000 });
+    });
+
     it("no exige caja OPEN del admin (es operación de tesorería)", async () => {
       const acc = await getGeneralCashAccount();
       const admin = await createUserFixture({ role: "ADMIN" });

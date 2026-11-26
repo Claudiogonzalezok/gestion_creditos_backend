@@ -23,6 +23,8 @@ const PUBLIC_TYPES = [
   "ADJUSTMENT",
   "MANUAL_INCOME",
 ];
+// Tipos públicos que siempre son egreso (ADJUSTMENT depende de direction).
+const OUT_TYPES = ["SUPPLIER_PAYMENT", "EXPENSE"];
 const ALL_TYPES = ["DROP_IN", "SALARY_PAYMENT", ...PUBLIC_TYPES];
 
 router.get("/", controller.getAll);
@@ -76,6 +78,10 @@ router.post(
       .optional({ nullable: true })
       .isFloat({ min: 0 })
       .withMessage("amount_transfer debe ser >= 0."),
+    body("payment_method")
+      .optional({ nullable: true })
+      .isIn(["CASH", "TRANSFER"])
+      .withMessage("payment_method debe ser CASH o TRANSFER."),
     body("description")
       .optional({ nullable: true })
       .isString()
@@ -88,18 +94,26 @@ router.post(
       const has = (v) =>
         v !== undefined && v !== null && String(v).trim() !== "";
       const hasSplit = has(b.amount_cash) || has(b.amount_transfer);
-      if (!hasSplit) {
-        if (!has(b.amount)) throw new Error("amount es obligatorio.");
-        return true;
-      }
-      const isAdjustmentIn =
-        b.movement_type === "ADJUSTMENT" && b.direction === "IN";
-      const isManualIncome = b.movement_type === "MANUAL_INCOME";
-      if (!isAdjustmentIn && !isManualIncome) {
+      // Todo egreso (tipos OUT o ADJUSTMENT OUT) debe declarar su medio.
+      const isOut =
+        OUT_TYPES.includes(b.movement_type) ||
+        (b.movement_type === "ADJUSTMENT" && b.direction === "OUT");
+      if (hasSplit && has(b.payment_method)) {
         throw new Error(
-          "amount_cash/amount_transfer solo aplican a ADJUSTMENT IN o MANUAL_INCOME.",
+          "Enviá payment_method o amount_cash/amount_transfer, no ambos.",
         );
       }
+      if (!hasSplit) {
+        if (!has(b.amount)) throw new Error("amount es obligatorio.");
+        if (isOut && !has(b.payment_method)) {
+          throw new Error(
+            "payment_method es obligatorio en egresos (CASH o TRANSFER), o enviá amount_cash/amount_transfer.",
+          );
+        }
+        return true;
+      }
+      // Desde #93 el desglose aplica también a egresos (OUT): cada medio se
+      // valida contra su propio saldo en el service.
       const cash = parseFloat(b.amount_cash) || 0;
       const transfer = parseFloat(b.amount_transfer) || 0;
       if (cash < 0 || transfer < 0 || cash + transfer <= 0) {

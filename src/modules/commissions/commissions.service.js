@@ -124,6 +124,8 @@ const liquidate = async (data, adminId) => {
       movementType:  'SALARY_PAYMENT',
       direction:     'OUT',
       amount:        totalNet,
+      // El medio declarado en la liquidación define de qué saldo sale (#93).
+      ...cashAccountsService.splitByMethod(payment_method, totalNet),
       description:   `Liquidación ${user.full_name} (${weekStart}..${weekEnd})`,
       beneficiaryName: user.full_name,
       referenceType: 'COMMISSION_LIQUIDATION',

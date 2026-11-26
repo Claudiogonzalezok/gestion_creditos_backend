@@ -21,6 +21,10 @@ jest.mock("../cashAccounts/cashAccounts.queries", () => ({
 
 jest.mock("../cashAccounts/cashAccounts.service", () => ({
   insertMovementWithBalance: jest.fn(),
+  splitByMethod: (method, amount) => ({
+    amountCash: method === "CASH" ? amount : 0,
+    amountTransfer: method === "TRANSFER" ? amount : 0,
+  }),
 }));
 
 jest.mock("../businessDays/businessDays.service", () => ({
@@ -109,21 +113,22 @@ describe("expenses.service", () => {
         client,
         expect.objectContaining({
           cashAccountId: "acc-1", movementType: "ADJUSTMENT", direction: "OUT",
-          amount: 150, referenceType: "EXPENSE", referenceId: "e1", createdBy: "admin-1",
+          amount: 150, amountCash: 0, amountTransfer: 150,
+          referenceType: "EXPENSE", referenceId: "e1", createdBy: "admin-1",
         }),
       );
       expect(queries.update).toHaveBeenCalledWith(expect.objectContaining({ amount: 350 }), client);
     });
 
     it("COMPANY sin movimiento original: usa la Caja General; sin ella responde 409", async () => {
-      queries.findById.mockResolvedValue({ id: "e1", amount: 200, source: "COMPANY" });
+      queries.findById.mockResolvedValue({ id: "e1", amount: 200, source: "COMPANY", payment_method: "CASH" });
       queries.findCompanyExpenseAccountId.mockResolvedValue(null);
       cashAccountsQueries.findGeneralCashAccount.mockResolvedValueOnce({ id: "gen" });
 
       await service.remove("e1", user);
       expect(cashAccountsService.insertMovementWithBalance).toHaveBeenCalledWith(
         client,
-        expect.objectContaining({ cashAccountId: "gen", direction: "IN", amount: 200 }),
+        expect.objectContaining({ cashAccountId: "gen", direction: "IN", amount: 200, amountCash: 200, amountTransfer: 0 }),
       );
       expect(queries.remove).toHaveBeenCalledWith("e1", client);
 

@@ -235,6 +235,37 @@ const computeBalanceFromMovements = async (accountId, db = pool) => {
   return r.rows[0].balance;
 };
 
+/**
+ * Calcula el saldo en transferencia desde la fuente de verdad: movimientos
+ * con desglose (IN suma, OUT resta) más conversiones COMPANY de Caja General
+ * (las conversiones no generan movimiento, ver docs/cash-model-v4.md §1.6).
+ * El saldo en efectivo se obtiene como current_balance - transfer_balance, así
+ * que un OUT legacy sin desglose se imputa a efectivo.
+ * @param {string} accountId - Cuenta de Caja General.
+ * @param {object} [db] - Pool o client de la transacción (con lock previo).
+ * @returns {Promise<number>} Saldo en transferencia.
+ */
+const computeTransferBalance = async (accountId, db = pool) => {
+  const r = await db.query(
+    `SELECT (
+       COALESCE((
+         SELECT SUM(CASE WHEN m.direction = 'IN' THEN m.amount_transfer ELSE -m.amount_transfer END)
+           FROM cash_account_movements m
+          WHERE m.cash_account_id = ca.id
+       ), 0)
+       + CASE WHEN ca.type = 'GENERAL_CASH' THEN COALESCE((
+         SELECT SUM(CASE WHEN c.target_method = 'TRANSFER' THEN c.amount ELSE -c.amount END)
+           FROM cash_conversions c
+          WHERE c.criteria = 'COMPANY'
+       ), 0) ELSE 0 END
+     )::float8 AS transfer_balance
+     FROM cash_accounts ca
+     WHERE ca.id = $1`,
+    [accountId],
+  );
+  return r.rows[0] ? r.rows[0].transfer_balance : 0;
+};
+
 // Helper de reparación: recalcula y persiste current_balance desde los
 // movimientos. Idempotente. Solo para uso interno (jobs, scripts), no expuesto
 // como endpoint. Debe ejecutarse en una transacción con lock previo de la
@@ -269,5 +300,6 @@ module.exports = {
   updateCurrentBalance,
   // balance derivado
   computeBalanceFromMovements,
+  computeTransferBalance,
   recomputeBalance,
 };
