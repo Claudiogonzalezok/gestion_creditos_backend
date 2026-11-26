@@ -6,6 +6,22 @@ const { generateTempPassword } = require('../../utils/tempPassword');
 
 const SALT_ROUNDS = parseInt(process.env.BCRYPT_SALT_ROUNDS || '10');
 
+// Roles que pueden tener clientes asignados como cobrador.
+const COLLECTOR_ROLES = ['COLLECTOR', 'SELLER_COLLECTOR'];
+
+/**
+ * Indica si el usuario tiene clientes ACTIVOS asignados como cobrador.
+ * @param {string} userId
+ * @returns {Promise<boolean>}
+ */
+const hasActiveAssignedCustomers = async (userId) => {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*) FROM customers WHERE assigned_collector_id = $1 AND status = 'ACTIVE'`,
+    [userId]
+  );
+  return parseInt(rows[0].count) > 0;
+};
+
 /**
  * Ejecuta fn dentro de una transacción con un client dedicado.
  * @param {Function} fn - recibe el client
@@ -92,12 +108,8 @@ const update = async (id, data) => {
   }
 
   // Un cobrador con clientes asignados no puede cambiar de rol
-  if (roleCambia && ['COLLECTOR','SELLER_COLLECTOR'].includes(existing.role)) {
-    const { rows } = await pool.query(
-      `SELECT COUNT(*) FROM customers WHERE assigned_collector_id = $1 AND status = 'ACTIVE'`,
-      [id]
-    );
-    if (parseInt(rows[0].count) > 0)
+  if (roleCambia && COLLECTOR_ROLES.includes(existing.role)) {
+    if (await hasActiveAssignedCustomers(id))
       throw { status: 409, message: 'No es posible cambiar el rol porque el usuario tiene clientes asignados. Reasignelos primero.' };
   }
 
@@ -136,12 +148,8 @@ const deactivate = async (id) => {
   if (!user) throw { status: 404, message: 'Usuario no encontrado.' };
   if (user.status === 'INACTIVE') throw { status: 409, message: 'El usuario ya está inactivo.' };
 
-  if (['COLLECTOR','SELLER_COLLECTOR'].includes(user.role)) {
-    const { rows } = await pool.query(
-      `SELECT COUNT(*) FROM customers WHERE assigned_collector_id = $1 AND status = 'ACTIVE'`,
-      [id]
-    );
-    if (parseInt(rows[0].count) > 0)
+  if (COLLECTOR_ROLES.includes(user.role)) {
+    if (await hasActiveAssignedCustomers(id))
       throw { status: 409, message: 'No es posible desactivar el usuario porque tiene clientes asignados. Reasignelos primero.' };
   }
 

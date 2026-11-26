@@ -186,7 +186,7 @@ module.exports = {
   changePortalPassword: async (req, res) => {
     try {
       const { current_password, new_password } = req.body;
-      await require('./auth.service').changePortalPassword(req.customer.id, current_password, new_password);
+      await service.changePortalPassword(req.customer.id, current_password, new_password);
       return response.success(res, null, 'Contraseña cambiada correctamente.');
     } catch (err) {
       if (err.status === 401) return response.unauthorized(res, err.message);

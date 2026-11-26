@@ -124,7 +124,7 @@ const findById = async (id) => {
             lp.approved_at  AS paid_at,
             lp.generation_type,
             lp.payment_method AS paid_method,
-            cu.full_name AS paid_by_name,
+            col.full_name AS paid_by_name,
             to_char(lnv.next_visit_date, 'YYYY-MM-DD') AS next_visit_date,
             sched.full_name AS next_visit_scheduled_by_name
      FROM installments i
@@ -138,7 +138,7 @@ const findById = async (id) => {
        ORDER BY p.approved_at DESC
        LIMIT 1
      ) lp ON TRUE
-     LEFT JOIN users cu ON cu.id = lp.collector_id
+     LEFT JOIN users col ON col.id = lp.collector_id
      LEFT JOIN latest_next_visit lnv ON lnv.installment_id = i.id
      LEFT JOIN users sched ON sched.id = lnv.scheduled_by_user_id
      WHERE i.credit_id = $1

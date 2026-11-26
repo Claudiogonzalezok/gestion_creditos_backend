@@ -337,7 +337,7 @@ const findInstallmentsForSheet = async (
           s.reason,
           CASE
             WHEN EXISTS (SELECT 1 FROM scheduled_today st WHERE st.installment_id = s.installment_id) THEN 1
-            WHEN s.reason IN ('OVERDUE','OVERDUE_UNSCHEDULED') THEN 2
+            WHEN s.reason = 'OVERDUE' THEN 2
             WHEN s.reason = 'DUE_TODAY' THEN 3
             ELSE 4
           END AS op_priority
