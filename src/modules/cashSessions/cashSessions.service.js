@@ -812,6 +812,8 @@ const reverseDrop = async (sessionId, dropId, data, requestingUser) => {
       movementType: "ADJUSTMENT",
       direction: "OUT",
       amount: drop.amount,
+      // El reverso sale del mismo medio con que entró el drop (#93).
+      ...cashAccountsService.splitByMethod(drop.payment_method, drop.amount),
       description: `Reverso de drop ${dropId} — ${reason}`,
       beneficiaryName: originalDropIn.beneficiary_name,
       referenceType: "CASH_ACCOUNT_MOVEMENT",

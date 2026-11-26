@@ -94,6 +94,11 @@ const create = async (data, requestingUser) => {
         movementType: "EXPENSE",
         direction: "OUT",
         amount: parseFloat(data.amount),
+        // Sale del medio declarado en el gasto (#93).
+        ...cashAccountsService.splitByMethod(
+          data.payment_method,
+          parseFloat(data.amount),
+        ),
         description: data.description,
         referenceType: "EXPENSE",
         referenceId: expense.id,
@@ -177,12 +182,13 @@ const assertExpenseMutable = async (expense) => {
  * COMPANY con un movimiento ADJUSTMENT (OUT si aumenta, IN si disminuye).
  * insertMovementWithBalance bloquea la cuenta y rechaza saldo negativo (409).
  * @param {object} client - client transaccional
- * @param {{ expense: object, delta: number, description: string, userId: string }} params
- *   expense: gasto original bloqueado; delta: nuevo monto menos monto original.
+ * @param {{ expense: object, delta: number, description: string, userId: string, paymentMethod?: string }} params
+ *   expense: gasto original bloqueado; delta: nuevo monto menos monto original;
+ *   paymentMethod: medio del ajuste (default: el del gasto original).
  */
 const adjustCompanyLedger = async (
   client,
-  { expense, delta, description, userId },
+  { expense, delta, description, userId, paymentMethod },
 ) => {
   const amount = Number(Math.abs(delta).toFixed(2));
   if (expense.source !== "COMPANY" || amount === 0) return;
@@ -202,6 +208,11 @@ const adjustCompanyLedger = async (
     movementType: "ADJUSTMENT",
     direction: delta > 0 ? "OUT" : "IN",
     amount,
+    // Todo movimiento declara su medio (#93): el egreso valida ese saldo.
+    ...cashAccountsService.splitByMethod(
+      paymentMethod || expense.payment_method,
+      amount,
+    ),
     description,
     referenceType: "EXPENSE",
     referenceId: expense.id,
@@ -240,6 +251,7 @@ const update = async (id, data, requestingUser) => {
       delta: amount - expense.amount,
       description: `Ajuste por edición de gasto: ${data.description}`,
       userId: requestingUser.id,
+      paymentMethod: data.payment_method,
     });
 
     return queries.update(

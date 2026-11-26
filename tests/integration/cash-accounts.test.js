@@ -81,7 +81,7 @@ describe('O — Caja General (cash_accounts)', () => {
       }, asUser(admin));
 
       const result = await cashAccountsService.registerMovement(acc.id, {
-        movementType: 'SUPPLIER_PAYMENT', amount: 1200,
+        movementType: 'SUPPLIER_PAYMENT', payment_method: 'CASH', amount: 1200,
         beneficiaryName: 'Proveedor XYZ S.A.', description: 'Compra mercadería',
       }, asUser(admin));
 
@@ -114,7 +114,7 @@ describe('O — Caja General (cash_accounts)', () => {
       const { acc, admin } = await buildLowFundsAccount(100);
 
       await expect(cashAccountsService.registerMovement(acc.id, {
-        movementType: type, amount: 500, beneficiaryName: 'X',
+        movementType: type, payment_method: 'CASH', amount: 500, beneficiaryName: 'X',
       }, asUser(admin))).rejects.toMatchObject({
         status: 409, code: 'INSUFFICIENT_BALANCE',
       });
@@ -127,7 +127,7 @@ describe('O — Caja General (cash_accounts)', () => {
       const { acc, admin } = await buildLowFundsAccount(100);
 
       await expect(cashAccountsService.registerMovement(acc.id, {
-        movementType: 'ADJUSTMENT', direction: 'OUT', amount: 500,
+        movementType: 'ADJUSTMENT', direction: 'OUT', payment_method: 'CASH', amount: 500,
       }, asUser(admin))).rejects.toMatchObject({
         status: 409, code: 'INSUFFICIENT_BALANCE',
       });
@@ -163,7 +163,7 @@ describe('O — Caja General (cash_accounts)', () => {
 
         // Ni siquiera ADJUSTMENT IN pasa — la cuenta es la frontera, no la dirección.
         await expect(cashAccountsService.registerMovement(acc.id, {
-          movementType: 'EXPENSE', amount: 50,
+          movementType: 'EXPENSE', payment_method: 'CASH', amount: 50,
         }, asUser(admin))).rejects.toMatchObject({
           status: 409, code: 'ACCOUNT_INACTIVE',
         });
@@ -209,7 +209,7 @@ describe('O — Caja General (cash_accounts)', () => {
       const acc = await getGeneralCashAccount();
       const admin = await createUserFixture({ role: 'ADMIN' });
       await expect(cashAccountsService.registerMovement(acc.id, {
-        movementType: 'EXPENSE', amount: 0,
+        movementType: 'EXPENSE', payment_method: 'CASH', amount: 0,
       }, asUser(admin))).rejects.toMatchObject({
         status: 422, code: 'INVALID_AMOUNT',
       });
@@ -230,8 +230,8 @@ describe('O — Caja General (cash_accounts)', () => {
       const acc = await getGeneralCashAccount();
       const admin = await createUserFixture({ role: 'ADMIN' });
       await cashAccountsService.registerMovement(acc.id, { movementType: 'ADJUSTMENT', direction: 'IN', amount: 1000 }, asUser(admin));
-      await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', amount: 300 }, asUser(admin));
-      await cashAccountsService.registerMovement(acc.id, { movementType: 'EXPENSE', amount: 50 }, asUser(admin));
+      await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', payment_method: 'CASH', amount: 300 }, asUser(admin));
+      await cashAccountsService.registerMovement(acc.id, { movementType: 'EXPENSE', payment_method: 'CASH', amount: 50 }, asUser(admin));
       await cashAccountsService.registerMovement(acc.id, { movementType: 'ADJUSTMENT', direction: 'IN', amount: 200 }, asUser(admin));
 
       const audit = await cashAccountsService.getAuditBalance(acc.id);
@@ -259,8 +259,8 @@ describe('O — Caja General (cash_accounts)', () => {
   describe('listMovements', () => {
     const seedMovements = async (acc, admin) => {
       await cashAccountsService.registerMovement(acc.id, { movementType: 'ADJUSTMENT', direction: 'IN', amount: 10000, description: 'seed' }, asUser(admin));
-      await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', amount: 1000, beneficiaryName: 'P1' }, asUser(admin));
-      await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', amount: 500,  beneficiaryName: 'P2' }, asUser(admin));
+      await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', payment_method: 'CASH', amount: 1000, beneficiaryName: 'P1' }, asUser(admin));
+      await cashAccountsService.registerMovement(acc.id, { movementType: 'SUPPLIER_PAYMENT', payment_method: 'CASH', amount: 500,  beneficiaryName: 'P2' }, asUser(admin));
       // SALARY_PAYMENT no se acepta desde endpoint público (IMP-6). Lo
       // insertamos directo para mantener cobertura de filter por movement_type.
       await pool.query(
@@ -274,7 +274,7 @@ describe('O — Caja General (cash_accounts)', () => {
         `UPDATE cash_accounts SET current_balance = current_balance - 800 WHERE id = $1`,
         [acc.id],
       );
-      await cashAccountsService.registerMovement(acc.id, { movementType: 'EXPENSE',          amount: 200 }, asUser(admin));
+      await cashAccountsService.registerMovement(acc.id, { movementType: 'EXPENSE', payment_method: 'CASH',          amount: 200 }, asUser(admin));
     };
 
     it('sin filtros devuelve todos los movimientos paginados', async () => {
@@ -363,7 +363,7 @@ describe('O — Caja General (cash_accounts)', () => {
 
       // Admin gasta 1800 → balance Caja General = 200 (insuficiente para reverse de 2000)
       await cashAccountsService.registerMovement(acc.id, {
-        movementType: 'SUPPLIER_PAYMENT', amount: 1800, beneficiaryName: 'P',
+        movementType: 'SUPPLIER_PAYMENT', payment_method: 'CASH', amount: 1800, beneficiaryName: 'P',
       }, asUser(admin));
 
       const balPre = await cashAccountsService.getBalance(acc.id);

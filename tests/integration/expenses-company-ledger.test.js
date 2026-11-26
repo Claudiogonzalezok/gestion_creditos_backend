@@ -41,7 +41,7 @@ const adjustmentsFor = async (expenseId) => {
 const companyExpense = (admin, amount) =>
   expensesService.create({
     amount, description: 'proveedor', expense_date: today(),
-    payment_method: 'TRANSFER', source: 'COMPANY',
+    payment_method: 'CASH', source: 'COMPANY',
   }, asUser(admin));
 
 describe('#50 — gastos COMPANY ajustan la Caja General', () => {
@@ -52,7 +52,7 @@ describe('#50 — gastos COMPANY ajustan la Caja General', () => {
     expect((await generalAccount()).current_balance).toBe(800);
 
     const updated = await expensesService.update(expense.id, {
-      amount: 350, description: 'proveedor', expense_date: today(), payment_method: 'TRANSFER',
+      amount: 350, description: 'proveedor', expense_date: today(), payment_method: 'CASH',
     }, asUser(admin));
 
     expect(updated.amount).toBe(350);
@@ -66,7 +66,7 @@ describe('#50 — gastos COMPANY ajustan la Caja General', () => {
     const expense = await companyExpense(admin, 200);
 
     await expensesService.update(expense.id, {
-      amount: 120, description: 'proveedor', expense_date: today(), payment_method: 'TRANSFER',
+      amount: 120, description: 'proveedor', expense_date: today(), payment_method: 'CASH',
     }, asUser(admin));
 
     expect((await generalAccount()).current_balance).toBe(880);
@@ -79,7 +79,7 @@ describe('#50 — gastos COMPANY ajustan la Caja General', () => {
     const expense = await companyExpense(admin, 200);
 
     await expensesService.update(expense.id, {
-      amount: 200, description: 'otra descripción', expense_date: today(), payment_method: 'TRANSFER',
+      amount: 200, description: 'otra descripción', expense_date: today(), payment_method: 'CASH',
     }, asUser(admin));
 
     expect((await generalAccount()).current_balance).toBe(800);
@@ -92,7 +92,7 @@ describe('#50 — gastos COMPANY ajustan la Caja General', () => {
     const expense = await companyExpense(admin, 200);
 
     await expect(expensesService.update(expense.id, {
-      amount: 500, description: 'proveedor', expense_date: today(), payment_method: 'TRANSFER',
+      amount: 500, description: 'proveedor', expense_date: today(), payment_method: 'CASH',
     }, asUser(admin))).rejects.toMatchObject({ status: 409, code: 'INSUFFICIENT_BALANCE' });
 
     expect((await generalAccount()).current_balance).toBe(100);

@@ -74,6 +74,7 @@ const registerMovement = async (req, res) => {
         amount: req.body.amount,
         amount_cash: req.body.amount_cash,
         amount_transfer: req.body.amount_transfer,
+        payment_method: req.body.payment_method,
         description: req.body.description,
         beneficiaryName: req.body.beneficiary_name,
       },

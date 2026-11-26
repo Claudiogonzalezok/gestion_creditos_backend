@@ -91,19 +91,54 @@ describe('#93 — saldo de Caja General por medio', () => {
     expect(bal).toMatchObject({ cash_balance: 800, transfer_balance: 400 });
   });
 
-  it('egreso OUT sin desglose (retrocompatible) solo valida el total y se imputa a efectivo y el faltante a transferencia', async () => {
+  it('egreso OUT sin medio declarado → 422 PAYMENT_METHOD_REQUIRED y no persiste', async () => {
     const { acc, admin } = await seed();
-    await cashAccountsService.registerMovement(
+    await expect(
+      cashAccountsService.registerMovement(
+        acc.id,
+        { movementType: 'EXPENSE', amount: 100 },
+        asUser(admin),
+      ),
+    ).rejects.toMatchObject({ status: 422, code: 'PAYMENT_METHOD_REQUIRED' });
+    const bal = await cashAccountsService.getBalance(acc.id);
+    expect(bal.current_balance).toBe(1500);
+  });
+
+  it('egreso OUT con payment_method CASH mayor al efectivo → 409 aunque el total alcance (sin reparto a transferencia)', async () => {
+    const { acc, admin } = await seed();
+    await expect(
+      cashAccountsService.registerMovement(
+        acc.id,
+        { movementType: 'EXPENSE', amount: 1200, payment_method: 'CASH' },
+        asUser(admin),
+      ),
+    ).rejects.toMatchObject({ status: 409, code: 'INSUFFICIENT_METHOD_BALANCE' });
+    const bal = await cashAccountsService.getBalance(acc.id);
+    expect(bal).toMatchObject({ current_balance: 1500, cash_balance: 1000, transfer_balance: 500 });
+  });
+
+  it('egreso OUT con payment_method TRANSFER descuenta solo de transferencia', async () => {
+    const { acc, admin } = await seed();
+    const r = await cashAccountsService.registerMovement(
       acc.id,
-      { movementType: 'EXPENSE', amount: 1200 },
+      { movementType: 'SUPPLIER_PAYMENT', amount: 400, payment_method: 'TRANSFER' },
       asUser(admin),
     );
+    expect(r.movement).toMatchObject({ amount_cash: 0, amount_transfer: 400 });
     const bal = await cashAccountsService.getBalance(acc.id);
-    expect(bal).toMatchObject({
-      current_balance: 300,
-      cash_balance: 0,
-      transfer_balance: 300,
-    });
+    expect(bal).toMatchObject({ current_balance: 1100, cash_balance: 1000, transfer_balance: 100 });
+  });
+
+  it('insertMovementWithBalance rechaza un OUT interno sin desglose (422)', async () => {
+    const { acc, admin } = await seed();
+    await expect(
+      withTransaction((client) =>
+        cashAccountsService.insertMovementWithBalance(client, {
+          cashAccountId: acc.id, movementType: 'ADJUSTMENT', direction: 'OUT',
+          amount: 10, createdBy: admin.id,
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 422, code: 'PAYMENT_METHOD_REQUIRED' });
   });
 
   it('redondeo exacto de montos (issue #39): 1.005 de efectivo se guarda como 1.01', async () => {

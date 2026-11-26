@@ -56,16 +56,30 @@ const resolveDirection = (movementType, requestedDirection) => {
  * @returns {Promise<{cash_balance:number, transfer_balance:number}>}
  */
 const getMethodBalances = async (db, account) => {
-  let transfer = round2(await queries.computeTransferBalance(account.id, db));
-  let cash = round2(account.current_balance - transfer);
-  // Los egresos sin medio declarado se imputan primero a efectivo; si el
-  // efectivo no alcanza, el resto se descuenta de transferencia, así ningún
-  // medio queda negativo y la suma sigue siendo current_balance.
-  if (cash < 0) {
-    transfer = round2(transfer + cash);
-    cash = 0;
-  }
+  // Todo egreso declara su medio, así que no hay reparto implícito entre medios.
+  const transfer = round2(await queries.computeTransferBalance(account.id, db));
+  const cash = round2(account.current_balance - transfer);
   return { cash_balance: cash, transfer_balance: transfer };
+};
+
+/**
+ * Convierte un medio único en el desglose que espera insertMovementWithBalance.
+ * @param {'CASH'|'TRANSFER'} method - Medio declarado.
+ * @param {number} amount - Monto total.
+ * @returns {{amountCash:number, amountTransfer:number}}
+ */
+const splitByMethod = (method, amount) => {
+  if (method !== "CASH" && method !== "TRANSFER") {
+    throw err(
+      422,
+      "payment_method debe ser CASH o TRANSFER.",
+      "INVALID_PAYMENT_METHOD",
+    );
+  }
+  return {
+    amountCash: method === "CASH" ? amount : 0,
+    amountTransfer: method === "TRANSFER" ? amount : 0,
+  };
 };
 
 const METHOD_LABEL = { CASH: "efectivo", TRANSFER: "transferencia" };
@@ -157,13 +171,24 @@ const insertMovementWithBalance = async (client, params) => {
     );
   }
 
-  // 3b) Egreso con medio declarado: validar el saldo de cada medio bajo el
-  // mismo lock FOR UPDATE de la cuenta (issue #93). Un OUT sin desglose
-  // conserva solo la validación del saldo total (retrocompatible).
-  const outSplit =
-    direction === "OUT" &&
-    (amountCash !== undefined || amountTransfer !== undefined);
+  // 3b) Todo egreso debe declarar su medio (efectivo/transferencia) y se
+  // valida el saldo de cada medio bajo el mismo lock FOR UPDATE (issue #93).
+  const outSplit = direction === "OUT";
   if (outSplit) {
+    if (amountCash === undefined && amountTransfer === undefined) {
+      throw err(
+        422,
+        "Todo egreso de Caja General debe declarar su medio de pago (efectivo o transferencia).",
+        "PAYMENT_METHOD_REQUIRED",
+      );
+    }
+    if (round2((amountCash || 0) + (amountTransfer || 0)) !== round2(amount)) {
+      throw err(
+        422,
+        "amount debe coincidir con amount_cash + amount_transfer.",
+        "INVALID_SPLIT_TOTAL",
+      );
+    }
     await assertMethodBalances(client, account, {
       CASH: amountCash,
       TRANSFER: amountTransfer,
@@ -287,13 +312,24 @@ const registerMovement = async (accountId, body, user) => {
     );
   }
   const direction = resolveDirection(movementType, requestedDirection);
-  const hasSplit = hasValue(body.amount_cash) || hasValue(body.amount_transfer);
-  const amountCash = hasSplit
-    ? round2(parseFloat(body.amount_cash) || 0)
-    : null;
-  const amountTransfer = hasSplit
+  let hasSplit = hasValue(body.amount_cash) || hasValue(body.amount_transfer);
+  let amountCash = hasSplit ? round2(parseFloat(body.amount_cash) || 0) : null;
+  let amountTransfer = hasSplit
     ? round2(parseFloat(body.amount_transfer) || 0)
     : null;
+  // Formato simple: amount + payment_method (un solo medio).
+  if (!hasSplit && hasValue(body.payment_method)) {
+    const total = round2(parseFloat(body.amount));
+    ({ amountCash, amountTransfer } = splitByMethod(body.payment_method, total));
+    hasSplit = true;
+  }
+  if (direction === "OUT" && !hasSplit) {
+    throw err(
+      422,
+      "Todo egreso debe declarar su medio: payment_method o amount_cash/amount_transfer.",
+      "PAYMENT_METHOD_REQUIRED",
+    );
+  }
   const amount = hasSplit
     ? round2(amountCash + amountTransfer)
     : round2(parseFloat(body.amount));
@@ -350,6 +386,7 @@ module.exports = {
   // helpers internos (reutilizables por cashSessions/commissions en commits siguientes)
   insertMovementWithBalance,
   getMethodBalances,
+  splitByMethod,
   assertMethodAvailable,
   resolveDirection,
   FIXED_DIRECTION,

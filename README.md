@@ -696,14 +696,19 @@ GET    /api/cash-accounts/:id/audit-balance → ADMIN
 GET    /api/cash-accounts/:id/movements?movement_type=&direction=&from=&to=&page=&page_size=  → ADMIN
 POST   /api/cash-accounts/:id/movements    → ADMIN
        movement_type: SUPPLIER_PAYMENT | EXPENSE | ADJUSTMENT | MANUAL_INCOME
-       amount_cash / amount_transfer (opcional, IN u OUT): en OUT cada medio
-       se valida contra su saldo → 409 INSUFFICIENT_METHOD_BALANCE
+       payment_method: CASH | TRANSFER (formato simple, un solo medio)
+       amount_cash / amount_transfer (desglose, IN u OUT; excluyente con payment_method)
+       Egresos (SUPPLIER_PAYMENT, EXPENSE, ADJUSTMENT OUT): el medio es OBLIGATORIO
+       (payment_method o desglose) → 422 si falta; cada medio se valida contra
+       su saldo → 409 INSUFFICIENT_METHOD_BALANCE
 ```
 
 `GET /api/cash-accounts/:id/balance` devuelve `current_balance`, `cash_balance`
 y `transfer_balance` (`cash_balance + transfer_balance = current_balance`). Los
 saldos por medio se derivan de los movimientos y de las conversiones `COMPANY`;
-un egreso sin desglose (legacy o automático) se imputa a efectivo.
+todo egreso declara su medio: liquidaciones usan su `payment_method`, gastos
+COMPANY y sus ajustes el `payment_method` del gasto, y el reverso de un drop el
+medio del drop. No hay reparto implícito de un medio al otro.
 
 ### Notificaciones
 
