@@ -72,8 +72,8 @@ router.post(
       .isIn(["CASH", "TRANSFER"])
       .withMessage("source_method debe ser CASH o TRANSFER."),
     body("amount")
-      .isFloat({ gt: 0 })
-      .withMessage("amount debe ser un número mayor a 0."),
+      .isFloat({ gt: 0, max: 99999999 })
+      .withMessage("amount debe ser un número mayor a 0 y menor o igual a 99999999."),
     body("notes")
       .optional({ nullable: true })
       .isString()

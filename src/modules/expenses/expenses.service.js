@@ -2,6 +2,7 @@ const queries = require("./expenses.queries");
 const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
 const {
   computeAvailableCash,
+  computeExpectedTransfer,
 } = require("../cashSessions/cashSessions.calculations");
 const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
 const cashAccountsService = require("../cashAccounts/cashAccounts.service");
@@ -54,6 +55,18 @@ const create = async (data, requestingUser) => {
 
   const source = data.source || "DAILY";
   const registerDate = await getActiveJornadaDate();
+  // #119: la fecha del gasto puede ser la de la jornada o el día calendario
+  // actual (gasto post medianoche, CA-05); fuera de ese rango se rechaza.
+  const { localDate } = require("../../utils/date");
+  const expenseDate = data.expense_date
+    ? String(data.expense_date).slice(0, 10)
+    : null;
+  if (expenseDate && (expenseDate < registerDate || expenseDate > localDate()))
+    throw {
+      status: 400,
+      message: `La fecha del gasto debe estar entre la jornada (${registerDate}) y hoy.`,
+      code: "INVALID_EXPENSE_DATE",
+    };
 
   const { withTransaction } = require("../../utils/transaction");
   return withTransaction(async (client) => {
@@ -135,6 +148,21 @@ const create = async (data, requestingUser) => {
           "No hay caja operativa abierta. Abrí una caja para registrar gastos.",
         code: "NO_ACTIVE_SESSION",
       };
+
+    if (data.payment_method === "TRANSFER") {
+      const totals = await cashSessionsQueries.computeSessionTotals(
+        activeSession.id,
+        client,
+      );
+      const availableTransfer = computeExpectedTransfer(totals);
+      if (parseFloat(data.amount) > availableTransfer) {
+        throw {
+          status: 409,
+          message: `El monto supera el saldo en transferencia de la caja (${availableTransfer.toFixed(2)}).`,
+          code: "INSUFFICIENT_TRANSFER",
+        };
+      }
+    }
 
     if (data.payment_method === "CASH") {
       const totals = await cashSessionsQueries.computeSessionTotals(
