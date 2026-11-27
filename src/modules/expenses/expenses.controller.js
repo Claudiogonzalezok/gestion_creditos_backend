@@ -22,8 +22,9 @@ const create = async (req, res) => {
     const result = await service.create(req.body, req.user);
     return response.created(res, result, 'Gasto registrado correctamente.');
   } catch (err) {
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code ?? null);
     if (err.status === 422) return response.unprocessableEntity(res, err.message);
+    if (err.status === 400) return response.badRequest(res, err.message);
     return response.serverError(res, err);
   }
 };
@@ -40,7 +41,7 @@ const update = async (req, res) => {
     return response.success(res, result, 'Gasto actualizado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code ?? null);
     if (err.status === 422) return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);
   }
@@ -52,7 +53,7 @@ const remove = async (req, res) => {
     return response.success(res, null, 'Gasto eliminado correctamente.');
   } catch (err) {
     if (err.status === 404) return response.notFound(res, err.message);
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code ?? null);
     return response.serverError(res, err);
   }
 };

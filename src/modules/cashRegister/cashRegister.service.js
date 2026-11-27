@@ -185,7 +185,9 @@ const getSessionMovements = async (cashSessionId) =>
  * @returns {Promise<object>} Conversión creada.
  */
 const createConversion = async (data, adminId) => {
-  const registerDate = data.register_date || (await getActiveJornadaDate());
+  // #119: la conversión se imputa a la jornada activa; se ignora register_date
+  // para no guardar una fecha distinta de la caja a la que se asocia.
+  const registerDate = await getActiveJornadaDate();
 
   const cashSessionsQueries = require("../cashSessions/cashSessions.queries");
   const cashAccountsQueries = require("../cashAccounts/cashAccounts.queries");
@@ -262,6 +264,28 @@ const createConversion = async (data, adminId) => {
         };
       }
       cashSessionId = activeSession.id;
+
+      // #117: el medio de origen tiene que tener saldo suficiente en la caja.
+      const {
+        computeAvailableCash,
+        computeExpectedTransfer,
+      } = require("../cashSessions/cashSessions.calculations");
+      const totals = await cashSessionsQueries.computeSessionTotals(
+        activeSession.id,
+        client,
+      );
+      const available =
+        sourceMethod === "CASH"
+          ? computeAvailableCash(activeSession, totals)
+          : computeExpectedTransfer(totals);
+      if (amount > available) {
+        await client.query("ROLLBACK");
+        throw {
+          status: 409,
+          message: `El monto supera el saldo disponible en ${sourceMethod === "CASH" ? "efectivo" : "transferencia"} de la caja (${available.toFixed(2)}).`,
+          code: sourceMethod === "CASH" ? "INSUFFICIENT_CASH" : "INSUFFICIENT_TRANSFER",
+        };
+      }
     }
 
     const conversion = await queries.createConversion(client, {

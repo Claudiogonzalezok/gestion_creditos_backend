@@ -21,16 +21,16 @@ const methodValid = body("declared.*.payment_method")
   .isIn(["CASH", "TRANSFER", "MP", "QR", "CHECK", "OTHER"])
   .withMessage("payment_method inválido.");
 const declaredAmountValid = body("declared.*.declared_amount")
-  .isFloat({ min: 0 })
-  .withMessage("declared_amount debe ser numérico >= 0.");
+  .isFloat({ min: 0, max: 99999999 })
+  .withMessage("declared_amount debe ser numérico >= 0 y <= 99999999.");
 
 // ── Cajas ──────────────────────────────────────────────────────────────────
 router.post(
   "/",
   [
     body("opening_amount")
-      .isFloat({ min: 0 })
-      .withMessage("opening_amount debe ser numérico >= 0."),
+      .isFloat({ min: 0, max: 99999999 })
+      .withMessage("opening_amount debe ser numérico >= 0 y <= 99999999."),
     body("owner_user_id")
       .optional({ nullable: true })
       .isUUID()
@@ -95,7 +95,7 @@ router.post(
   "/:id/drops",
   [
     ...idParam,
-    body("amount").isFloat({ gt: 0 }).withMessage("amount debe ser > 0."),
+    body("amount").isFloat({ gt: 0, max: 99999999 }).withMessage("amount debe ser > 0 y <= 99999999."),
     body("payment_method").isIn(["CASH", "TRANSFER"]),
     body("destination")
       .optional({ nullable: true })
@@ -136,16 +136,16 @@ router.post(
     ...idParam,
     body("amount")
       .optional({ nullable: true })
-      .isFloat({ gt: 0 })
-      .withMessage("amount debe ser > 0."),
+      .isFloat({ gt: 0, max: 99999999 })
+      .withMessage("amount debe ser > 0 y <= 99999999."),
     body("amount_cash")
       .optional({ nullable: true })
-      .isFloat({ min: 0 })
-      .withMessage("amount_cash debe ser >= 0."),
+      .isFloat({ min: 0, max: 99999999 })
+      .withMessage("amount_cash debe ser >= 0 y <= 99999999."),
     body("amount_transfer")
       .optional({ nullable: true })
-      .isFloat({ min: 0 })
-      .withMessage("amount_transfer debe ser >= 0."),
+      .isFloat({ min: 0, max: 99999999 })
+      .withMessage("amount_transfer debe ser >= 0 y <= 99999999."),
     body("payment_method").optional().isIn(["CASH", "TRANSFER"]),
     body("description")
       .isString()

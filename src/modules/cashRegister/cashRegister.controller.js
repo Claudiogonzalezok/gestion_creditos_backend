@@ -33,7 +33,7 @@ const close = async (req, res) => {
     );
   } catch (err) {
     if (err.status === 409)
-      return response.conflict(res, err.message, err.pending_payments ?? null);
+      return response.conflict(res, err.message, err.pending_payments ?? null, err.code ?? null);
     if (err.status === 422)
       return response.unprocessableEntity(res, err.message);
     if (err.status === 400) return response.badRequest(res, err.message);
@@ -86,7 +86,7 @@ const createConversion = async (req, res) => {
       "Conversión de caja registrada correctamente.",
     );
   } catch (err) {
-    if (err.status === 409) return response.conflict(res, err.message);
+    if (err.status === 409) return response.conflict(res, err.message, null, err.code ?? null);
     if (err.status === 422)
       return response.unprocessableEntity(res, err.message);
     return response.serverError(res, err);

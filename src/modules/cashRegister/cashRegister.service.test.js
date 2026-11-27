@@ -39,6 +39,16 @@ jest.mock("../businessDays/businessDays.queries", () => ({
 
 jest.mock("../cashSessions/cashSessions.queries", () => ({
   lockActiveSessionForCurrentJornada: jest.fn(),
+  computeSessionTotals: jest.fn().mockResolvedValue({
+    collections_payments_cash: 0,
+    collections_down_payments_cash: 0,
+    collections_manual_incomes_cash: 0,
+    outflows_expenses_cash: 0,
+    outflows_commissions_cash: 0,
+    outflows_loans_cash: 0,
+    conversions_cash_delta: 0,
+    drops_cash: 0,
+  }),
 }));
 
 jest.mock("../cashAccounts/cashAccounts.queries", () => ({
@@ -209,6 +219,7 @@ describe("createConversion()", () => {
   it("DAILY con caja activa → imputa la conversión a cash_session_id de la caja activa", async () => {
     cashSessionsQueries.lockActiveSessionForCurrentJornada.mockResolvedValue({
       id: "session-001",
+      opening_amount: 100,
     });
     queries.createConversion.mockResolvedValue({
       id: "conv-001",

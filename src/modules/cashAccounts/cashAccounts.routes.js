@@ -65,16 +65,16 @@ router.post(
       .withMessage("direction debe ser IN u OUT (solo aplica a ADJUSTMENT)."),
     body("amount")
       .optional({ nullable: true })
-      .isFloat({ gt: 0 })
-      .withMessage("amount debe ser > 0."),
+      .isFloat({ gt: 0, max: 99999999 })
+      .withMessage("amount debe ser > 0 y <= 99999999."),
     body("amount_cash")
       .optional({ nullable: true })
-      .isFloat({ min: 0 })
-      .withMessage("amount_cash debe ser >= 0."),
+      .isFloat({ min: 0, max: 99999999 })
+      .withMessage("amount_cash debe ser >= 0 y <= 99999999."),
     body("amount_transfer")
       .optional({ nullable: true })
-      .isFloat({ min: 0 })
-      .withMessage("amount_transfer debe ser >= 0."),
+      .isFloat({ min: 0, max: 99999999 })
+      .withMessage("amount_transfer debe ser >= 0 y <= 99999999."),
     body("payment_method")
       .optional({ nullable: true })
       .isIn(["CASH", "TRANSFER"])
