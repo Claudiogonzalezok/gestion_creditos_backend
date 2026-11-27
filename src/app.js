@@ -96,7 +96,8 @@ if (process.env.NODE_ENV !== "test") {
 // Verifica la base (SELECT 1 con timeout): 503 si no responde.
 app.use("/api/health", require("./modules/health/health.routes"));
 
-// ── Rate limiting — endpoints de login ───────────────────────
+// ── Rate limiting — endpoints de login y refresh ─────────────
+// DISABLE_LOGIN_RATE_LIMIT apaga ambos límites (solo para E2E locales, #120).
 const disableLoginRateLimit = envFlag(process.env.DISABLE_LOGIN_RATE_LIMIT);
 
 if (!disableLoginRateLimit) {
@@ -112,21 +113,21 @@ if (!disableLoginRateLimit) {
   });
   app.use("/api/auth/login", loginLimiter);
   app.use("/api/auth/portal/login", loginLimiter);
+
+  const refreshLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: rateLimitMessage("Demasiadas solicitudes de renovación de sesión."),
+  });
+  app.use("/api/auth/refresh", refreshLimiter);
+  app.use("/api/auth/portal/refresh", refreshLimiter);
 } else {
   console.warn(
-    "⚠️  Rate limit de login deshabilitado por DISABLE_LOGIN_RATE_LIMIT=true",
+    "⚠️  Rate limit de login y refresh deshabilitado por DISABLE_LOGIN_RATE_LIMIT=true",
   );
 }
-
-const refreshLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 60,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: rateLimitMessage("Demasiadas solicitudes de renovación de sesión."),
-});
-app.use("/api/auth/refresh", refreshLimiter);
-app.use("/api/auth/portal/refresh", refreshLimiter);
 
 // ── Rutas ─────────────────────────────────────────────────────
 app.use("/api/auth", require("./modules/auth/auth.routes"));
