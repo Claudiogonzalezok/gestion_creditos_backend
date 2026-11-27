@@ -31,7 +31,7 @@ powershell -ExecutionPolicy Bypass -File scripts/deploy/deploy-front.ps1
 
 (Con barras `/`: funciona igual en PowerShell y en el `!` de Claude Code, que corre en bash y se come las `\`.)
 
-Buildea `D:\gestion-creditos-f` en modo producción (`npm run build`, `/api` relativa), sube el
+Buildea `D:\gestion-creditos-f` en modo producción (`pnpm run build`, con `API_BASE_URL` = `https://cg-service.online/api` inyectada por `scripts/set-api-url.mjs` del front; si el bundle queda apuntando a `localhost:3000`, el deploy se corta antes de subir), sube el
 contenido de `dist/gestion-creditos-f/browser` y lo publica con `publish-front.sh` como release
 nuevo en `/var/www/creditos-app/releases/<fecha>`, activado con el symlink `current` (cambio atómico).
 Al final verifica que el sitio sirva el `main-*.js` recién buildeado. Conserva los últimos 5 releases.
