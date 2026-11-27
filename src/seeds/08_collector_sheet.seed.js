@@ -64,8 +64,6 @@ const seed = async () => {
     if (installments.length === 0) {
       console.log('  No hay cuotas pendientes para el collector — creando datos de prueba...');
 
-      const bcrypt = require('bcryptjs');
-      const hash = await bcrypt.hash('123456', 10);
 
       // Cliente de prueba
       const custRes = await client.query(

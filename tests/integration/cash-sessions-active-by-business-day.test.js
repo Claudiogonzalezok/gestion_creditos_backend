@@ -13,7 +13,6 @@ const { pool, setupTestSuite } = require("./helpers/db");
 const { createUserFixture } = require("./helpers/fixtures");
 const cashSessionsQueries = require("../../src/modules/cashSessions/cashSessions.queries");
 const cashSessionsService = require("../../src/modules/cashSessions/cashSessions.service");
-const businessDaysService = require("../../src/modules/businessDays/businessDays.service");
 const { withTransaction } = require("../../src/utils/transaction");
 
 setupTestSuite();

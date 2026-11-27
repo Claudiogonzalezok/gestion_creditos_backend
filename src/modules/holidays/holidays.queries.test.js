@@ -2,7 +2,6 @@ jest.mock('../../config/db', () => ({
   query: jest.fn(),
 }));
 
-const pool = require('../../config/db');
 const queries = require('./holidays.queries');
 
 describe('holidays.queries', () => {

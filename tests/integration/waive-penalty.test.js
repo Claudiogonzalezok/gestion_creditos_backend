@@ -4,7 +4,7 @@
 //   · El status post-condonación respeta overdue derivado (due_date + grace).
 //   · La política defensiva del service rechaza condonar cuotas PAID.
 
-const { pool, setupTestSuite } = require('./helpers/db');
+const { setupTestSuite } = require('./helpers/db');
 const {
   createInstallmentFixture,
   reloadInstallment,
