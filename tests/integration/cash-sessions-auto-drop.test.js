@@ -8,7 +8,7 @@
 //   · Trazabilidad: reference_type='CASH_SESSION_CLOSURE', reference_id=session.id.
 //   · Idempotencia: el índice único cam_one_drop_in_per_closure_idx evita duplicados.
 
-const { pool, setupTestSuite } = require("./helpers/db");
+const { setupTestSuite } = require("./helpers/db");
 const { createUserFixture } = require("./helpers/fixtures");
 const cashSessions = require("../../src/modules/cashSessions/cashSessions.service");
 const cashAccountsQueries = require("../../src/modules/cashAccounts/cashAccounts.queries");

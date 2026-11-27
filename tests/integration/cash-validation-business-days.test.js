@@ -83,7 +83,6 @@ describe('U — IMP-1: autoridad business_days reemplaza cash_registers', () => 
 
   it('_validateCajaOpen NO bloquea cuando solo existe cash_register legacy cerrado', async () => {
     // Simulamos un cash_register cerrado para la fecha (legacy puro, sin jornada moderna).
-    const branch = (await pool.query(`SELECT id FROM branches WHERE code='HQ'`)).rows[0];
     const admin  = await createUserFixture({ role: 'ADMIN' });
 
     // Crear cash_register legacy (mediante INSERT directo — el path de service requiere mucho setup)

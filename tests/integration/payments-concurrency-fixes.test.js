@@ -15,7 +15,7 @@ const {
   createUserFixture,
   reloadInstallment,
 } = require('./helpers/fixtures');
-const { today, daysAgo } = require('./helpers/dates');
+const { today } = require('./helpers/dates');
 const paymentsService = require('../../src/modules/payments/payments.service');
 const cashSessionsService = require('../../src/modules/cashSessions/cashSessions.service');
 

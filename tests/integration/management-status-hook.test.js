@@ -337,7 +337,7 @@ describe('H — Hook management_status (planilla del día)', () => {
     });
 
     it('hook actualiza solo la planilla del cobrador correcto, no la de otro', async () => {
-      const { admin, collector: collectorA, customer, inst, sheet: sheetA } =
+      const { admin, collector: collectorA, inst, sheet: sheetA } =
         await seedScenarioWithSheet();
 
       // Creamos un segundo cobrador y un escenario paralelo en su planilla,
