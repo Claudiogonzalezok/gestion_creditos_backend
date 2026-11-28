@@ -66,13 +66,22 @@ try {
   if (-not $SkipBuild) {
     # El front versiona environment.ts con apiBaseUrl de desarrollo (localhost): set-api-url.mjs
     # la reemplaza por API_BASE_URL solo para este build y despues se restaura el archivo.
+    # Solo se restaura si este script lo modifico: con cambios locales previos se corta antes,
+    # para no pisarlos con el checkout.
     $envFile = 'src/environments/environment.ts'
+    $injectScript = 'scripts/set-api-url.mjs'
+    if (Test-Path $injectScript) {
+      git diff --quiet -- $envFile
+      if ($LASTEXITCODE -ne 0) { Fail "$envFile tiene cambios sin commitear. Commitearlos o descartarlos antes de desplegar." }
+    }
     $buildOk = $false
+    $injected = $false
     try {
-      if (Test-Path 'scripts/set-api-url.mjs') {
+      if (Test-Path $injectScript) {
         Step "Inyectando API_BASE_URL = $ApiBaseUrl"
         $env:API_BASE_URL = $ApiBaseUrl
-        node scripts/set-api-url.mjs
+        $injected = $true
+        node $injectScript
         if ($LASTEXITCODE -ne 0) { throw 'Fallo set-api-url.mjs.' }
       }
       Step 'Build de produccion (pnpm run build)'
@@ -80,7 +89,13 @@ try {
       $buildOk = ($LASTEXITCODE -eq 0)
     } finally {
       Remove-Item Env:API_BASE_URL -ErrorAction SilentlyContinue
-      git checkout -- $envFile 2>$null
+      if ($injected) {
+        # El aviso va aca adentro para que salga tambien si fallo set-api-url.mjs.
+        git checkout -q -- $envFile
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "AVISO: no se pudo restaurar $envFile; quedo con la URL $ApiBaseUrl. Restaurarlo a mano: git checkout -- $envFile" -ForegroundColor Yellow
+        }
+      }
     }
     if (-not $buildOk) { Fail 'Fallo el build.' }
   }
@@ -93,7 +108,7 @@ if (-not (Test-Path $indexLocal)) { Fail "No existe $indexLocal (el build no gen
 $bundle = Get-MainBundle (Get-Content $indexLocal -Raw)
 
 # Un build que apunta a localhost dejaria el sitio sin API: se corta antes de subir nada.
-$leak = Get-ChildItem $browserDir -Filter '*.js' | Select-String -Pattern 'localhost:3000' -SimpleMatch -List | Select-Object -First 1
+$leak = Get-ChildItem $browserDir -Filter '*.js' -Recurse | Select-String -Pattern 'localhost:3000' -SimpleMatch -List | Select-Object -First 1
 if ($leak) { Fail "El build apunta a localhost:3000 ($($leak.Filename)). Revisar API_BASE_URL." }
 
 # -- Empaquetar y subir --------------------------------------------------------
