@@ -1,6 +1,6 @@
-const pool = require("../../config/db");
-const { IS_OVERDUE_DERIVED } = require("../../utils/installmentSql");
-const { movementConceptCase } = require("../../utils/movementConcept");
+const pool = require('../../config/db');
+const { IS_OVERDUE_DERIVED } = require('../../utils/installmentSql');
+const { movementConceptCase } = require('../../utils/movementConcept');
 
 // ── 1. Reporte de recaudación ─────────────────────────────────
 
@@ -88,10 +88,8 @@ const getCollectionReport = async (dateFrom, dateTo) => {
   );
 
   const rows = result.rows;
-  const daily = rows
-    .filter((r) => r.result_type === "daily")
-    .map((r) => r.data);
-  const summary = rows.find((r) => r.result_type === "summary")?.data || {};
+  const daily = rows.filter((r) => r.result_type === 'daily').map((r) => r.data);
+  const summary = rows.find((r) => r.result_type === 'summary')?.data || {};
 
   return { summary, daily };
 };
@@ -125,7 +123,7 @@ const getPortfolioReport = async (graceDays) => {
        u.full_name                                                        AS assigned_collector,
        COUNT(DISTINCT c.id)::int                                          AS active_credits,
        COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8            AS pending_balance,
-       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED("i", "$1")})::int   AS overdue_installments
+       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED('i', '$1')})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
      JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
@@ -165,7 +163,7 @@ const getOverdueReport = async (graceDays) => {
        COALESCE(SUM(i.amount_due - i.amount_paid)
                       FILTER (WHERE (CURRENT_DATE - i.due_date) > 90), 0)::float8      AS bucket_90plus_amount
      FROM installments i
-     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}`,
+     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}`,
     [graceDays],
   );
 
@@ -189,7 +187,7 @@ const getOverdueReport = async (graceDays) => {
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
      LEFT JOIN users u ON u.id  = cu.assigned_collector_id
-     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
+     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY total_overdue DESC`,
     [graceDays],
@@ -246,6 +244,13 @@ const getCollectorsReport = async (dateFrom, dateTo) => {
 
 // ── 5. Reporte de productos ───────────────────────────────────
 
+/**
+ * Reporte de productos: precios, stock, ventas, ingresos y tasas por producto.
+ * Cada dimensión se agrega por separado (una subconsulta por producto) para que
+ * los joins no se multipliquen entre sí: unidades × tasas, ventas × tasas, etc. (#113).
+ * @param {number} stockThreshold - umbral de stock bajo (disponibles <= umbral)
+ * @returns {Promise<object[]>}
+ */
 const getProductsReport = async (stockThreshold = 5) => {
   const r = await pool.query(
     `SELECT
@@ -253,23 +258,49 @@ const getProductsReport = async (stockThreshold = 5) => {
        p.description,
        p.title,
        p.status,
-       COALESCE(MIN(pv.current_price), 0)::float8                      AS min_price,
-       COALESCE(MAX(pv.current_price), 0)::float8                      AS max_price,
-       COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE')::int        AS available_count,
-       COUNT(pu.id) FILTER (WHERE pu.status = 'SOLD')::int             AS total_units_sold,
-       COUNT(pu.id) FILTER (WHERE pu.status = 'AVAILABLE') <= $1       AS low_stock,
-       COUNT(DISTINCT cp.id) FILTER (WHERE c.status IN ('ACTIVE','SETTLED'))::int AS times_sold,
-       COALESCE(SUM(cp.historical_price) FILTER (WHERE c.status IN ('ACTIVE','SETTLED')), 0)::float8 AS total_revenue,
-       COALESCE(ROUND(AVG(cp.historical_price) FILTER (WHERE c.status IN ('ACTIVE','SETTLED')), 2), 0)::float8 AS avg_selling_price,
-       COUNT(pr.id) FILTER (WHERE pr.active = TRUE)::int               AS active_rates_count,
-       COUNT(pr.id)::int                                                AS total_rates_count
+       COALESCE(pv.min_price, 0)::float8                 AS min_price,
+       COALESCE(pv.max_price, 0)::float8                 AS max_price,
+       COALESCE(un.available_count, 0)::int              AS available_count,
+       COALESCE(un.sold_count, 0)::int                   AS total_units_sold,
+       COALESCE(un.available_count, 0) <= $1             AS low_stock,
+       COALESCE(sa.times_sold, 0)::int                   AS times_sold,
+       COALESCE(sa.total_revenue, 0)::float8             AS total_revenue,
+       COALESCE(ROUND(sa.avg_selling_price, 2), 0)::float8 AS avg_selling_price,
+       COALESCE(ra.active_count, 0)::int                 AS active_rates_count,
+       COALESCE(ra.total_count, 0)::int                  AS total_rates_count
      FROM products p
-     LEFT JOIN product_variants pv ON pv.product_id = p.id
-     LEFT JOIN product_units    pu ON pu.variant_id  = pv.id
-     LEFT JOIN credit_products  cp ON cp.product_unit_id = pu.id
-     LEFT JOIN credits          c  ON c.id = cp.credit_id
-     LEFT JOIN product_rates    pr ON pr.product_id = p.id
-     GROUP BY p.id, p.description, p.title, p.status
+     LEFT JOIN (
+       SELECT product_id, MIN(current_price) AS min_price, MAX(current_price) AS max_price
+       FROM product_variants
+       GROUP BY product_id
+     ) pv ON pv.product_id = p.id
+     LEFT JOIN (
+       SELECT v.product_id,
+              COUNT(*) FILTER (WHERE u.status = 'AVAILABLE') AS available_count,
+              COUNT(*) FILTER (WHERE u.status = 'SOLD')      AS sold_count
+       FROM product_units u
+       JOIN product_variants v ON v.id = u.variant_id
+       GROUP BY v.product_id
+     ) un ON un.product_id = p.id
+     LEFT JOIN (
+       SELECT v.product_id,
+              COUNT(*)                AS times_sold,
+              SUM(cp.historical_price) AS total_revenue,
+              AVG(cp.historical_price) AS avg_selling_price
+       FROM credit_products cp
+       JOIN credits          c ON c.id = cp.credit_id
+       JOIN product_units    u ON u.id = cp.product_unit_id
+       JOIN product_variants v ON v.id = u.variant_id
+       WHERE c.status IN ('ACTIVE','SETTLED')
+       GROUP BY v.product_id
+     ) sa ON sa.product_id = p.id
+     LEFT JOIN (
+       SELECT product_id,
+              COUNT(*) FILTER (WHERE active = TRUE) AS active_count,
+              COUNT(*)                              AS total_count
+       FROM product_rates
+       GROUP BY product_id
+     ) ra ON ra.product_id = p.id
      ORDER BY times_sold DESC`,
     [stockThreshold],
   );
@@ -397,7 +428,7 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
          COUNT(*)::int                                         AS count,
          COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS amount
        FROM installments i
-       WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
+       WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
      ),
      upcoming AS (
        SELECT
@@ -571,7 +602,7 @@ const getCashMovementsReport = async (cashSessionId) => {
        SELECT p.id, 'COBRO' AS type, p.approved_at AS occurred_at,
                p.cash_session_id, p.amount_received::float8 AS amount,
                p.payment_method,
-               ${movementConceptCase("p", "cr")} AS description,
+               ${movementConceptCase('p', 'cr')} AS description,
                u.full_name AS performed_by_name,
                p.transfer_reference,
                c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,
@@ -719,10 +750,10 @@ const getCashMovementsReport = async (cashSessionId) => {
   return {
     summary: {
       total_movements: rows.length,
-      total_collections: sumByType("COBRO"),
-      total_down_payments: sumByType("ENGANCHE"),
-      total_expenses: sumByType("GASTO"),
-      total_drops: sumByType("DROP"),
+      total_collections: sumByType('COBRO'),
+      total_down_payments: sumByType('ENGANCHE'),
+      total_expenses: sumByType('GASTO'),
+      total_drops: sumByType('DROP'),
     },
     rows,
   };
