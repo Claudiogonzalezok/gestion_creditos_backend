@@ -1,6 +1,6 @@
-const pool = require("../../config/db");
-const { IS_OVERDUE_DERIVED } = require("../../utils/installmentSql");
-const { movementConceptCase } = require("../../utils/movementConcept");
+const pool = require('../../config/db');
+const { IS_OVERDUE_DERIVED } = require('../../utils/installmentSql');
+const { movementConceptCase } = require('../../utils/movementConcept');
 
 // ── 1. Reporte de recaudación ─────────────────────────────────
 
@@ -88,10 +88,8 @@ const getCollectionReport = async (dateFrom, dateTo) => {
   );
 
   const rows = result.rows;
-  const daily = rows
-    .filter((r) => r.result_type === "daily")
-    .map((r) => r.data);
-  const summary = rows.find((r) => r.result_type === "summary")?.data || {};
+  const daily = rows.filter((r) => r.result_type === 'daily').map((r) => r.data);
+  const summary = rows.find((r) => r.result_type === 'summary')?.data || {};
 
   return { summary, daily };
 };
@@ -125,7 +123,7 @@ const getPortfolioReport = async (graceDays) => {
        u.full_name                                                        AS assigned_collector,
        COUNT(DISTINCT c.id)::int                                          AS active_credits,
        COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8            AS pending_balance,
-       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED("i", "$1")})::int   AS overdue_installments
+       COUNT(i.id) FILTER (WHERE ${IS_OVERDUE_DERIVED('i', '$1')})::int   AS overdue_installments
      FROM customers cu
      JOIN credits c      ON c.customer_id = cu.id AND c.status = 'ACTIVE'
      JOIN installments i ON i.credit_id   = c.id  AND i.status NOT IN ('PAID','REFINANCED','PLAN_CHANGE_CANCELLED','WRITTEN_OFF')
@@ -165,7 +163,7 @@ const getOverdueReport = async (graceDays) => {
        COALESCE(SUM(i.amount_due - i.amount_paid)
                       FILTER (WHERE (CURRENT_DATE - i.due_date) > 90), 0)::float8      AS bucket_90plus_amount
      FROM installments i
-     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}`,
+     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}`,
     [graceDays],
   );
 
@@ -189,7 +187,7 @@ const getOverdueReport = async (graceDays) => {
      JOIN credits c    ON c.id  = i.credit_id
      JOIN customers cu ON cu.id = c.customer_id
      LEFT JOIN users u ON u.id  = cu.assigned_collector_id
-     WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
+     WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
      GROUP BY cu.id, cu.full_name, cu.phone, u.full_name
      ORDER BY total_overdue DESC`,
     [graceDays],
@@ -397,7 +395,7 @@ const getSummaryReport = async (graceDays, jornadaDate) => {
          COUNT(*)::int                                         AS count,
          COALESCE(SUM(i.amount_due - i.amount_paid), 0)::float8 AS amount
        FROM installments i
-       WHERE ${IS_OVERDUE_DERIVED("i", "$1")}
+       WHERE ${IS_OVERDUE_DERIVED('i', '$1')}
      ),
      upcoming AS (
        SELECT
@@ -571,7 +569,7 @@ const getCashMovementsReport = async (cashSessionId) => {
        SELECT p.id, 'COBRO' AS type, p.approved_at AS occurred_at,
                p.cash_session_id, p.amount_received::float8 AS amount,
                p.payment_method,
-               ${movementConceptCase("p", "cr")} AS description,
+               ${movementConceptCase('p', 'cr')} AS description,
                u.full_name AS performed_by_name,
                p.transfer_reference,
                c.id AS customer_id, c.full_name AS customer_name, c.dni AS customer_dni,
@@ -719,10 +717,10 @@ const getCashMovementsReport = async (cashSessionId) => {
   return {
     summary: {
       total_movements: rows.length,
-      total_collections: sumByType("COBRO"),
-      total_down_payments: sumByType("ENGANCHE"),
-      total_expenses: sumByType("GASTO"),
-      total_drops: sumByType("DROP"),
+      total_collections: sumByType('COBRO'),
+      total_down_payments: sumByType('ENGANCHE'),
+      total_expenses: sumByType('GASTO'),
+      total_drops: sumByType('DROP'),
     },
     rows,
   };
